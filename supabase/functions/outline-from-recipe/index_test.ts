@@ -81,6 +81,13 @@ import {
   SuggestionWorkerSlice,
   assertWorkerSliceCanDispatch,
   reclaimExpiredSuggestionRun,
+  loadAuthoritativeSuggestionRun,
+  suggestionRunResponse,
+  markMeaningfulProgress,
+  assertDurableUpdateSucceeded,
+  suggestionLifecycleFailure,
+  MAX_SUGGESTION_LIFETIME_MS,
+  MAX_SUGGESTION_NO_PROGRESS_MS,
   returnSuggestionRunToPending,
   recoverPendingSuggestionRun,
   runSuggestionJob,
@@ -3587,9 +3594,24 @@ class ExecutableRunDb {
   cleanupCalls = 0;
   claims = 0;
   singleClaimOnly = false;
-  constructor(row: any, options: { singleClaimOnly?: boolean } = {}) {
+  patchHistory: Array<Record<string, unknown>> = [];
+  failPatchField: string | null = null;
+  failAsZeroRows = false;
+  failRead = false;
+  rpc?: (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+  constructor(row: any, options: { singleClaimOnly?: boolean; failPatchField?: string; failAsZeroRows?: boolean; failRead?: boolean; reconciledCredits?: number; reconciledRemainingCredits?: number } = {}) {
     this.row = structuredClone(row);
     this.singleClaimOnly = options.singleClaimOnly ?? false;
+    this.failPatchField = options.failPatchField ?? null;
+    this.failAsZeroRows = options.failAsZeroRows ?? false;
+    this.failRead = options.failRead ?? false;
+    if (typeof options.reconciledCredits === "number") {
+      this.rpc = async () => {
+        this.row.credit_cost_charged = options.reconciledCredits;
+        if (typeof options.reconciledRemainingCredits === "number") this.row.remaining_credits = options.reconciledRemainingCredits;
+        return { error: null };
+      };
+    }
   }
   from(table: string) {
     const self = this;
@@ -3600,6 +3622,7 @@ class ExecutableRunDb {
     const query: any = {
       update(value: Record<string, unknown>) { patch = value; return query; },
       eq(column: string, value: unknown) { filters.push([column, value]); return query; },
+      is(column: string, value: unknown) { filters.push([column, value]); return query; },
       lte(column: string, value: unknown) { ranges.push([column, value]); return query; },
       select(_columns?: string) { selected = true; return query; },
       maybeSingle() { return Promise.resolve(self.execute(table, patch, filters, ranges, selected)); },
@@ -3615,10 +3638,19 @@ class ExecutableRunDb {
   }
   private execute(table: string, patch: Record<string, unknown> | null, filters: Array<[string, unknown]>, ranges: Array<[string, unknown]>, selected: boolean) {
     if (table === "outline_suggestion_runs") {
+      if (this.failRead && !patch) return { data: null, error: { message: "simulated authoritative read failure" } };
       if (!this.matches(this.row, filters, ranges)) return { data: null, error: null };
       if (patch?.status === "running" && this.singleClaimOnly && this.claims > 0) return { data: null, error: null };
+      if (patch && this.failPatchField && this.failPatchField in patch) {
+        return this.failAsZeroRows
+          ? { data: null, error: null }
+          : { data: null, error: { message: "simulated PostgREST checkpoint failure" } };
+      }
       if (patch?.status === "running") this.claims++;
-      if (patch) Object.assign(this.row, patch);
+      if (patch) {
+        this.patchHistory.push(structuredClone(patch));
+        Object.assign(this.row, patch);
+      }
       if (!selected) return { data: [this.row], error: null };
       return { data: selected && filters.some(([column]) => column === "lease_expires_at") ? { id: this.row.id } : { ...this.row }, error: null };
     }
@@ -3877,6 +3909,129 @@ Deno.test("fresh novel worker sequence is enrichment then allocation then one gl
   assertEquals(actions.some((action) => action.startsWith("outline-route-")), false);
   assertEquals(actions.some((action) => action.startsWith("outline-suggestions-beat-")), false);
   assertEquals(db.row.status, "completed");
+});
+
+Deno.test("worker resume rehydrates prior stages without fabricating cross-stage progress", async () => {
+  const fullBody = await executableWorkerBody();
+  const body = { ...fullBody, storyMaterialEnrichment: undefined } as any;
+  const row = {
+    ...checkpointedWorkerRow(body),
+    story_material: null,
+    planning_state: { version: 2, phase: "start" },
+    request_json: body,
+  };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const materialJSON = JSON.stringify(fullBody.storyMaterialEnrichment);
+  const billable = async (request: any) => {
+    actions.push(request.action);
+    if (request.action === "story-material-enrichment") {
+      return { featureResult: materialJSON, charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+    }
+    return fakeWorkerBilling([])(request);
+  };
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+
+  await run();
+  const afterEnrichment = db.row.diagnostics.worker.lastMeaningfulProgressAt;
+  await run();
+  const afterAllocation = db.row.diagnostics.worker.lastMeaningfulProgressAt;
+  assertEquals(afterAllocation !== afterEnrichment, true);
+  assertEquals(db.row.id, "run-worker-fixture");
+
+  const replayStart = db.patchHistory.length;
+  await run();
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions"]);
+  assertEquals(db.row.status, "completed");
+  const replayedStages = db.patchHistory.slice(replayStart)
+    .filter((patch) => (patch.diagnostics as any)?.stage === "story_material_ready")
+    .map((patch) => (patch.diagnostics as any).worker.lastMeaningfulProgressAt);
+  assertEquals(replayedStages.length > 0, true);
+  assertEquals(replayedStages.every((value) => value === afterAllocation), true);
+  assertEquals((db.row.diagnostics.worker.completedMeaningfulCheckpointIdentities as string[]).some((value) => value.startsWith("allocation_validated:")), true);
+});
+
+Deno.test("actual worker replay of the same persisted checkpoint keeps its timestamp", async () => {
+  const body = await executableWorkerBody();
+  const before = "2026-01-01T00:00:00.000Z";
+  const row = {
+    ...checkpointedWorkerRow(body),
+    diagnostics: {
+      worker: {
+        lastMeaningfulProgressAt: before,
+        lastMeaningfulProgressCheckpoint: "allocation_validated:fixture",
+        completedMeaningfulCheckpointIdentities: ["planning_context_persisted:fixture", "allocation_validated:fixture"],
+      },
+    },
+  };
+  const db = new ExecutableRunDb(row);
+  const dispatches: string[] = [];
+  const billable = async (request: any) => {
+    dispatches.push(request.action);
+    throw new SuggestionWorkerYield();
+  };
+  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  await run();
+  const firstReplay = db.row.diagnostics.worker.lastMeaningfulProgressAt;
+  await run();
+  const secondReplay = db.row.diagnostics.worker.lastMeaningfulProgressAt;
+  assertEquals(dispatches, ["outline-suggestions", "outline-suggestions"]);
+  assertEquals(firstReplay !== before, true);
+  assertEquals(secondReplay, firstReplay);
+  assertEquals(db.row.status, "pending");
+});
+
+Deno.test("actual worker persistence advances for a genuinely new allocation checkpoint", async () => {
+  const body = await executableWorkerBody();
+  const before = "2026-01-01T00:00:00.000Z";
+  const row = {
+    ...checkpointedWorkerRow(body),
+    diagnostics: { worker: { lastMeaningfulProgressAt: before, completedMeaningfulCheckpointIdentities: [] } },
+    planning_state: { version: 2, phase: "enrichment_complete", nextAction: "outline-plan" },
+  };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const billable = validatedWorkerBilling(actions, (action) => action === "outline-plan"
+    ? { allocations: [{ beatIndex: 0, minSections: 1, rationale: "new" }, { beatIndex: 1, minSections: 1, rationale: "new" }] }
+    : { beats: { "beat-1": [], "beat-2": [] } });
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(actions, ["outline-plan"]);
+  assertEquals(db.row.status, "pending");
+  assertEquals(db.row.diagnostics.worker.lastMeaningfulProgressAt !== before, true);
+  assertEquals((db.row.diagnostics.worker.completedMeaningfulCheckpointIdentities as string[]).some((value) => value.startsWith("allocation_validated:")), true);
+});
+
+Deno.test("failed durable checkpoint persistence prevents the next provider stage", async () => {
+  const body = await executableWorkerBody();
+  for (const failAsZeroRows of [false, true]) {
+    const before = "2026-01-01T00:00:00.000Z";
+    const db = new ExecutableRunDb({
+      ...checkpointedWorkerRow(body),
+      diagnostics: { worker: { lastMeaningfulProgressAt: before, completedMeaningfulCheckpointIdentities: [] } },
+    }, { failPatchField: "diagnostics", failAsZeroRows });
+    const providerCalls: string[] = [];
+    await assertRejects(
+      () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+        db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+        billableLLM: (async (request: any) => { providerCalls.push(request.action); return fakeWorkerBilling([])(request); }) as any,
+        scheduleContinuation: async () => {},
+      }),
+      Error,
+      failAsZeroRows ? "updated zero rows" : "simulated PostgREST checkpoint failure",
+    );
+    assertEquals(providerCalls, []);
+    assertEquals(db.row.status === "completed", false);
+    assertEquals(db.row.diagnostics.worker.lastMeaningfulProgressAt, before);
+  }
 });
 
 Deno.test("reclaimed worker trusts an intact persisted planning checkpoint after JSON normalization", async () => {
@@ -4190,7 +4345,8 @@ Deno.test("provider billing unavailable during allocation bypasses retry and fai
   assertEquals(continuationCount, 0);
   assertEquals(db.row.status, "failed");
   assertEquals(db.row.error_code, "provider_billing_unavailable");
-  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.error.startsWith("Temporarily unavailable — try again later."), true);
+  assertEquals(db.row.error.includes("No settled customer charge is recorded"), true);
   assertEquals(db.row.suggestions, [existingSuggestion]);
   assertEquals(db.row.planning_state.nextAction, "outline-plan");
   assertEquals("allocationRetryReason" in db.row.planning_state, false);
@@ -4277,7 +4433,8 @@ Deno.test("provider billing unavailable during resumed expansion suppresses raw 
 
   assertEquals(db.row.status, "failed");
   assertEquals(db.row.error_code, "provider_billing_unavailable");
-  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.error.startsWith("Temporarily unavailable — try again later."), true);
+  assertEquals(db.row.error.includes("No settled customer charge is recorded"), true);
   assertEquals(db.row.suggestions, suggestions);
   assertEquals(db.row.completed_at !== null, true);
   assertEquals(db.row.lease_owner, null);
@@ -4319,7 +4476,8 @@ Deno.test("provider billing unavailable fails Suggest Sections safely and alerts
 
   assertEquals(db.row.status, "failed");
   assertEquals(db.row.error_code, "provider_billing_unavailable");
-  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.error.startsWith("Temporarily unavailable — try again later."), true);
+  assertEquals(db.row.error.includes("No settled customer charge is recorded"), true);
   assertEquals(db.row.suggestions, [existingSuggestion]);
   assertEquals(db.row.completed_at !== null, true);
   assertEquals(db.row.lease_owner, null);
@@ -4363,7 +4521,8 @@ Deno.test("provider alert failure cannot change terminal Suggest Sections state"
 
   assertEquals(db.row.status, "failed");
   assertEquals(db.row.error_code, "provider_billing_unavailable");
-  assertEquals(db.row.error, "Temporarily unavailable — try again later.");
+  assertEquals(db.row.error.startsWith("Temporarily unavailable — try again later."), true);
+  assertEquals(db.row.error.includes("No settled customer charge is recorded"), true);
   assertEquals(db.row.lease_owner, null);
   assertEquals(db.row.lease_expires_at, null);
 });
@@ -4434,17 +4593,208 @@ Deno.test("two continuation workers race on one pending claim and produce one pr
 
 Deno.test("stale reclaim is a compare-and-set race and only the winner cleans orphan attempts", async () => {
   const expired = new Date(Date.now() - 1000).toISOString();
-  const db = new ExecutableRunDb({ id: "run-stale", status: "running", lease_expires_at: expired, attempt_count: 4 });
+  const db = new ExecutableRunDb({ id: "run-stale", status: "running", lease_expires_at: expired, attempt_count: 1 });
   db.attempts = [{ feature_run_id: "run-stale", status: "started", started_at: new Date(Date.now() - 2000).toISOString() }];
-  const run = { id: "run-stale", status: "running", lease_expires_at: expired, attempt_count: 4 };
+  const run = { id: "run-stale", status: "running", lease_expires_at: expired, attempt_count: 1 };
   const results = await Promise.all([reclaimExpiredSuggestionRun(db, run), reclaimExpiredSuggestionRun(db, run)]);
   assertEquals(results, [true, false]);
   assertEquals(db.row.status, "pending");
-  assertEquals(db.row.attempt_count, 5);
+  assertEquals(db.row.attempt_count, 2);
   assertEquals(db.cleanupCalls, 1);
   assertEquals(db.attempts[0].status, "provider_failed");
   assertEquals(db.attempts[0].provider_error_code, "worker_interrupted");
   assertEquals(db.attempts[0].completed_at !== null, true);
+});
+
+Deno.test("expired worker reaches a terminal state after finite attempts", async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb({ id: "run-exhausted", status: "running", lease_expires_at: expired, attempt_count: 4 });
+  db.attempts = [{ feature_run_id: "run-exhausted", status: "started", started_at: new Date(Date.now() - 2000).toISOString() }];
+  const run = { id: "run-exhausted", status: "running", lease_expires_at: expired, attempt_count: 4 };
+  assertEquals(await reclaimExpiredSuggestionRun(db, run), true);
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "worker_attempts_exhausted");
+  assertEquals(db.row.lease_owner, null);
+  assertEquals(db.row.lease_expires_at, null);
+  assertEquals(db.attempts[0].provider_error_code, "worker_interrupted");
+});
+
+Deno.test("exhausted worker preserves settled billing in its terminal message", async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb({ id: "run-partially-settled", status: "running", lease_expires_at: expired, attempt_count: 4 });
+  const run = { id: "run-partially-settled", status: "running", lease_expires_at: expired, attempt_count: 4, credit_cost_charged: 2.5 };
+  assertEquals(await reclaimExpiredSuggestionRun(db, run), true);
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "worker_attempts_exhausted");
+  assertEquals(db.row.error.includes("2.50 credits were already settled"), true);
+  assertEquals(db.row.error.includes("No credits were charged"), false);
+});
+
+Deno.test("GET terminal recovery serializes the refreshed authoritative billing row", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes("JSON.stringify(suggestionRunResponse(recoveredRun))"), true);
+
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb(
+    { id: "run-get-authoritative-billing", status: "running", lease_expires_at: expired, attempt_count: 4, credit_cost_charged: 0, remaining_credits: 100 },
+    { reconciledCredits: 2, reconciledRemainingCredits: 98 },
+  );
+  const staleSnapshot = { ...db.row };
+  assertEquals(await reclaimExpiredSuggestionRun(db, staleSnapshot), true);
+  const recoveredRun = await loadAuthoritativeSuggestionRun(db, staleSnapshot.id);
+  if (!recoveredRun) throw new Error("expected authoritative recovered row");
+  const response = suggestionRunResponse(recoveredRun);
+  assertEquals(response.status, "failed");
+  assertEquals(response.creditCostCharged, 2);
+  assertEquals(response.remainingCredits, 98);
+  assertEquals(suggestionRunResponse({ ...recoveredRun, credit_cost_charged: null, remaining_credits: null, error: "Billing reconciliation is unresolved; any settled stages were preserved." }).creditCostCharged, null);
+});
+
+Deno.test("terminal recovery refreshes authoritative settled and remaining credits", async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb(
+    { id: "run-authoritative-billing", status: "running", lease_expires_at: expired, attempt_count: 4, credit_cost_charged: 0, remaining_credits: 100 },
+    { reconciledCredits: 2, reconciledRemainingCredits: 98 },
+  );
+  const run = { ...db.row };
+  assertEquals(await reclaimExpiredSuggestionRun(db, run), true);
+  const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
+  if (!authoritative) throw new Error("expected authoritative recovered row");
+  assertEquals(authoritative.status, "failed");
+  assertEquals(authoritative.credit_cost_charged, 2);
+  assertEquals(authoritative.remaining_credits, 98);
+  const response = suggestionRunResponse(authoritative);
+  assertEquals(response.creditCostCharged, 2);
+  assertEquals(response.remainingCredits, 98);
+});
+
+Deno.test("terminal recovery reports confirmed zero only after authoritative reconciliation", async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb(
+    { id: "run-authoritative-zero", status: "running", lease_expires_at: expired, attempt_count: 4, credit_cost_charged: 0, remaining_credits: 100 },
+    { reconciledCredits: 0, reconciledRemainingCredits: 100 },
+  );
+  const run = { ...db.row };
+  assertEquals(await reclaimExpiredSuggestionRun(db, run), true);
+  const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
+  if (!authoritative) throw new Error("expected authoritative recovered row");
+  assertEquals(authoritative.credit_cost_charged, 0);
+  assertEquals(suggestionRunResponse(authoritative).creditCostCharged, 0);
+});
+
+Deno.test("unresolved reconciliation never presents stale credit fields", async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb({ id: "run-unresolved-billing", status: "running", lease_expires_at: expired, attempt_count: 4, credit_cost_charged: 0, remaining_credits: 100 });
+  const run = { ...db.row, credit_cost_charged: null };
+  assertEquals(await reclaimExpiredSuggestionRun(db, run), true);
+  const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
+  if (!authoritative) throw new Error("expected terminal row");
+  const response = suggestionRunResponse(authoritative);
+  assertEquals(response.creditCostCharged, null);
+  assertEquals(response.remainingCredits, null);
+  assertEquals(String(response.error).includes("Billing reconciliation is unresolved"), true);
+});
+
+Deno.test("authoritative refresh failure is not converted into a stale terminal snapshot", async () => {
+  const db = new ExecutableRunDb({ id: "run-refresh-fails", status: "failed", error: "terminal", credit_cost_charged: 7, remaining_credits: 93 });
+  db.failRead = true;
+  assertEquals(await loadAuthoritativeSuggestionRun(db, db.row.id), null);
+});
+
+Deno.test("durable checkpoint update fails closed on database errors and lost ownership", () => {
+  assertThrows(
+    () => assertDurableUpdateSucceeded({ data: null, error: { message: "lease lost" } }),
+    Error,
+    "persistence failed: lease lost",
+  );
+  assertThrows(
+    () => assertDurableUpdateSucceeded({ data: null, error: null }),
+    Error,
+    "updated zero rows",
+  );
+  assertDurableUpdateSucceeded({ data: { id: "run-1" }, error: null });
+});
+
+Deno.test("identical durable checkpoint preserves its original progress marker", () => {
+  const before = "2026-01-01T00:00:00.000Z";
+  const diagnostics = { worker: { lastMeaningfulProgressAt: before, lastMeaningfulProgressCheckpoint: "allocation_validated", sliceCount: 4 } };
+  const replayed = markMeaningfulProgress(diagnostics, "allocation_validated", "2026-01-01T01:00:00.000Z");
+  assertEquals((replayed.worker as Record<string, unknown>).lastMeaningfulProgressAt, before);
+  assertEquals((replayed.worker as Record<string, unknown>).lastMeaningfulProgressCheckpoint, "allocation_validated");
+  assertEquals((replayed.worker as Record<string, unknown>).sliceCount, 4);
+});
+
+Deno.test("meaningful progress advances only at durable checkpoints", () => {
+  const before = "2026-01-01T00:00:00.000Z";
+  const diagnostics = { worker: { lastMeaningfulProgressAt: before, sliceCount: 4 } };
+  const progressed = markMeaningfulProgress(diagnostics, "allocation_validated", "2026-01-01T00:05:00.000Z");
+  assertEquals((progressed.worker as Record<string, unknown>).lastMeaningfulProgressAt, "2026-01-01T00:05:00.000Z");
+  assertEquals((progressed.worker as Record<string, unknown>).lastMeaningfulProgressCheckpoint, "allocation_validated");
+  assertEquals((diagnostics.worker as Record<string, unknown>).lastMeaningfulProgressAt, before);
+  assertEquals((progressed.worker as Record<string, unknown>).sliceCount, 4);
+});
+
+Deno.test("suggestion lifecycle bounds distinguish elapsed lifetime and no progress", () => {
+  const now = Date.now();
+  assertEquals(suggestionLifecycleFailure({ created_at: new Date(now - MAX_SUGGESTION_LIFETIME_MS - 1).toISOString() }, now), "worker_lifetime_exceeded");
+  assertEquals(suggestionLifecycleFailure({
+    created_at: new Date(now - 1000).toISOString(),
+    updated_at: new Date(now - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString(),
+  }, now), "worker_no_progress");
+});
+
+Deno.test("active lease is never terminalized by an old lifecycle timestamp", async () => {
+  const future = new Date(Date.now() + 60_000).toISOString();
+  const db = new ExecutableRunDb({
+    id: "run-active-old-progress",
+    status: "running",
+    lease_owner: "worker-token",
+    lease_expires_at: future,
+    attempt_count: 4,
+    created_at: new Date(Date.now() - MAX_SUGGESTION_LIFETIME_MS - 1).toISOString(),
+    updated_at: new Date(Date.now() - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString(),
+  });
+  const result = await reclaimExpiredSuggestionRun(db, {
+    id: db.row.id,
+    status: db.row.status,
+    lease_expires_at: future,
+    attempt_count: db.row.attempt_count,
+    created_at: db.row.created_at,
+    updated_at: db.row.updated_at,
+  });
+  assertEquals(result, false);
+  assertEquals(db.row.status, "running");
+  assertEquals(db.row.lease_owner, "worker-token");
+  assertEquals(db.claims, 0);
+});
+
+Deno.test("pending jobs with no durable progress reach a fenced terminal failure", async () => {
+  const old = new Date(Date.now() - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString();
+  const db = new ExecutableRunDb({
+    id: "run-pending-stuck",
+    status: "pending",
+    lease_owner: null,
+    lease_expires_at: null,
+    attempt_count: 1,
+    created_at: new Date(Date.now() - 1_000).toISOString(),
+    updated_at: old,
+    diagnostics: { worker: { lastMeaningfulProgressAt: old } },
+  });
+  const result = await reclaimExpiredSuggestionRun(db, {
+    id: db.row.id,
+    status: db.row.status,
+    lease_expires_at: null,
+    attempt_count: db.row.attempt_count,
+    created_at: db.row.created_at,
+    updated_at: db.row.updated_at,
+    diagnostics: db.row.diagnostics,
+  });
+  assertEquals(result, true);
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "worker_no_progress");
+  assertEquals(db.row.lease_owner, null);
+  assertEquals(db.row.lease_expires_at, null);
+  assertEquals(db.row.error.includes("Billing reconciliation is unresolved") || db.row.error.includes("No settled customer charge"), true);
 });
 
 Deno.test("active lease recovery is a no-op", async () => {

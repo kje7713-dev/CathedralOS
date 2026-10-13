@@ -1,16 +1,21 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { BillableLLMError, runBillableLLM } from "../_shared/billable-llm.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
+import { availableCredits, type UserEntitlement } from "../generate-story/_credits.ts";
 import {
   inputTokenLimitDetails,
   estimateTokensFromMessages,
+  computeMaxChargeCredits,
+  snapshotPricing,
   SupabaseGenerationModelStore,
+  type GenerationModel,
 } from "../generate-story/_generation_models.ts";
 import {
   type LLMMessage,
   getProviderBillingUnavailableUpstream,
   isProviderBillingUnavailable,
   OpenAIProvider,
+  supportsCustomTemperature,
 } from "../generate-story/_provider.ts";
 import {
   buildCompactPlanningView,
@@ -73,7 +78,11 @@ import {
 // =============================================================================
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-const OPENAI_MODEL = Deno.env.get("OPENAI_MODEL_DEFAULT") ?? "gpt-5.6-luna";
+// Requests created before PR #699 commonly omitted modelID. Their historical
+// default was GPT-5.6 Luna; never reinterpret such a persisted request as the
+// new Sol default. New iOS requests always send an explicit approved ID.
+export const LEGACY_PLANNING_MODEL_ID = "gpt-5.6-luna";
+const OPENAI_MODEL = LEGACY_PLANNING_MODEL_ID;
 
 /** Maps every physical outline action to one logical billing/cache stage. */
 export function outlineLogicalStageFamily(action: string): string {
@@ -631,7 +640,7 @@ interface OutlineFromRecipeRequest {
   existingSections?: ExistingSectionBlob[]; // iOS-side outline state at request time
   storyMaterialEnrichment?: StoryMaterialEnrichment; // candidate reuse from a prior planning pass
   requestedFormat?: StoryMaterialFormat;
-  /** Optional model choice; omitted requests retain the historical default. */
+  /** Explicit MVP model selection; persisted in request_json for resume. */
   modelID?: string;
   outline_id?: string;
   // PR 4: canonical planning identity. Server-validated pre-billable so a
@@ -639,6 +648,66 @@ interface OutlineFromRecipeRequest {
   // into a paid LLM call.
   project_lineage_id?: string;
   idempotencyKey?: string;
+  /** Non-billable planning estimate request; never creates a durable run. */
+  estimate_only?: boolean;
+}
+
+export interface OutlinePlanningEstimate {
+  estimatedCredits: number;
+  lowerBoundCredits: number;
+  upperBoundCredits: number;
+  availableCredits: number;
+  projectedBalance: number;
+  allowed: boolean;
+  model: string;
+  expectedStages: number;
+}
+
+/**
+ * Project the complete outline pipeline without calling an LLM or reserving
+ * credits. The range is deliberately labelled as an estimate: enrichment,
+ * allocation, first-pass suggestions, and variable expansion calls are all
+ * priced with the canonical GenerationModel snapshot and the same token
+ * accounting used by the billable runner.
+ */
+export function estimateOutlinePlanningCost(
+  request: OutlineFromRecipeRequest,
+  model: GenerationModel,
+  entitlement: UserEntitlement,
+): OutlinePlanningEstimate {
+  const inputTokens = Math.max(1_500, estimateTokensFromMessages([
+    { content: JSON.stringify(request.recipe) },
+    { content: JSON.stringify(request.arcTemplate) },
+    { content: JSON.stringify(request.existingSections ?? []) },
+  ]));
+  const pricing = snapshotPricing(model);
+  const stage = (input: number, output: number) => computeMaxChargeCredits({
+    uncachedInputTokens: input,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: output,
+    toolCostUsd: 0,
+  }, pricing);
+  const beatCount = Math.max(1, request.arcTemplate.beats.length);
+  const expansionCalls = Math.max(1, Math.ceil(beatCount / 4));
+  const baseStages = [
+    stage(inputTokens, 12_000), // story-material enrichment
+    stage(inputTokens, 2_048), // allocation
+    stage(inputTokens, 16_000), // first-pass suggestions
+  ];
+  const lowerBoundCredits = baseStages.reduce((sum, value) => sum + value, 0);
+  const upperBoundCredits = lowerBoundCredits + expansionCalls * stage(inputTokens, 16_000);
+  const available = availableCredits(entitlement);
+  return {
+    estimatedCredits: upperBoundCredits,
+    lowerBoundCredits,
+    upperBoundCredits,
+    availableCredits: available,
+    projectedBalance: available - upperBoundCredits,
+    allowed: available >= upperBoundCredits,
+    model: model.id,
+    expectedStages: 3 + expansionCalls,
+  };
 }
 
 interface ExistingSectionBlob {
@@ -1461,6 +1530,123 @@ export async function resumeOrRepairStoryMaterial(options: {
   return { material, audit };
 }
 
+export function recoverablePlanningModelID(
+  requestJSON: unknown,
+  recoveredProviderModel?: unknown,
+): string | undefined {
+  const requestModel = requestJSON && typeof requestJSON === "object"
+    ? (requestJSON as Record<string, unknown>).modelID
+    : undefined;
+  if (typeof requestModel === "string" && requestModel.trim()) {
+    return requestModel.trim();
+  }
+  if (typeof recoveredProviderModel === "string" && recoveredProviderModel.trim()) {
+    return recoveredProviderModel.trim();
+  }
+  // There is no safe universal fallback for historical jobs. A legacy row
+  // without a model and without a provider attempt must fail closed rather
+  // than silently becoming a newer model.
+  return undefined;
+}
+
+export function canonicalizeNewPlanningRequest(
+  body: OutlineFromRecipeRequest,
+): OutlineFromRecipeRequest {
+  return body.modelID && body.modelID.trim()
+    ? body
+    : { ...body, modelID: LEGACY_PLANNING_MODEL_ID };
+}
+
+export function isLegacyPlanningRequest(requestJSON: unknown): boolean {
+  return !(requestJSON && typeof requestJSON === "object" &&
+    typeof (requestJSON as Record<string, unknown>).modelID === "string" &&
+    ((requestJSON as Record<string, unknown>).modelID as string).trim());
+}
+
+export interface PlanningIdentityResolution {
+  canonicalBody: OutlineFromRecipeRequest;
+  rawIdentity: { key: string; fingerprint: string };
+  canonicalIdentity: { key: string; fingerprint: string };
+  identity: { key: string; fingerprint: string };
+  lookupKeys: string[];
+  acceptedFingerprints: Set<string>;
+}
+
+export async function resolvePlanningRequestIdentity(
+  body: OutlineFromRecipeRequest,
+  existing?: { request_json?: unknown } | null,
+): Promise<PlanningIdentityResolution> {
+  const canonicalBody = canonicalizeNewPlanningRequest(body);
+  const rawIdentity = await logicalSuggestionIdentity(body);
+  const canonicalIdentity = await logicalSuggestionIdentity(canonicalBody);
+  const persistedModelID = existing
+    ? recoverablePlanningModelID(existing.request_json)
+    : undefined;
+  const reconnectIdentity = body.modelID === undefined && persistedModelID
+    ? await logicalSuggestionIdentity({ ...body, modelID: persistedModelID })
+    : null;
+  const identity = reconnectIdentity ?? canonicalIdentity;
+  const acceptedFingerprints = new Set([
+    body.modelID === undefined ? rawIdentity.fingerprint : canonicalIdentity.fingerprint,
+    ...(reconnectIdentity ? [reconnectIdentity.fingerprint] : []),
+  ]);
+  return {
+    canonicalBody,
+    rawIdentity,
+    canonicalIdentity,
+    identity,
+    lookupKeys: Array.from(new Set([rawIdentity.key, canonicalIdentity.key])),
+    acceptedFingerprints,
+  };
+}
+
+/**
+ * Rebuild the worker body from the durable run, never from a reconnect's
+ * current preferences. Provider attempts are the only older durable record
+ * of the model when request_json predates modelID.
+ */
+export async function recoverPersistedPlanningBody(
+  db: any,
+  run: { id: string; request_json?: unknown },
+): Promise<OutlineFromRecipeRequest> {
+  const stored = run.request_json && typeof run.request_json === "object"
+    ? { ...(run.request_json as Record<string, unknown>) }
+    : {};
+  let recoveredProviderModel: string | undefined;
+  if (isLegacyPlanningRequest(stored)) {
+    const attempt = await db.from("generation_provider_attempts")
+      .select("model_name")
+      .eq("feature_run_id", run.id)
+      .order("started_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    recoveredProviderModel = typeof attempt?.data?.model_name === "string"
+      ? attempt.data.model_name
+      : undefined;
+  }
+  const recoveredModel = recoverablePlanningModelID(
+    stored,
+    recoveredProviderModel,
+  );
+  if (recoveredModel) {
+    if (recoveredProviderModel && recoveredModel === recoveredProviderModel) {
+      // Map the recorded provider name to the canonical catalog ID without
+      // requiring the historical row to remain enabled. The worker will then
+      // reject an ineligible row instead of substituting another model.
+      const catalog = await db.from("generation_models").select("id")
+        .eq("provider", "openai")
+        .eq("provider_model", recoveredProviderModel)
+        .maybeSingle();
+      stored.modelID = typeof catalog?.data?.id === "string"
+        ? catalog.data.id
+        : recoveredModel;
+    } else {
+      stored.modelID = recoveredModel;
+    }
+  }
+  return stored as unknown as OutlineFromRecipeRequest;
+}
+
 export function validateRequest(req: unknown): string | null {
   if (!req || typeof req !== "object") return "request must be an object";
   const r = req as Partial<OutlineFromRecipeRequest>;
@@ -1505,6 +1691,7 @@ export function validateRequest(req: unknown): string | null {
     }
   }
   if (r.requestedFormat !== undefined && !["novel", "shortStory", "other"].includes(r.requestedFormat)) return "requestedFormat must be novel, shortStory, or other";
+  if (r.modelID !== undefined && (typeof r.modelID !== "string" || r.modelID.trim() === "")) return "modelID must be a non-empty catalog model ID";
   if (r.idempotencyKey !== undefined && (typeof r.idempotencyKey !== "string" || r.idempotencyKey.trim() === "" || r.idempotencyKey.length > 512)) return "idempotencyKey must be a non-empty string of at most 512 characters";
   if (r.storyMaterialEnrichment) {
     try {
@@ -2585,6 +2772,7 @@ export async function logRequest(
   userId: string,
   status: string,
   errorCode?: string,
+  modelName: string = OPENAI_MODEL,
 ): Promise<void> {
   const { error } = await supabase.from("generation_request_logs").insert({
     request_id: crypto.randomUUID(),
@@ -2594,7 +2782,7 @@ export async function logRequest(
     output_budget: 0,
     status,
     error_code: errorCode ?? null,
-    model_name: OPENAI_MODEL,
+    model_name: modelName,
     created_at: new Date().toISOString(),
   });
   if (error) {
@@ -2659,7 +2847,7 @@ async function callOpenAI(
               schema: options?.jsonSchema ?? { type: "object" },
             },
           },
-        temperature: 0.7,
+        ...(supportsCustomTemperature(OPENAI_MODEL) ? { temperature: 0.7 } : {}),
       }),
       signal: ac.signal,
     });
@@ -3251,7 +3439,15 @@ export function isRetryableStoryMaterialFailure(run: {
       run.error === "story material enrichment contains a duplicate or missing item id");
 }
 
+// Supabase Edge Functions can be terminated by the wall-clock limit before a
+// long provider request returns. Keep the provider deadline below that limit
+// so the worker can persist a terminal provider_timeout instead of being
+// killed while its run remains `running`.
+const OUTLINE_PROVIDER_TIMEOUT_MS = 90_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
+export const MAX_SUGGESTION_ATTEMPTS = 5;
+export const MAX_SUGGESTION_LIFETIME_MS = 30 * 60 * 1000;
+export const MAX_SUGGESTION_NO_PROGRESS_MS = 10 * 60 * 1000;
 
 export class SuggestionWorkerYield extends Error {
   constructor() {
@@ -3275,6 +3471,49 @@ export class SuggestionWorkerSlice {
     assertWorkerSliceCanDispatch(this.dispatches);
     this.dispatches += 1;
   }
+}
+
+export function assertDurableUpdateSucceeded(
+  result: { data?: unknown; error?: { message?: string } | null } | null | undefined,
+  context = "durable run checkpoint",
+): void {
+  if (result?.error) {
+    throw new Error(`${context} persistence failed: ${result.error.message ?? String(result.error)}`);
+  }
+  if (!result?.data) {
+    throw new Error(`${context} persistence lost ownership or updated zero rows`);
+  }
+}
+
+/** Advance the no-progress clock only after a durable planning checkpoint. */
+export function markMeaningfulProgress(
+  diagnostics: Record<string, unknown>,
+  checkpoint: string,
+  at = new Date().toISOString(),
+): Record<string, unknown> {
+  const worker = diagnostics.worker && typeof diagnostics.worker === "object"
+    ? diagnostics.worker as Record<string, unknown>
+    : {};
+  // A worker restart or replay may reach an earlier durable checkpoint after
+  // other stages have run. Track the completed identity set, not only the
+  // immediately preceding marker, so cross-stage rehydration cannot refresh
+  // the no-progress clock. Older rows simply start recording new identities
+  // when a genuinely new checkpoint is persisted.
+  const completedIdentities = Array.isArray(worker.completedMeaningfulCheckpointIdentities)
+    ? worker.completedMeaningfulCheckpointIdentities.filter((value): value is string => typeof value === "string")
+    : [];
+  if (completedIdentities.includes(checkpoint) || worker.lastMeaningfulProgressCheckpoint === checkpoint) {
+    return { ...diagnostics, worker: { ...worker } };
+  }
+  return {
+    ...diagnostics,
+    worker: {
+      ...worker,
+      completedMeaningfulCheckpointIdentities: [...completedIdentities, checkpoint],
+      lastMeaningfulProgressAt: at,
+      lastMeaningfulProgressCheckpoint: checkpoint,
+    },
+  };
 }
 
 function leaseExpiry(): string {
@@ -3301,6 +3540,103 @@ const admin = () =>
     { auth: { persistSession: false } },
   );
 
+async function reconcileExhaustedSuggestionBilling(
+  db: any,
+  run: { id: string; credit_cost_charged?: number | null },
+): Promise<number | null> {
+  // Recompute the durable total from provider-attempt rows before explaining
+  // an exhausted run. If reconciliation is unavailable, say so explicitly.
+  try {
+    if (typeof db.rpc === "function") {
+      const { error } = await db.rpc("reconcile_outline_provider_attempts", { p_run_id: run.id });
+      if (error) {
+        console.error("[outline-from-recipe] exhausted-run billing reconciliation failed", error);
+        return null;
+      }
+      if (typeof db.from === "function") {
+        const result = await db.from("outline_suggestion_runs")
+          .select("credit_cost_charged")
+          .eq("id", run.id)
+          .maybeSingle();
+        if (!result.error && result.data && typeof result.data.credit_cost_charged === "number") {
+          return result.data.credit_cost_charged;
+        }
+      }
+      // The RPC succeeded but the authoritative read did not. Do not fall back
+      // to a stale run object and accidentally claim zero customer charge.
+      return null;
+    }
+    return typeof run.credit_cost_charged === "number" ? run.credit_cost_charged : null;
+  } catch (error) {
+    console.error("[outline-from-recipe] exhausted-run billing reconciliation threw", error);
+    return null;
+  }
+}
+
+function exhaustedSuggestionBillingMessage(settledCredits: number | null): string {
+  if (settledCredits === null) return "The outline planner stopped before completion. Billing reconciliation is unresolved; any settled stages were preserved. Review the run before retrying.";
+  if (settledCredits > 0) return `The outline planner stopped before completion. ${settledCredits.toFixed(2)} credits were already settled for completed stages; no duplicate charge will be created. Retry after reviewing the run.`;
+  return "The outline planner stopped before completion. No settled customer charge is recorded for this run; retry the request.";
+}
+
+export const SUGGESTION_RUN_RECOVERY_COLUMNS =
+  "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
+
+/** Read the persisted row after reclaim/reconciliation has completed. */
+export async function loadAuthoritativeSuggestionRun(db: any, runID: string): Promise<any | null> {
+  try {
+    const result = await db.from("outline_suggestion_runs")
+      .select(SUGGESTION_RUN_RECOVERY_COLUMNS)
+      .eq("id", runID)
+      .maybeSingle();
+    if (result.error || !result.data) {
+      if (result.error) console.error("[outline-from-recipe] authoritative recovery read failed", result.error);
+      return null;
+    }
+    return result.data;
+  } catch (error) {
+    console.error("[outline-from-recipe] authoritative recovery read threw", error);
+    return null;
+  }
+}
+
+export function suggestionRunResponse(run: any): Record<string, unknown> {
+  const billingUnresolved = run.status === "failed" &&
+    typeof run.error === "string" &&
+    run.error.includes("Billing reconciliation is unresolved");
+  return {
+    run_id: run.id,
+    status: run.status,
+    suggestions: run.suggestions,
+    warnings: run.warnings,
+    errorCode: run.error_code,
+    error: run.error,
+    diagnostics: run.diagnostics,
+    storyMaterialEnrichment: run.story_material,
+    created_at: run.created_at,
+    updated_at: run.updated_at,
+    completed_at: run.completed_at,
+    // Unresolved reconciliation is never presented as a confirmed amount.
+    creditCostCharged: billingUnresolved ? null : run.credit_cost_charged,
+    remainingCredits: billingUnresolved ? null : run.remaining_credits,
+    sourceRecipe: run.request_json?.recipe ?? null,
+  };
+}
+
+export function suggestionLifecycleFailure(run: {
+  created_at?: string | null;
+  updated_at?: string | null;
+  diagnostics?: Record<string, unknown> | null;
+}, now = Date.now()): "worker_lifetime_exceeded" | "worker_no_progress" | null {
+  if (run.created_at && now - new Date(run.created_at).getTime() > MAX_SUGGESTION_LIFETIME_MS) return "worker_lifetime_exceeded";
+  const worker = run.diagnostics?.worker;
+  const progressAt = worker && typeof worker === "object" && typeof (worker as Record<string, unknown>).lastMeaningfulProgressAt === "string"
+    ? String((worker as Record<string, unknown>).lastMeaningfulProgressAt)
+    : run.updated_at;
+  if (progressAt && now - new Date(progressAt).getTime() > MAX_SUGGESTION_NO_PROGRESS_MS) return "worker_no_progress";
+  return null;
+}
+
 async function markInterruptedProviderAttempts(db: any, runId: string, observedLeaseExpiry: string): Promise<void> {
   const { error } = await db.from("generation_provider_attempts").update({
     status: "provider_failed",
@@ -3318,25 +3654,87 @@ export async function reclaimExpiredSuggestionRun(db: any, run: {
   status?: string;
   lease_expires_at?: string | null;
   attempt_count?: number | null;
+  error_code?: string | null;
+  error?: string | null;
+  credit_cost_charged?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  diagnostics?: Record<string, unknown> | null;
 }): Promise<boolean> {
   const observedLeaseExpiry = run.lease_expires_at;
-  if (run.status !== "running" || !observedLeaseExpiry || new Date(observedLeaseExpiry).getTime() >= Date.now()) return false;
-  const reclaimed = await db.from("outline_suggestion_runs").update({
+  const now = Date.now();
+  const lifecycleFailure = suggestionLifecycleFailure(run, now);
+  const leaseExpired = !!observedLeaseExpiry && new Date(observedLeaseExpiry).getTime() < now;
+
+  // A valid running lease is authoritative. Wall-clock/no-progress limits do
+  // not revoke it while the worker is still renewing it. Pending runs have no
+  // owner, so lifecycle limits apply to them as well as running runs.
+  if (run.status !== "running" && run.status !== "pending") return false;
+  if (run.status === "running" && !leaseExpired) return false;
+  if (!leaseExpired && !lifecycleFailure) return false;
+
+  const nextAttemptCount = (run.attempt_count ?? 0) + 1;
+  const exhausted = nextAttemptCount >= MAX_SUGGESTION_ATTEMPTS;
+  const terminalCode = lifecycleFailure ?? (exhausted ? "worker_attempts_exhausted" : null);
+
+  if (terminalCode) {
+    // Fence the run before reconciling billing. The temporary owner prevents
+    // a concurrent GET/POST recovery or the old worker from claiming or
+    // persisting output while the authoritative attempt total is resolved.
+    const fenceToken = `reclaimer:${crypto.randomUUID()}`;
+    let fenceQuery = db.from("outline_suggestion_runs").update({
+      status: "running",
+      lease_owner: fenceToken,
+      lease_expires_at: new Date(now + SUGGESTION_LEASE_MS).toISOString(),
+    }).eq("id", run.id).eq("status", run.status);
+    if (run.status === "running") {
+      fenceQuery = observedLeaseExpiry
+        ? fenceQuery.eq("lease_expires_at", observedLeaseExpiry)
+        : fenceQuery.is("lease_expires_at", null);
+    } else {
+      fenceQuery = fenceQuery.is("lease_owner", null);
+    }
+    const fenced = await fenceQuery.select("id").maybeSingle();
+    if (fenced.error || !fenced.data) return false;
+
+    const settledCredits = await reconcileExhaustedSuggestionBilling(db, run);
+    const terminalMessage = exhaustedSuggestionBillingMessage(settledCredits);
+    const terminalized = await db.from("outline_suggestion_runs").update({
+      status: "failed",
+      error_code: terminalCode,
+      error: terminalMessage,
+      completed_at: new Date().toISOString(),
+      lease_owner: null,
+      lease_expires_at: null,
+      attempt_count: nextAttemptCount,
+    }).eq("id", run.id).eq("status", "running").eq("lease_owner", fenceToken)
+      .select("id").maybeSingle();
+    if (terminalized.error || !terminalized.data) return false;
+    if (observedLeaseExpiry) await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
+    run.status = "failed";
+    run.attempt_count = nextAttemptCount;
+    run.error_code = terminalCode;
+    run.error = terminalMessage;
+    return true;
+  }
+
+  // Non-terminal reclaim: atomically release only the observed expired lease.
+  // A concurrent recovery can win this compare-and-set, but cannot also win
+  // the pending claim inside runSuggestionJob.
+  let reclaimQuery = db.from("outline_suggestion_runs").update({
     status: "pending",
-    error_code: null,
-    error: null,
-    completed_at: null,
     lease_owner: null,
     lease_expires_at: null,
-    attempt_count: (run.attempt_count ?? 0) + 1,
-  })
-    .eq("id", run.id)
-    .eq("status", "running")
-    .eq("lease_expires_at", observedLeaseExpiry)
-    .select("id")
-    .maybeSingle();
+    attempt_count: nextAttemptCount,
+  }).eq("id", run.id).eq("status", "running");
+  reclaimQuery = observedLeaseExpiry
+    ? reclaimQuery.eq("lease_expires_at", observedLeaseExpiry)
+    : reclaimQuery.is("lease_expires_at", null);
+  const reclaimed = await reclaimQuery.select("id").maybeSingle();
   if (reclaimed.error || !reclaimed.data) return false;
-  await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
+  if (observedLeaseExpiry) await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
+  run.status = "pending";
+  run.attempt_count = nextAttemptCount;
   return true;
 }
 
@@ -3402,11 +3800,15 @@ export async function recoverPendingSuggestionRun(
   openaiKey: string | undefined,
   authHeader: string,
   startWorker: SuggestionWorkerStarter,
+  db?: any,
 ): Promise<boolean> {
   if (run?.status !== "pending" || !run.request_json || !openaiKey) return false;
+  const body = db
+    ? await recoverPersistedPlanningBody(db, run)
+    : run.request_json as OutlineFromRecipeRequest;
   await startWorker(
     run.id,
-    run.request_json as OutlineFromRecipeRequest,
+    body,
     userId,
     openaiKey,
     run.attempt_count ?? 0,
@@ -3488,6 +3890,11 @@ export async function runSuggestionJob(
       ...priorWorker,
       sliceCount: workerSliceCount,
       lastSliceStartedAt: new Date().toISOString(),
+      // A dispatch/launch is not meaningful progress. Preserve the last
+      // durable checkpoint timestamp so repeated pending launches age out.
+      lastMeaningfulProgressAt: typeof priorWorker.lastMeaningfulProgressAt === "string"
+        ? priorWorker.lastMeaningfulProgressAt
+        : (claimedRun.updated_at ?? new Date().toISOString()),
       lastYieldReason: null,
       nextAction: "resume persisted planning checkpoint",
     },
@@ -3496,7 +3903,14 @@ export async function runSuggestionJob(
     await db.from("outline_suggestion_runs").update({ lease_expires_at: leaseExpiry() }).eq("id", runId).eq("lease_owner", workerToken);
   };
   const updateRun = async (patch: Record<string, unknown>) => {
-    return await db.from("outline_suggestion_runs").update(patch).eq("id", runId).eq("lease_owner", workerToken);
+    const result = await db.from("outline_suggestion_runs")
+      .update(patch)
+      .eq("id", runId)
+      .eq("lease_owner", workerToken)
+      .select("id")
+      .maybeSingle();
+    assertDurableUpdateSucceeded(result);
+    return result;
   };
   let plannedMinimumSections: number | null = null;
   let providerModelForAlert: string | null = null;
@@ -3505,14 +3919,24 @@ export async function runSuggestionJob(
     : [];
   try {
     const modelStore = dependencies.model ? null : new SupabaseGenerationModelStore(db);
-    const selectedModelID = body.modelID?.trim() || OPENAI_MODEL;
-    const model = dependencies.model ?? await modelStore!.getEnabledModelById(selectedModelID);
+    const selectedModelID = recoverablePlanningModelID(body);
+    const model = dependencies.model ?? (selectedModelID
+      ? await modelStore!.getEnabledModelById(selectedModelID)
+      : null);
     if (!model) {
-      throw new Error(`Enabled billing model not found: ${selectedModelID}`);
+      throw new Error(
+        selectedModelID
+          ? `Selected outline model is unavailable: ${selectedModelID}`
+          : "planning_model_unrecoverable: historical request has no model identity or provider attempt",
+      );
     }
     providerModelForAlert = model.provider_model ?? selectedModelID;
     const creditStore = dependencies.creditStore ?? new SupabaseCreditStore(db);
-    const provider = dependencies.provider ?? new OpenAIProvider(openaiKey, model.provider_model ?? selectedModelID);
+    const provider = dependencies.provider ?? new OpenAIProvider(
+      openaiKey,
+      model.provider_model,
+      OUTLINE_PROVIDER_TIMEOUT_MS,
+    );
     const billableLLM = dependencies.billableLLM ?? runBillableLLM;
     // Reclaimed workers resume from persisted billing/material state. The
     // usage-event idempotency key is the final no-double-charge guard, while
@@ -3561,7 +3985,15 @@ export async function runSuggestionJob(
       const promptCacheKey = `cath:outline:${projectIdentity}:${provenance.sourceRecipeHash}:${stageFamily}:pcv2:promptv4`;
       const promptCacheKeyHash = await sha256Hex(promptCacheKey);
       await touchLease();
-      const result = await billableLLM({
+      // Provider calls can exceed the three-minute worker lease, especially
+      // for worksheet enrichment. Renew while the call is in flight so the
+      // lease cannot expire and reclaim a healthy provider attempt.
+      const leaseHeartbeat = setInterval(() => {
+        void touchLease();
+      }, 30_000);
+      let result: any;
+      try {
+        result = await billableLLM({
         userID: userId,
         purpose: "outline-suggestion",
         action,
@@ -3570,7 +4002,7 @@ export async function runSuggestionJob(
         maxOutputTokens,
         providerOptions: {
           responseFormat,
-          temperature: 0.7,
+          ...(supportsCustomTemperature(model) ? { temperature: 0.7 } : {}),
           cacheMode: model.cacheMode,
           promptCacheKey: model.cacheMode === "none" ? undefined : promptCacheKey,
         },
@@ -3590,7 +4022,10 @@ export async function runSuggestionJob(
           if (validateResponse) await validateResponse(providerResult.content);
           return providerResult.content;
         },
-      }, { adminClient: db, provider, creditStore });
+        }, { adminClient: db, provider, creditStore });
+      } finally {
+        clearInterval(leaseHeartbeat);
+      }
       await persistBilling();
       return {
         content: result.featureResult,
@@ -3648,10 +4083,14 @@ export async function runSuggestionJob(
           };
           const expansionCheckpoint = buildExpansionCheckpoint(current, body.existingSections ?? [], allDiagnostics);
           planningState = { ...planningState, phase: "expansion", expansionCheckpoint };
+          diagnostics = markMeaningfulProgress(
+            { ...diagnostics, expansionCheckpoint },
+            `expansion_round_checkpoint:${stableJSONStringify(expansionCheckpoint)}`,
+          );
           await updateRun({
             suggestions: current,
             planning_state: planningState,
-            diagnostics: { ...diagnostics, expansionCheckpoint },
+            diagnostics,
           });
         },
         {
@@ -3675,6 +4114,10 @@ export async function runSuggestionJob(
               expansionRounds: allDiagnostics,
               novelScale: expansionCheckpoint.scale,
             };
+            diagnostics = markMeaningfulProgress(
+              diagnostics,
+              `expansion_beat_checkpoint:${stableJSONStringify(expansionCheckpoint)}`,
+            );
             await updateRun({ suggestions: current, planning_state: planningState, diagnostics });
           },
         },
@@ -3736,6 +4179,10 @@ export async function runSuggestionJob(
       };
       const expansionCheckpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], []);
       diagnostics = { ...diagnostics, stage: outlineNeedsExpansion ? "expansion_pending" : "outline_complete", expansionCheckpoint };
+      diagnostics = markMeaningfulProgress(
+        diagnostics,
+        `validated_suggestions_persisted:${stableJSONStringify(completedSuggestions)}`,
+      );
       await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
       if (outlineNeedsExpansion) {
         const expanded = await expandNovel(completedSuggestions, recipeObligations, 1, 0, []);
@@ -3804,6 +4251,12 @@ export async function runSuggestionJob(
       // any earlier persist inside resumeOrRepairStoryMaterial — the final
       // updateRun below overwrites the same fields with completed-stage
       // diagnostics on success.
+      if (repairAudit) {
+        diagnostics = markMeaningfulProgress(
+          diagnostics,
+          `story_material_repaired:${stableJSONStringify(resumedMaterial)}`,
+        );
+      }
       await updateRun({
         story_material: resumedMaterial,
         diagnostics,
@@ -3843,7 +4296,7 @@ export async function runSuggestionJob(
       return;
     }
     let storyMaterial: StoryMaterialEnrichment | null = null;
-    let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: OPENAI_MODEL, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
+    let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: model.id, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
     if (body.storyMaterialEnrichment) {
       try {
         const candidate = validateStoryMaterialEnrichment(body.storyMaterialEnrichment, { recipe: body.recipe });
@@ -3937,12 +4390,18 @@ export async function runSuggestionJob(
         nextAction: "outline-plan",
         enrichmentRepairReason: undefined,
       };
-      await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" } });
+      diagnostics = markMeaningfulProgress(
+        { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" },
+        `story_material_complete:${stableJSONStringify(storyMaterial)}`,
+      );
+      await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics });
     }
     if (!storyMaterial) throw new Error("story material enrichment was not produced");
+    // Loading already persisted enrichment is rehydration, not progress.
+    diagnostics = { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" };
     await updateRun({
       story_material: storyMaterial,
-      diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" },
+      diagnostics,
     });
     await persistPlanningProvenance(db, body, runId, storyMaterial, provenance);
     body = { ...body, storyMaterialEnrichment: storyMaterial };
@@ -3979,7 +4438,13 @@ export async function runSuggestionJob(
       planningContext = persistedPlanningContext;
       planningContextHash = claimedRun.planning_context_hash;
     }
-    await updateRun({ planning_context: planningContext, planning_context_hash: planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1 });
+    if (!persistedPlanningContext) {
+      diagnostics = markMeaningfulProgress(
+        diagnostics,
+        `planning_context_persisted:${planningContextHash}`,
+      );
+    }
+    await updateRun({ planning_context: planningContext, planning_context_hash: planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1, diagnostics });
     // PR 5: allocation counts are residual NEW sections. Persist the validated
     // plan before the next provider boundary so continuation does not rerun a
     // settled allocation call or double-subtract existing coverage.
@@ -4019,7 +4484,11 @@ export async function runSuggestionJob(
         allocationEntries: Array.from(allocation.entries()),
         allocationRetryReason: undefined,
       };
-      await updateRun({ planning_state: planningState });
+      diagnostics = markMeaningfulProgress(
+        { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
+        `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
+      );
+      await updateRun({ planning_state: planningState, diagnostics });
     }
     const allocationCountsByBeat = Object.fromEntries(
       Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections]),
@@ -4103,7 +4572,11 @@ export async function runSuggestionJob(
     let completionWarnings = result.warnings;
     if (coverage.missingRequired.length > 0) {
       planningState = { ...planningState, phase: "obligation_repair_pending", nextAction: "obligation-repair" };
-      await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics: { ...diagnostics, stage: "obligation_repair_pending" } });
+      diagnostics = markMeaningfulProgress(
+        { ...diagnostics, stage: "obligation_repair_pending" },
+        "validated_suggestions_persisted",
+      );
+      await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
       throw new SuggestionWorkerYield();
     }
     await postValidatedOutline(completedSuggestions, completionWarnings);
@@ -4130,8 +4603,24 @@ export async function runSuggestionJob(
       return;
     }
     const providerBillingUnavailable = isProviderBillingUnavailable(err);
+    const providerErrorCode = err && typeof err === "object" && "errorCode" in err
+      ? String((err as { errorCode?: unknown }).errorCode)
+      : null;
+    const configurationFailure = providerErrorCode === "invalid_request" ||
+      providerErrorCode === "provider_rejected";
+    const providerRateLimited = providerErrorCode === "provider_rate_limited";
+    const providerOutage = providerErrorCode === "provider_overloaded" ||
+      providerErrorCode === "provider_timeout";
     const errorCode = providerBillingUnavailable
       ? "provider_billing_unavailable"
+      : configurationFailure
+      ? "unsupported_model_configuration"
+      : providerRateLimited
+      ? "provider_rate_limited"
+      : providerOutage
+      ? "provider_outage"
+      : providerErrorCode
+      ? "provider_error"
       : err instanceof RecipeObligationValidationError
       ? err.code
       : err instanceof StoryMaterialSufficiencyError
@@ -4145,14 +4634,38 @@ export async function runSuggestionJob(
           ? "provider_error"
           : "server_error"));
     const message = err instanceof Error ? err.message : String(err);
-    const publicError = providerBillingUnavailable
+    const publicErrorBase = providerBillingUnavailable
       ? "Temporarily unavailable — try again later."
+      : configurationFailure
+      ? "This selected model does not support the outline planner configuration."
+      : providerRateLimited
+      ? "The AI provider is rate-limiting outline planning. Wait a moment before trying again."
+      : providerOutage
+      ? "The AI provider is temporarily unavailable; try again later."
+      : providerErrorCode
+      ? "The AI outline planner could not complete this request; review the run status before retrying."
       : message.slice(0, 2000);
+    const settledCredits = await reconcileExhaustedSuggestionBilling(db, {
+      id: runId,
+      credit_cost_charged: claimedRun.credit_cost_charged,
+    });
+    const billingStatus = settledCredits === null
+      ? "Billing reconciliation is unresolved; any settled stages were preserved."
+      : settledCredits > 0
+      ? `${settledCredits.toFixed(2)} credits were already settled for completed stages; no duplicate charge will be created.`
+      : "No settled customer charge is recorded for this run.";
+    const publicError = `${publicErrorBase} ${billingStatus}`;
     const failedDiagnostics = {
       ...diagnostics,
+      billingReconciliation: settledCredits === null ? "unresolved" : settledCredits > 0 ? "settled" : "no_settled_charge",
+      settledCredits,
       stage: "failed",
+      runID: runId,
+      selectedModel: providerModelForAlert,
+      errorCode,
+      ...(providerErrorCode ? { providerErrorCode } : {}),
       plannedMinimumSections,
-      ...(providerBillingUnavailable ? {} : { error: message.slice(0, 500) }),
+      ...(providerBillingUnavailable || configurationFailure ? {} : { error: message.slice(0, 500) }),
       ...(requestedStoryMaterialFormat(body) === "novel"
         ? { novelScale: evaluateNovelScale(latestValidSuggestions, body.existingSections ?? []) }
         : {}),
@@ -4274,9 +4787,19 @@ Deno.serve(async (req: Request) => {
     // GET polling is a recovery backstop for suspended workers. The durable
     // pending claim inside runSuggestionJob is the final race guard.
     let recoveredRun = run;
-    if (run.status === "running") {
+    if (run.status === "running" || run.status === "pending") {
       const reclaimed = await reclaimExpiredSuggestionRun(admin(), run);
-      if (reclaimed) recoveredRun = { ...run, status: "pending", lease_expires_at: null };
+      if (reclaimed) {
+        const authoritative = await loadAuthoritativeSuggestionRun(admin(), run.id);
+        if (!authoritative) {
+          return errorResponse(
+            "recovery_state_unavailable",
+            "Could not read the authoritative recovered suggestion state; retry polling.",
+            503,
+          );
+        }
+        recoveredRun = authoritative;
+      }
     }
     if (recoveredRun.status === "pending") {
       const recoveryKey = Deno.env.get("OPENAI_API_KEY");
@@ -4288,40 +4811,25 @@ Deno.serve(async (req: Request) => {
         authHeader,
         (recoveryRunID, recoveryBody, recoveryUserID, recoveryKeyValue, recoveryAttemptCount, recoveryAuthHeader) =>
           runSuggestionJob(recoveryRunID, recoveryBody, recoveryUserID, recoveryKeyValue, recoveryAttemptCount, recoveryAuthHeader),
+        admin(),
       ));
       run = recoveredRun;
     }
     return corsResponse(
-      JSON.stringify({
-        run_id: run.id,
-        status: run.status,
-        suggestions: run.suggestions,
-        warnings: run.warnings,
-        errorCode: run.error_code,
-        error: run.error,
-        diagnostics: run.diagnostics,
-        storyMaterialEnrichment: run.story_material,
-        created_at: run.created_at,
-        updated_at: run.updated_at,
-        completed_at: run.completed_at,
-        creditCostCharged: run.credit_cost_charged,
-        remainingCredits: run.remaining_credits,
-        sourceRecipe: run.request_json?.recipe ?? null,
-      }),
+      JSON.stringify(suggestionRunResponse(recoveredRun)),
       { status: 200 },
     );
   }
 
-  const openaiKey = Deno.env.get("OPENAI_API_KEY");
-  if (!openaiKey) {
-    return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
-  }
   let body: OutlineFromRecipeRequest;
   try {
     body = await req.json();
   } catch {
     return errorResponse("invalid_request", "Body must be JSON", 400);
   }
+  // Do not apply the new Sol default until after legacy idempotent recovery
+  // has had a chance to match the original request fingerprint. Legacy
+  // callers without modelID retain their historical GPT-5.6 Luna default.
   if (body.storyMaterialEnrichment) {
     body = {
       ...body,
@@ -4361,9 +4869,46 @@ Deno.serve(async (req: Request) => {
       .eq("outline_id", body.outline_id).neq("status", "deleted");
     if ((count ?? 0) > 0) return errorResponse("recipe_provenance_conflict", "Recipe changed after sections were planned; start a fresh outline or edit the existing recipe.", 409);
   }
-  // PR 7: calculate logical identity BEFORE checkRateLimit so reconnects
+  // Estimates are read-only: they use the authenticated entitlement and
+  // canonical model pricing, but never create a run, provider attempt, usage
+  // event, ledger entry, or rate-limit log.
+  if (body.estimate_only === true) {
+    const selectedModel = await new SupabaseGenerationModelStore(db).getEnabledModelById(
+      body.modelID?.trim() || LEGACY_PLANNING_MODEL_ID,
+    );
+    if (!selectedModel) {
+      return errorResponse("model_unavailable", `Selected outline model is unavailable: ${body.modelID ?? LEGACY_PLANNING_MODEL_ID}`, 422);
+    }
+    try {
+      const entitlement = await new SupabaseCreditStore(db).loadOrDefault(user.id);
+      const estimate = estimateOutlinePlanningCost(body, selectedModel, entitlement);
+      return corsResponse(JSON.stringify({
+        estimated_credits: estimate.estimatedCredits,
+        lower_bound_credits: estimate.lowerBoundCredits,
+        upper_bound_credits: estimate.upperBoundCredits,
+        available_credits: estimate.availableCredits,
+        projected_balance: estimate.projectedBalance,
+        allowed: estimate.allowed,
+        model: estimate.model,
+        expected_stages: estimate.expectedStages,
+      }), { status: 200 });
+    } catch (error) {
+      console.error("[outline-from-recipe] estimate failed", error);
+      return errorResponse("estimate_unavailable", "Outline pricing could not be estimated", 503);
+    }
+  }
+
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!openaiKey) {
+    return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
+  }
+  // PR 7: calculate both identities BEFORE checkRateLimit so reconnects
   // can short-circuit without consuming a rate-limit slot or logging.
-  const identity = await logicalSuggestionIdentity(body);
+  // Existing historical rows may use the pre-model fingerprint; new rows
+  // persist the canonical body with an explicit model.
+  const incomingBody = body;
+  let identityResolution = await resolvePlanningRequestIdentity(incomingBody);
+  let { canonicalBody, identity, lookupKeys } = identityResolution;
   // PR 7: resolve an existing matching idempotent run first. If the
   // current request's idempotency key is already bound to a run with the
   // same fingerprint, reconnect to it (no rate limit, no log entry). If
@@ -4371,21 +4916,22 @@ Deno.serve(async (req: Request) => {
   // the idempotency-safe path for app reconnects / worker retries /
   // iOS suggestion-status polling that re-submits the same request after
   // a transient network failure.
-  const { data: existing, error: existingError } = await db
+  const existingResult = await db
     .from("outline_suggestion_runs")
     .select("id, status, request_fingerprint, lease_expires_at, error_code, suggestions, warnings, error, diagnostics, story_material, credit_cost_charged, remaining_credits, request_json, created_at, updated_at, completed_at, attempt_count")
     .eq("user_id", user.id)
-    .eq("idempotency_key", identity.key)
+    .in("idempotency_key", lookupKeys)
     .maybeSingle();
+  let existing = existingResult.data;
+  const existingError = existingResult.error;
   if (existingError) {
     console.error("[outline-from-recipe] existing-run resolve failed", existingError);
     return errorResponse("db_error", existingError.message ?? "Could not resolve existing run", 500);
   }
   if (existing) {
-    if (
-      existing.request_fingerprint &&
-      existing.request_fingerprint !== identity.fingerprint
-    ) {
+    identityResolution = await resolvePlanningRequestIdentity(incomingBody, existing);
+    ({ canonicalBody, identity, lookupKeys } = identityResolution);
+    if (existing.request_fingerprint && !identityResolution.acceptedFingerprints.has(existing.request_fingerprint)) {
       return errorResponse(
         "idempotency_conflict",
         "The idempotency key is already bound to a different suggestion request",
@@ -4406,8 +4952,9 @@ Deno.serve(async (req: Request) => {
         attempt_count: (existing.attempt_count ?? 0) + 1,
       }).eq("id", existing.id).eq("status", "failed").eq("credit_cost_charged", 0);
       if (retryError) return errorResponse("db_error", retryError.message ?? "Could not retry failed suggestion run", 500);
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
       // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, body, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
       return corsResponse(
         JSON.stringify({
           run_id: existing.id,
@@ -4428,42 +4975,50 @@ Deno.serve(async (req: Request) => {
         { status: 200 },
       );
     }
-    if (existing.status === "running") {
+    if (!existing) {
+      return errorResponse("db_error", "Could not resolve existing suggestion run", 500);
+    }
+    if (existing.status === "running" || existing.status === "pending") {
       const reclaimed = await reclaimExpiredSuggestionRun(db, existing);
-      if (reclaimed) existing.status = "pending";
+      if (reclaimed) {
+        const authoritative = await loadAuthoritativeSuggestionRun(db, existing.id);
+        if (!authoritative) {
+          return errorResponse(
+            "recovery_state_unavailable",
+            "Could not read the authoritative recovered suggestion state; retry the request.",
+            503,
+          );
+        }
+        existing = authoritative;
+      }
+    }
+    if (!existing) {
+      return errorResponse("recovery_state_unavailable", "Could not read the authoritative recovered suggestion state; retry the request.", 503);
     }
     if (existing.status === "pending") {
       // Reconnects and continuation POSTs do not consume another rate-limit
       // slot or request-log entry. The pending claim makes this race-safe.
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
       // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, body, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
     }
     // Reconnect: return existing run status. Skip checkRateLimit + logRequest
     // so a stray reconnect does NOT consume a rate-limit slot or produce
     // a duplicate request-log entry.
     return corsResponse(
-      JSON.stringify({
-        run_id: existing.id,
-        status: existing.status,
-        suggestions: existing.suggestions,
-        warnings: existing.warnings,
-        errorCode: existing.error_code,
-        error: existing.error,
-        diagnostics: existing.diagnostics,
-        storyMaterialEnrichment: existing.story_material,
-        created_at: existing.created_at,
-        updated_at: existing.updated_at,
-        completed_at: existing.completed_at,
-        creditCostCharged: existing.credit_cost_charged,
-        remainingCredits: existing.remaining_credits,
-        sourceRecipe: existing.request_json?.recipe ?? null,
-      }),
+      JSON.stringify(suggestionRunResponse(existing)),
       { status: 200 },
     );
   }
   // PR 7: only NEW logical requests reach checkRateLimit. Reconnects were
   // handled by the resolve-existing path above; this is a fresh
   // outline-from-recipe request with a brand-new idempotency key.
+  body = canonicalBody;
+  identity = identityResolution.canonicalIdentity;
+  const selectedModel = await new SupabaseGenerationModelStore(db).getEnabledModelById(body.modelID!);
+  if (!selectedModel) {
+    return errorResponse("model_unavailable", `Selected outline model is unavailable: ${body.modelID}`, 422);
+  }
   const rateResult = await checkRateLimit(userClient, user.id);
   if (!rateResult.allowed) {
     return corsResponse(
@@ -4507,13 +5062,24 @@ Deno.serve(async (req: Request) => {
       .eq("user_id", user.id).eq("idempotency_key", identity.key).single();
     if (existing.error || !existing.data) return errorResponse("db_error", existing.error?.message ?? "Could not resolve suggestion run", 500);
     run = existing.data;
-    if (run.request_fingerprint && run.request_fingerprint !== identity.fingerprint) {
+    const raceIdentity = await resolvePlanningRequestIdentity(incomingBody, run);
+    if (run.request_fingerprint && !raceIdentity.acceptedFingerprints.has(run.request_fingerprint)) {
       return errorResponse("idempotency_conflict", "The idempotency key is already bound to a different suggestion request", 409);
     }
     const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
     const resumableExpansionFailure = run.status === "failed" && run.error_code === "failed_expansion" && expansionResumeState(run) !== null;
     if (stale) {
-      if (await reclaimExpiredSuggestionRun(db, run)) run.status = "pending";
+      if (await reclaimExpiredSuggestionRun(db, run)) {
+        const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
+        if (!authoritative) {
+          return errorResponse(
+            "recovery_state_unavailable",
+            "Could not read the authoritative recovered suggestion state; retry the request.",
+            503,
+          );
+        }
+        run = authoritative;
+      }
     } else if (resumableExpansionFailure) {
       const reclaimed = await db.from("outline_suggestion_runs").update({
         status: "pending",
@@ -4548,7 +5114,9 @@ Deno.serve(async (req: Request) => {
   // suspension. The pending claim inside runSuggestionJob makes this race-safe.
   if (run.status === "pending") {
     // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-    EdgeRuntime.waitUntil(runSuggestionJob(run.id, body, user.id, openaiKey, run.attempt_count ?? 0, authHeader));
+    const recoveredBody = await recoverPersistedPlanningBody(db, run);
+    // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+    EdgeRuntime.waitUntil(runSuggestionJob(run.id, recoveredBody, user.id, openaiKey, run.attempt_count ?? 0, authHeader));
   }
   return corsResponse(
     JSON.stringify({
