@@ -114,12 +114,6 @@ extension RunOutlineStatus {
     var isPausedForInsufficientCredits: Bool {
         status == "paused_insufficient_credits"
     }
-
-    /// A persisted terminal banner must not disable starting a subsequent run.
-    /// Unknown or nonterminal statuses remain protected from duplicate kickoff.
-    var blocksNewGeneration: Bool {
-        status != "completed" && status != "failed"
-    }
 }
 
 struct RunOutlineCurrentSection: Codable {

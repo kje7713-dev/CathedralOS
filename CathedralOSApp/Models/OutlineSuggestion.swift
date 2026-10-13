@@ -55,42 +55,8 @@ struct OutlineSuggestionRequest: Codable {
     let outline_id: UUID?
     let project_lineage_id: UUID?
     let requestedFormat: String?
-    /// Explicit model selected for this planning run. Persisted in the
-    /// durable request JSON so reconnects and worker continuations reuse the
-    /// original selection rather than falling back to a server default.
-    /// Missing on legacy requests; decoding preserves that distinction.
-    let modelID: String?
-
-    init(
-        recipe: PromptPackExportPayload,
-        arcTemplate: ArcTemplateBlob,
-        hint: String?,
-        existingSections: [ExistingSectionBlob]?,
-        idempotencyKey: String,
-        outline_id: UUID?,
-        project_lineage_id: UUID?,
-        requestedFormat: String?,
-        modelID: String? = nil
-    ) {
-        self.recipe = recipe
-        self.arcTemplate = arcTemplate
-        self.hint = hint
-        self.existingSections = existingSections
-        self.idempotencyKey = idempotencyKey
-        self.outline_id = outline_id
-        self.project_lineage_id = project_lineage_id
-        self.requestedFormat = requestedFormat
-        self.modelID = modelID
-    }
-
-    func withModelID(_ modelID: String) -> OutlineSuggestionRequest {
-        OutlineSuggestionRequest(
-            recipe: recipe, arcTemplate: arcTemplate, hint: hint,
-            existingSections: existingSections, idempotencyKey: idempotencyKey,
-            outline_id: outline_id, project_lineage_id: project_lineage_id,
-            requestedFormat: requestedFormat, modelID: modelID
-        )
-    }
+    /// Optional selected planning model. Nil preserves the historical server default.
+    let modelID: String? = nil
 }
 
 struct ArcTemplateBlob: Codable {

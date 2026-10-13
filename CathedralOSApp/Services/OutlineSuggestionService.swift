@@ -12,35 +12,16 @@ import CryptoKit
 // so the suggestion run survives screen lock and view dismissal.
 
 enum OutlineSuggestionError: Error, LocalizedError {
-    enum TerminalFailureKind: String, Equatable {
-        case providerBillingUnavailable = "provider_billing_unavailable"
-        case unsupportedModelConfiguration = "unsupported_model_configuration"
-        case providerRateLimited = "provider_rate_limited"
-        case providerOutage = "provider_outage"
-        case providerError = "provider_error"
-        case invalidResponse = "invalid_response"
-        case workerAttemptsExhausted = "worker_attempts_exhausted"
-        case workerLifetimeExceeded = "worker_lifetime_exceeded"
-        case workerNoProgress = "worker_no_progress"
-    }
-
     case notConfigured(reason: String)
     case notAuthenticated
     case rateLimited
     case providerBillingUnavailable
-    case unsupportedModelConfiguration
-    case providerRateLimited
-    case providerOutage
     case providerError
     case insufficientCredits(needed: Double?, available: Double?, message: String)
     case invalidResponse(String)
     case serverError(statusCode: Int, body: String? = nil)
     case networkError(String)
     case cancelled
-    /// A terminal server-owned job includes an authoritative, reconciled
-    /// message. Keep its classification without replacing that message with
-    /// a client-side billing claim.
-    case terminalFailure(kind: TerminalFailureKind, message: String)
     // PR 2: per the recipe-selection integrity validator. Surfaced when
     // `makeRequest` finds a stored selectedCharacterID / selectedStorySparkID /
     // selectedAftertasteID / selectedRelationshipID / selectedThemeQuestionID /
@@ -64,21 +45,17 @@ enum OutlineSuggestionError: Error, LocalizedError {
         case .notConfigured(let r): return "Suggestions backend not configured. \(r)"
         case .notAuthenticated:      return "Sign in to suggest sections."
         case .rateLimited:           return "Too many suggestion requests. Try again in a minute."
-        case .providerBillingUnavailable: return "The AI provider's billing service is unavailable. Billing status is unavailable; try again later."
-        case .unsupportedModelConfiguration: return "This model is not configured for outline planning. Choose another model. Billing status is unavailable."
-        case .providerRateLimited: return "The AI provider is rate-limiting outline planning. Wait a moment before trying again."
-        case .providerOutage: return "The AI provider is temporarily unavailable. Billing status is unavailable; try again later."
+        case .providerBillingUnavailable: return "Temporarily unavailable — try again later."
         case .providerError:         return "The AI suggestion failed. Try again."
         case .insufficientCredits(let needed, let available, let message):
             if let needed, let available { return "Insufficient credits: need \(needed.cleanCreditCount), have \(available.cleanCreditCount)." }
-            return "Insufficient credits. \(message)"
+            return message
         case .invalidResponse(let m): return "Invalid response: \(m)"
         case .serverError(let c, let body):
             if let body, !body.isEmpty { return "Server error \(c).\n\n\(body)" }
             return "Server error \(c)."
         case .networkError(let m):   return "Network error: \(m)"
         case .cancelled:              return "The suggestion run continues on the server. You can leave this screen and resume it later."
-        case .terminalFailure(_, let message): return message
         case .recipeIntegrityMissing(let missing):
             return RecipeIntegrityValidator.errorMessage(for: missing)
         case .recipeProvenanceConflict(_, _, let count):
@@ -90,27 +67,6 @@ enum OutlineSuggestionError: Error, LocalizedError {
 private extension Double {
     var cleanCreditCount: String {
         truncatingRemainder(dividingBy: 1) == 0 ? String(Int(self)) : String(format: "%.2f", self)
-    }
-}
-
-struct OutlinePlanningEstimate: Codable, Equatable {
-    let estimatedCredits: Double
-    let lowerBoundCredits: Double
-    let upperBoundCredits: Double
-    let availableCredits: Double
-    let projectedBalance: Double
-    let allowed: Bool
-    let model: String
-    let expectedStages: Int
-
-    enum CodingKeys: String, CodingKey {
-        case estimatedCredits = "estimated_credits"
-        case lowerBoundCredits = "lower_bound_credits"
-        case upperBoundCredits = "upper_bound_credits"
-        case availableCredits = "available_credits"
-        case projectedBalance = "projected_balance"
-        case allowed, model
-        case expectedStages = "expected_stages"
     }
 }
 
@@ -193,28 +149,6 @@ struct OutlineSuggestionService {
         )
     }
 
-    /// Fetches a backend-authoritative, non-billable estimate.
-    func estimate(request: OutlineSuggestionRequest, modelID: String) async throws -> OutlinePlanningEstimate {
-        let client: SupabaseBackendClient
-        do { client = try SupabaseBackendClient() }
-        catch { throw OutlineSuggestionError.notConfigured(reason: String(describing: error)) }
-        var tokenRequest = client.authorizedRequest(
-            for: client.edgeFunctionURL(path: SupabaseConfiguration.outlineFromRecipeEdgeFunctionPath),
-            userAccessToken: try await validAccessToken()
-        )
-        tokenRequest.httpMethod = "POST"
-        tokenRequest.timeoutInterval = 30
-        tokenRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request.withModelID(modelID))) as! [String: Any]
-        body["estimate_only"] = true
-        tokenRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await performRequest(tokenRequest)
-        guard let http = response as? HTTPURLResponse else { throw OutlineSuggestionError.networkError("Non-HTTP response") }
-        guard (200...299).contains(http.statusCode) else { throw Self.errorFromResponse(statusCode: http.statusCode, data: data) }
-        do { return try JSONDecoder().decode(OutlinePlanningEstimate.self, from: data) }
-        catch { throw OutlineSuggestionError.invalidResponse("Could not decode pricing estimate") }
-    }
-
     /// Queues the server-owned run and returns before any polling begins. The
     /// caller must persist the returned runID before attaching a poller.
     func startSuggestions(request: OutlineSuggestionRequest) async throws -> OutlineSuggestionJob {
@@ -239,7 +173,10 @@ struct OutlineSuggestionService {
         case 200...299:
             return try decodeJob(data)
         case 401: throw OutlineSuggestionError.notAuthenticated
-        default: throw Self.errorFromResponse(statusCode: httpResponse.statusCode, data: data)
+        case 429: throw OutlineSuggestionError.rateLimited
+        case 500: throw OutlineSuggestionError.serverError(statusCode: 500, body: String(data: data, encoding: .utf8))
+        case 502: throw OutlineSuggestionError.providerError
+        default: throw OutlineSuggestionError.serverError(statusCode: httpResponse.statusCode, body: String(data: data, encoding: .utf8))
         }
     }
 
@@ -294,21 +231,6 @@ struct OutlineSuggestionService {
         return "suggestion-" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func errorFromResponse(statusCode: Int, data: Data) -> OutlineSuggestionError {
-        let body = String(data: data, encoding: .utf8)
-        let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        let code = object?["errorCode"] as? String ?? object?["error_code"] as? String
-        switch code {
-        case "insufficient_credits": return .insufficientCredits(needed: object?["requiredCredits"] as? Double, available: object?["availableCredits"] as? Double, message: "Insufficient credits for this outline estimate.")
-        case "provider_billing_unavailable": return .providerBillingUnavailable
-        case "invalid_request", "model_unavailable": return .unsupportedModelConfiguration
-        case "rate_limited": return .rateLimited
-        case "provider_overloaded", "provider_timeout", "provider_outage": return .providerOutage
-        case "provider_error": return .providerError
-        default: return .serverError(statusCode: statusCode, body: body)
-        }
-    }
-
     private func decodeJob(_ data: Data) throws -> OutlineSuggestionJob {
         do { return try JSONDecoder().decode(OutlineSuggestionJob.self, from: data) }
         catch { throw OutlineSuggestionError.invalidResponse("Could not decode job: \(error.localizedDescription)") }
@@ -357,40 +279,30 @@ struct OutlineSuggestionService {
         // PR 9: recipe_provenance_conflict is not auto-retryable — the
         // outline has persisted sections from a previous recipe hash, so the
         // user must edit the recipe or start a fresh outline.
-        case .notConfigured, .providerBillingUnavailable, .unsupportedModelConfiguration, .providerRateLimited, .providerOutage, .providerError, .insufficientCredits, .invalidResponse, .recipeIntegrityMissing, .recipeProvenanceConflict:
-            return false
-        case .terminalFailure(_, _):
+        case .notConfigured, .providerBillingUnavailable, .providerError, .insufficientCredits, .invalidResponse, .recipeIntegrityMissing, .recipeProvenanceConflict:
             return false
         }
     }
 
-    static func errorForFailedJob(errorCode: String?, message: String?) -> OutlineSuggestionError {
-        let trimmedMessage = message?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let serverMessage = (trimmedMessage?.isEmpty == false)
-            ? trimmedMessage!
-            : "The suggestion job failed. Billing status is unavailable; retry to reconcile the run."
-        let lowercasedMessage = serverMessage.lowercased()
+    private static func extractDecimalAmounts(from text: String) -> [Double] {
+        let pattern = #"(?<![\d.])\d+(?:\.\d+)?(?!\.)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard let swiftRange = Range(match.range, in: text) else { return nil }
+            return Double(text[swiftRange])
+        }
+    }
 
-        // Terminal job responses already contain the backend's authoritative
-        // billing reconciliation. Do not parse amounts from prose or replace
-        // that message with a client-side zero-charge description.
-        if errorCode == "insufficient_credits" || lowercasedMessage.contains("insufficient") || lowercasedMessage.contains("requires ~") {
-            return .insufficientCredits(needed: nil, available: nil, message: serverMessage)
+    static func errorForFailedJob(errorCode: String?, message: String?) -> OutlineSuggestionError {
+        let text = message ?? "The suggestion job failed."
+        if errorCode == "insufficient_credits" || text.lowercased().contains("insufficient") || text.lowercased().contains("requires ~") {
+            let numbers = extractDecimalAmounts(from: text)
+            return .insufficientCredits(needed: numbers.first, available: numbers.dropFirst().first, message: text)
         }
-        if errorCode == "provider_billing_unavailable" { return .terminalFailure(kind: .providerBillingUnavailable, message: serverMessage) }
-        if errorCode == "invalid_request" || errorCode == "unsupported_model_configuration" || errorCode == "model_unavailable" || lowercasedMessage.contains("unsupported") {
-            return .terminalFailure(kind: .unsupportedModelConfiguration, message: serverMessage)
-        }
-        if errorCode == "rate_limited" || errorCode == "provider_rate_limited" { return .terminalFailure(kind: .providerRateLimited, message: serverMessage) }
-        if errorCode == "provider_overloaded" || errorCode == "provider_timeout" || errorCode == "provider_outage" {
-            return .terminalFailure(kind: .providerOutage, message: serverMessage)
-        }
-        if errorCode == "provider_error" { return .terminalFailure(kind: .providerError, message: serverMessage) }
-        if errorCode == "invalid_response" { return .terminalFailure(kind: .invalidResponse, message: serverMessage) }
-        if errorCode == "worker_attempts_exhausted" { return .terminalFailure(kind: .workerAttemptsExhausted, message: serverMessage) }
-        if errorCode == "worker_lifetime_exceeded" { return .terminalFailure(kind: .workerLifetimeExceeded, message: serverMessage) }
-        if errorCode == "worker_no_progress" { return .terminalFailure(kind: .workerNoProgress, message: serverMessage) }
-        return .serverError(statusCode: 500, body: serverMessage)
+        if errorCode == "provider_billing_unavailable" { return .providerBillingUnavailable }
+        if errorCode == "provider_error" || errorCode == "invalid_response" { return .providerError }
+        return .serverError(statusCode: 500, body: text)
     }
 
     private func validAccessToken() async throws -> String {
