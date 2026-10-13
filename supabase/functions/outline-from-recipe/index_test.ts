@@ -81,6 +81,8 @@ import {
   SuggestionWorkerSlice,
   assertWorkerSliceCanDispatch,
   reclaimExpiredSuggestionRun,
+  loadAuthoritativeSuggestionRun,
+  suggestionRunResponse,
   markMeaningfulProgress,
   assertDurableUpdateSucceeded,
   suggestionLifecycleFailure,
@@ -3595,11 +3597,21 @@ class ExecutableRunDb {
   patchHistory: Array<Record<string, unknown>> = [];
   failPatchField: string | null = null;
   failAsZeroRows = false;
-  constructor(row: any, options: { singleClaimOnly?: boolean; failPatchField?: string; failAsZeroRows?: boolean } = {}) {
+  failRead = false;
+  rpc?: (name: string, args: Record<string, unknown>) => Promise<{ error: unknown }>;
+  constructor(row: any, options: { singleClaimOnly?: boolean; failPatchField?: string; failAsZeroRows?: boolean; failRead?: boolean; reconciledCredits?: number; reconciledRemainingCredits?: number } = {}) {
     this.row = structuredClone(row);
     this.singleClaimOnly = options.singleClaimOnly ?? false;
     this.failPatchField = options.failPatchField ?? null;
     this.failAsZeroRows = options.failAsZeroRows ?? false;
+    this.failRead = options.failRead ?? false;
+    if (typeof options.reconciledCredits === "number") {
+      this.rpc = async () => {
+        this.row.credit_cost_charged = options.reconciledCredits;
+        if (typeof options.reconciledRemainingCredits === "number") this.row.remaining_credits = options.reconciledRemainingCredits;
+        return { error: null };
+      };
+    }
   }
   from(table: string) {
     const self = this;
@@ -3626,6 +3638,7 @@ class ExecutableRunDb {
   }
   private execute(table: string, patch: Record<string, unknown> | null, filters: Array<[string, unknown]>, ranges: Array<[string, unknown]>, selected: boolean) {
     if (table === "outline_suggestion_runs") {
+      if (this.failRead && !patch) return { data: null, error: { message: "simulated authoritative read failure" } };
       if (!this.matches(this.row, filters, ranges)) return { data: null, error: null };
       if (patch?.status === "running" && this.singleClaimOnly && this.claims > 0) return { data: null, error: null };
       if (patch && this.failPatchField && this.failPatchField in patch) {
@@ -4615,6 +4628,57 @@ Deno.test("exhausted worker preserves settled billing in its terminal message", 
   assertEquals(db.row.error_code, "worker_attempts_exhausted");
   assertEquals(db.row.error.includes("2.50 credits were already settled"), true);
   assertEquals(db.row.error.includes("No credits were charged"), false);
+});
+
+Deno.test("terminal recovery refreshes authoritative settled and remaining credits", async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb(
+    { id: "run-authoritative-billing", status: "running", lease_expires_at: expired, attempt_count: 4, credit_cost_charged: 0, remaining_credits: 100 },
+    { reconciledCredits: 2, reconciledRemainingCredits: 98 },
+  );
+  const run = { ...db.row };
+  assertEquals(await reclaimExpiredSuggestionRun(db, run), true);
+  const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
+  if (!authoritative) throw new Error("expected authoritative recovered row");
+  assertEquals(authoritative.status, "failed");
+  assertEquals(authoritative.credit_cost_charged, 2);
+  assertEquals(authoritative.remaining_credits, 98);
+  const response = suggestionRunResponse(authoritative);
+  assertEquals(response.creditCostCharged, 2);
+  assertEquals(response.remainingCredits, 98);
+});
+
+Deno.test("terminal recovery reports confirmed zero only after authoritative reconciliation", async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb(
+    { id: "run-authoritative-zero", status: "running", lease_expires_at: expired, attempt_count: 4, credit_cost_charged: 0, remaining_credits: 100 },
+    { reconciledCredits: 0, reconciledRemainingCredits: 100 },
+  );
+  const run = { ...db.row };
+  assertEquals(await reclaimExpiredSuggestionRun(db, run), true);
+  const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
+  if (!authoritative) throw new Error("expected authoritative recovered row");
+  assertEquals(authoritative.credit_cost_charged, 0);
+  assertEquals(suggestionRunResponse(authoritative).creditCostCharged, 0);
+});
+
+Deno.test("unresolved reconciliation never presents stale credit fields", async () => {
+  const expired = new Date(Date.now() - 1000).toISOString();
+  const db = new ExecutableRunDb({ id: "run-unresolved-billing", status: "running", lease_expires_at: expired, attempt_count: 4, credit_cost_charged: 0, remaining_credits: 100 });
+  const run = { ...db.row, credit_cost_charged: null };
+  assertEquals(await reclaimExpiredSuggestionRun(db, run), true);
+  const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
+  if (!authoritative) throw new Error("expected terminal row");
+  const response = suggestionRunResponse(authoritative);
+  assertEquals(response.creditCostCharged, null);
+  assertEquals(response.remainingCredits, null);
+  assertEquals(String(response.error).includes("Billing reconciliation is unresolved"), true);
+});
+
+Deno.test("authoritative refresh failure is not converted into a stale terminal snapshot", async () => {
+  const db = new ExecutableRunDb({ id: "run-refresh-fails", status: "failed", error: "terminal", credit_cost_charged: 7, remaining_credits: 93 });
+  db.failRead = true;
+  assertEquals(await loadAuthoritativeSuggestionRun(db, db.row.id), null);
 });
 
 Deno.test("durable checkpoint update fails closed on database errors and lost ownership", () => {

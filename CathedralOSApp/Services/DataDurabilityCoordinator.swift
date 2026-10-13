@@ -64,7 +64,8 @@ struct SuggestionRunMetadata: Codable {
 
     var isActive: Bool {
         status == "starting" || status == "pending" || status == "running" ||
-            status == "reconnecting" || status == "connection_unavailable"
+            status == "generating" || status == "reconnecting" ||
+            status == "connection_unavailable"
     }
 }
 

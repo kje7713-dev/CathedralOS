@@ -151,6 +151,61 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         XCTAssertNotNil(defaults.data(forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)"))
     }
 
+    func testGeneratingStatusIsActiveAfterRelaunch() throws {
+        let suiteName = "SuggestionRunMetadataLineageTests.generating-relaunch.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let projectID = UUID()
+        let lineageID = UUID()
+        let request = makeRequest(modelID: "gpt-6.1-sol", idempotencyKey: "generating-run")
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID, lineageID: lineageID, request: request,
+            idempotencyKey: request.idempotencyKey, runID: "server-generating-run",
+            status: "generating", createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 101)
+        )
+        defaults.set(try JSONEncoder().encode(metadata), forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)")
+
+        let relaunched = DataDurabilityCoordinator(defaults: defaults)
+        relaunched.resumeSuggestionRunIfNeeded(
+            projectID: projectID, lineageID: lineageID,
+            currentIdempotencyKey: request.idempotencyKey
+        )
+        let restored = try XCTUnwrap(relaunched.activeSuggestionRun(for: projectID))
+        XCTAssertTrue(restored.isActive)
+        XCTAssertEqual(restored.status, "generating")
+        XCTAssertEqual(restored.runID, "server-generating-run")
+        XCTAssertEqual(restored.request.modelID, "gpt-6.1-sol")
+        XCTAssertEqual(restored.idempotencyKey, request.idempotencyKey)
+        relaunched.cancelSuggestionRun(for: projectID)
+    }
+
+    func testGeneratingStatusBlocksConflictingSuggestionIdentity() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let projectID = UUID()
+        let lineageID = UUID()
+        let original = makeRequest(modelID: "gpt-6.1-sol", idempotencyKey: "original-generating-run")
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID, lineageID: lineageID, request: original,
+            idempotencyKey: original.idempotencyKey, runID: "server-generating-run",
+            status: "generating", createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 101)
+        )
+        defaults.set(try JSONEncoder().encode(metadata), forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)")
+        coordinator.resumeSuggestionRunIfNeeded(
+            projectID: projectID, lineageID: lineageID,
+            currentIdempotencyKey: original.idempotencyKey
+        )
+        let replacement = makeRequest(modelID: "gpt-6-luna", idempotencyKey: "replacement-request")
+        coordinator.beginSuggestionRun(projectID: projectID, lineageID: lineageID, request: replacement)
+
+        XCTAssertEqual(coordinator.activeSuggestionRun(for: projectID)?.runID, "server-generating-run")
+        XCTAssertEqual(coordinator.activeSuggestionRun(for: projectID)?.idempotencyKey, original.idempotencyKey)
+        XCTAssertTrue(coordinator.consumeSuggestionFailure(for: projectID)?.contains("already owned") == true)
+        coordinator.cancelSuggestionRun(for: projectID)
+    }
+
     // MARK: - Original model survives preference changes
 
     func testOriginalModelAndIdentitySurviveChangedPreference() throws {

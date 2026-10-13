@@ -3579,6 +3579,50 @@ function exhaustedSuggestionBillingMessage(settledCredits: number | null): strin
   return "The outline planner stopped before completion. No settled customer charge is recorded for this run; retry the request.";
 }
 
+export const SUGGESTION_RUN_RECOVERY_COLUMNS =
+  "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
+
+/** Read the persisted row after reclaim/reconciliation has completed. */
+export async function loadAuthoritativeSuggestionRun(db: any, runID: string): Promise<any | null> {
+  try {
+    const result = await db.from("outline_suggestion_runs")
+      .select(SUGGESTION_RUN_RECOVERY_COLUMNS)
+      .eq("id", runID)
+      .maybeSingle();
+    if (result.error || !result.data) {
+      if (result.error) console.error("[outline-from-recipe] authoritative recovery read failed", result.error);
+      return null;
+    }
+    return result.data;
+  } catch (error) {
+    console.error("[outline-from-recipe] authoritative recovery read threw", error);
+    return null;
+  }
+}
+
+export function suggestionRunResponse(run: any): Record<string, unknown> {
+  const billingUnresolved = run.status === "failed" &&
+    typeof run.error === "string" &&
+    run.error.includes("Billing reconciliation is unresolved");
+  return {
+    run_id: run.id,
+    status: run.status,
+    suggestions: run.suggestions,
+    warnings: run.warnings,
+    errorCode: run.error_code,
+    error: run.error,
+    diagnostics: run.diagnostics,
+    storyMaterialEnrichment: run.story_material,
+    created_at: run.created_at,
+    updated_at: run.updated_at,
+    completed_at: run.completed_at,
+    // Unresolved reconciliation is never presented as a confirmed amount.
+    creditCostCharged: billingUnresolved ? null : run.credit_cost_charged,
+    remainingCredits: billingUnresolved ? null : run.remaining_credits,
+    sourceRecipe: run.request_json?.recipe ?? null,
+  };
+}
+
 export function suggestionLifecycleFailure(run: {
   created_at?: string | null;
   updated_at?: string | null;
@@ -4746,11 +4790,15 @@ Deno.serve(async (req: Request) => {
     if (run.status === "running" || run.status === "pending") {
       const reclaimed = await reclaimExpiredSuggestionRun(admin(), run);
       if (reclaimed) {
-        recoveredRun = {
-          ...run,
-          status: run.status === "failed" ? "failed" : "pending",
-          lease_expires_at: null,
-        };
+        const authoritative = await loadAuthoritativeSuggestionRun(admin(), run.id);
+        if (!authoritative) {
+          return errorResponse(
+            "recovery_state_unavailable",
+            "Could not read the authoritative recovered suggestion state; retry polling.",
+            503,
+          );
+        }
+        recoveredRun = authoritative;
       }
     }
     if (recoveredRun.status === "pending") {
@@ -4768,22 +4816,7 @@ Deno.serve(async (req: Request) => {
       run = recoveredRun;
     }
     return corsResponse(
-      JSON.stringify({
-        run_id: run.id,
-        status: run.status,
-        suggestions: run.suggestions,
-        warnings: run.warnings,
-        errorCode: run.error_code,
-        error: run.error,
-        diagnostics: run.diagnostics,
-        storyMaterialEnrichment: run.story_material,
-        created_at: run.created_at,
-        updated_at: run.updated_at,
-        completed_at: run.completed_at,
-        creditCostCharged: run.credit_cost_charged,
-        remainingCredits: run.remaining_credits,
-        sourceRecipe: run.request_json?.recipe ?? null,
-      }),
+      JSON.stringify(suggestionRunResponse(run)),
       { status: 200 },
     );
   }
@@ -4883,12 +4916,14 @@ Deno.serve(async (req: Request) => {
   // the idempotency-safe path for app reconnects / worker retries /
   // iOS suggestion-status polling that re-submits the same request after
   // a transient network failure.
-  const { data: existing, error: existingError } = await db
+  const existingResult = await db
     .from("outline_suggestion_runs")
     .select("id, status, request_fingerprint, lease_expires_at, error_code, suggestions, warnings, error, diagnostics, story_material, credit_cost_charged, remaining_credits, request_json, created_at, updated_at, completed_at, attempt_count")
     .eq("user_id", user.id)
     .in("idempotency_key", lookupKeys)
     .maybeSingle();
+  let existing = existingResult.data;
+  const existingError = existingResult.error;
   if (existingError) {
     console.error("[outline-from-recipe] existing-run resolve failed", existingError);
     return errorResponse("db_error", existingError.message ?? "Could not resolve existing run", 500);
@@ -4940,9 +4975,25 @@ Deno.serve(async (req: Request) => {
         { status: 200 },
       );
     }
+    if (!existing) {
+      return errorResponse("db_error", "Could not resolve existing suggestion run", 500);
+    }
     if (existing.status === "running" || existing.status === "pending") {
       const reclaimed = await reclaimExpiredSuggestionRun(db, existing);
-      if (reclaimed) existing.status = existing.status === "failed" ? "failed" : "pending";
+      if (reclaimed) {
+        const authoritative = await loadAuthoritativeSuggestionRun(db, existing.id);
+        if (!authoritative) {
+          return errorResponse(
+            "recovery_state_unavailable",
+            "Could not read the authoritative recovered suggestion state; retry the request.",
+            503,
+          );
+        }
+        existing = authoritative;
+      }
+    }
+    if (!existing) {
+      return errorResponse("recovery_state_unavailable", "Could not read the authoritative recovered suggestion state; retry the request.", 503);
     }
     if (existing.status === "pending") {
       // Reconnects and continuation POSTs do not consume another rate-limit
@@ -4955,22 +5006,7 @@ Deno.serve(async (req: Request) => {
     // so a stray reconnect does NOT consume a rate-limit slot or produce
     // a duplicate request-log entry.
     return corsResponse(
-      JSON.stringify({
-        run_id: existing.id,
-        status: existing.status,
-        suggestions: existing.suggestions,
-        warnings: existing.warnings,
-        errorCode: existing.error_code,
-        error: existing.error,
-        diagnostics: existing.diagnostics,
-        storyMaterialEnrichment: existing.story_material,
-        created_at: existing.created_at,
-        updated_at: existing.updated_at,
-        completed_at: existing.completed_at,
-        creditCostCharged: existing.credit_cost_charged,
-        remainingCredits: existing.remaining_credits,
-        sourceRecipe: existing.request_json?.recipe ?? null,
-      }),
+      JSON.stringify(suggestionRunResponse(existing)),
       { status: 200 },
     );
   }
@@ -5033,7 +5069,17 @@ Deno.serve(async (req: Request) => {
     const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
     const resumableExpansionFailure = run.status === "failed" && run.error_code === "failed_expansion" && expansionResumeState(run) !== null;
     if (stale) {
-      if (await reclaimExpiredSuggestionRun(db, run)) run.status = "pending";
+      if (await reclaimExpiredSuggestionRun(db, run)) {
+        const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
+        if (!authoritative) {
+          return errorResponse(
+            "recovery_state_unavailable",
+            "Could not read the authoritative recovered suggestion state; retry the request.",
+            503,
+          );
+        }
+        run = authoritative;
+      }
     } else if (resumableExpansionFailure) {
       const reclaimed = await db.from("outline_suggestion_runs").update({
         status: "pending",
