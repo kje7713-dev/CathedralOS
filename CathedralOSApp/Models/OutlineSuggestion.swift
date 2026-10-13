@@ -56,7 +56,7 @@ struct OutlineSuggestionRequest: Codable {
     let project_lineage_id: UUID?
     let requestedFormat: String?
     /// Optional selected planning model. Nil preserves the historical server default.
-    let modelID: String? = nil
+    let modelID: String?
 
     init(
         recipe: PromptPackExportPayload,
