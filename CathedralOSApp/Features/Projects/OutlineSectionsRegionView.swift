@@ -301,7 +301,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             .padding(.horizontal, CathedralTheme.Spacing.base)
     }
 
-    var body: some View {
+    private var stateDrivenContent: some View {
         styledRootContent
         // State-driven chapter reader navigation. The Button in sectionsList sets
         // readerSection; this destination presents ChapterReaderView without the
@@ -360,6 +360,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         .onDisappear {
             Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
         }
+    }
+
+    private var presentedContent: some View {
+        stateDrivenContent
         .sheet(item: $editingSection) { section in
             OutlineSectionEditView(
                 section: section,
@@ -471,6 +475,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 onProjectRefreshed: onProjectRefreshed
             )
         }
+    }
+
+    var body: some View {
+        presentedContent
     }
 
     @ViewBuilder
