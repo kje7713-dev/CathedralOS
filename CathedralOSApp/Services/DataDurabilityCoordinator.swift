@@ -1089,7 +1089,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func runSuggestion(_ initial: SuggestionRunMetadata, service: OutlineSuggestionService) async {
         var metadata = initial
         var reconnectMisses = 0
-        let maxReconnectMisses = 20
+        let maxReconnectMisses = 3
         while !Task.isCancelled {
             do {
                 let job: OutlineSuggestionJob
