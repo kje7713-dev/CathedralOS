@@ -55,7 +55,10 @@ struct OutlineSuggestionRequest: Codable {
     let outline_id: UUID?
     let project_lineage_id: UUID?
     let requestedFormat: String?
-    /// Optional selected planning model. Nil preserves the historical server default.
+    /// Explicit model selected for this planning run. Persisted in the
+    /// durable request JSON so reconnects and worker continuations reuse the
+    /// original selection rather than falling back to a server default.
+    /// Missing on legacy requests; decoding preserves that distinction.
     let modelID: String?
 
     init(
@@ -78,6 +81,15 @@ struct OutlineSuggestionRequest: Codable {
         self.project_lineage_id = project_lineage_id
         self.requestedFormat = requestedFormat
         self.modelID = modelID
+    }
+
+    func withModelID(_ modelID: String) -> OutlineSuggestionRequest {
+        OutlineSuggestionRequest(
+            recipe: recipe, arcTemplate: arcTemplate, hint: hint,
+            existingSections: existingSections, idempotencyKey: idempotencyKey,
+            outline_id: outline_id, project_lineage_id: project_lineage_id,
+            requestedFormat: requestedFormat, modelID: modelID
+        )
     }
 }
 
