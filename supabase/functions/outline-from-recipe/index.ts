@@ -3439,7 +3439,15 @@ export function isRetryableStoryMaterialFailure(run: {
       run.error === "story material enrichment contains a duplicate or missing item id");
 }
 
+// Supabase Edge Functions can be terminated by the wall-clock limit before a
+// long provider request returns. Keep the provider deadline below that limit
+// so the worker can persist a terminal provider_timeout instead of being
+// killed while its run remains `running`.
+const OUTLINE_PROVIDER_TIMEOUT_MS = 90_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
+export const MAX_SUGGESTION_ATTEMPTS = 5;
+export const MAX_SUGGESTION_LIFETIME_MS = 30 * 60 * 1000;
+export const MAX_SUGGESTION_NO_PROGRESS_MS = 10 * 60 * 1000;
 
 export class SuggestionWorkerYield extends Error {
   constructor() {
@@ -3463,6 +3471,49 @@ export class SuggestionWorkerSlice {
     assertWorkerSliceCanDispatch(this.dispatches);
     this.dispatches += 1;
   }
+}
+
+export function assertDurableUpdateSucceeded(
+  result: { data?: unknown; error?: { message?: string } | null } | null | undefined,
+  context = "durable run checkpoint",
+): void {
+  if (result?.error) {
+    throw new Error(`${context} persistence failed: ${result.error.message ?? String(result.error)}`);
+  }
+  if (!result?.data) {
+    throw new Error(`${context} persistence lost ownership or updated zero rows`);
+  }
+}
+
+/** Advance the no-progress clock only after a durable planning checkpoint. */
+export function markMeaningfulProgress(
+  diagnostics: Record<string, unknown>,
+  checkpoint: string,
+  at = new Date().toISOString(),
+): Record<string, unknown> {
+  const worker = diagnostics.worker && typeof diagnostics.worker === "object"
+    ? diagnostics.worker as Record<string, unknown>
+    : {};
+  // A worker restart or replay may reach an earlier durable checkpoint after
+  // other stages have run. Track the completed identity set, not only the
+  // immediately preceding marker, so cross-stage rehydration cannot refresh
+  // the no-progress clock. Older rows simply start recording new identities
+  // when a genuinely new checkpoint is persisted.
+  const completedIdentities = Array.isArray(worker.completedMeaningfulCheckpointIdentities)
+    ? worker.completedMeaningfulCheckpointIdentities.filter((value): value is string => typeof value === "string")
+    : [];
+  if (completedIdentities.includes(checkpoint) || worker.lastMeaningfulProgressCheckpoint === checkpoint) {
+    return { ...diagnostics, worker: { ...worker } };
+  }
+  return {
+    ...diagnostics,
+    worker: {
+      ...worker,
+      completedMeaningfulCheckpointIdentities: [...completedIdentities, checkpoint],
+      lastMeaningfulProgressAt: at,
+      lastMeaningfulProgressCheckpoint: checkpoint,
+    },
+  };
 }
 
 function leaseExpiry(): string {
@@ -3489,6 +3540,103 @@ const admin = () =>
     { auth: { persistSession: false } },
   );
 
+async function reconcileExhaustedSuggestionBilling(
+  db: any,
+  run: { id: string; credit_cost_charged?: number | null },
+): Promise<number | null> {
+  // Recompute the durable total from provider-attempt rows before explaining
+  // an exhausted run. If reconciliation is unavailable, say so explicitly.
+  try {
+    if (typeof db.rpc === "function") {
+      const { error } = await db.rpc("reconcile_outline_provider_attempts", { p_run_id: run.id });
+      if (error) {
+        console.error("[outline-from-recipe] exhausted-run billing reconciliation failed", error);
+        return null;
+      }
+      if (typeof db.from === "function") {
+        const result = await db.from("outline_suggestion_runs")
+          .select("credit_cost_charged")
+          .eq("id", run.id)
+          .maybeSingle();
+        if (!result.error && result.data && typeof result.data.credit_cost_charged === "number") {
+          return result.data.credit_cost_charged;
+        }
+      }
+      // The RPC succeeded but the authoritative read did not. Do not fall back
+      // to a stale run object and accidentally claim zero customer charge.
+      return null;
+    }
+    return typeof run.credit_cost_charged === "number" ? run.credit_cost_charged : null;
+  } catch (error) {
+    console.error("[outline-from-recipe] exhausted-run billing reconciliation threw", error);
+    return null;
+  }
+}
+
+function exhaustedSuggestionBillingMessage(settledCredits: number | null): string {
+  if (settledCredits === null) return "The outline planner stopped before completion. Billing reconciliation is unresolved; any settled stages were preserved. Review the run before retrying.";
+  if (settledCredits > 0) return `The outline planner stopped before completion. ${settledCredits.toFixed(2)} credits were already settled for completed stages; no duplicate charge will be created. Retry after reviewing the run.`;
+  return "The outline planner stopped before completion. No settled customer charge is recorded for this run; retry the request.";
+}
+
+export const SUGGESTION_RUN_RECOVERY_COLUMNS =
+  "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
+
+/** Read the persisted row after reclaim/reconciliation has completed. */
+export async function loadAuthoritativeSuggestionRun(db: any, runID: string): Promise<any | null> {
+  try {
+    const result = await db.from("outline_suggestion_runs")
+      .select(SUGGESTION_RUN_RECOVERY_COLUMNS)
+      .eq("id", runID)
+      .maybeSingle();
+    if (result.error || !result.data) {
+      if (result.error) console.error("[outline-from-recipe] authoritative recovery read failed", result.error);
+      return null;
+    }
+    return result.data;
+  } catch (error) {
+    console.error("[outline-from-recipe] authoritative recovery read threw", error);
+    return null;
+  }
+}
+
+export function suggestionRunResponse(run: any): Record<string, unknown> {
+  const billingUnresolved = run.status === "failed" &&
+    typeof run.error === "string" &&
+    run.error.includes("Billing reconciliation is unresolved");
+  return {
+    run_id: run.id,
+    status: run.status,
+    suggestions: run.suggestions,
+    warnings: run.warnings,
+    errorCode: run.error_code,
+    error: run.error,
+    diagnostics: run.diagnostics,
+    storyMaterialEnrichment: run.story_material,
+    created_at: run.created_at,
+    updated_at: run.updated_at,
+    completed_at: run.completed_at,
+    // Unresolved reconciliation is never presented as a confirmed amount.
+    creditCostCharged: billingUnresolved ? null : run.credit_cost_charged,
+    remainingCredits: billingUnresolved ? null : run.remaining_credits,
+    sourceRecipe: run.request_json?.recipe ?? null,
+  };
+}
+
+export function suggestionLifecycleFailure(run: {
+  created_at?: string | null;
+  updated_at?: string | null;
+  diagnostics?: Record<string, unknown> | null;
+}, now = Date.now()): "worker_lifetime_exceeded" | "worker_no_progress" | null {
+  if (run.created_at && now - new Date(run.created_at).getTime() > MAX_SUGGESTION_LIFETIME_MS) return "worker_lifetime_exceeded";
+  const worker = run.diagnostics?.worker;
+  const progressAt = worker && typeof worker === "object" && typeof (worker as Record<string, unknown>).lastMeaningfulProgressAt === "string"
+    ? String((worker as Record<string, unknown>).lastMeaningfulProgressAt)
+    : run.updated_at;
+  if (progressAt && now - new Date(progressAt).getTime() > MAX_SUGGESTION_NO_PROGRESS_MS) return "worker_no_progress";
+  return null;
+}
+
 async function markInterruptedProviderAttempts(db: any, runId: string, observedLeaseExpiry: string): Promise<void> {
   const { error } = await db.from("generation_provider_attempts").update({
     status: "provider_failed",
@@ -3506,25 +3654,87 @@ export async function reclaimExpiredSuggestionRun(db: any, run: {
   status?: string;
   lease_expires_at?: string | null;
   attempt_count?: number | null;
+  error_code?: string | null;
+  error?: string | null;
+  credit_cost_charged?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  diagnostics?: Record<string, unknown> | null;
 }): Promise<boolean> {
   const observedLeaseExpiry = run.lease_expires_at;
-  if (run.status !== "running" || !observedLeaseExpiry || new Date(observedLeaseExpiry).getTime() >= Date.now()) return false;
-  const reclaimed = await db.from("outline_suggestion_runs").update({
+  const now = Date.now();
+  const lifecycleFailure = suggestionLifecycleFailure(run, now);
+  const leaseExpired = !!observedLeaseExpiry && new Date(observedLeaseExpiry).getTime() < now;
+
+  // A valid running lease is authoritative. Wall-clock/no-progress limits do
+  // not revoke it while the worker is still renewing it. Pending runs have no
+  // owner, so lifecycle limits apply to them as well as running runs.
+  if (run.status !== "running" && run.status !== "pending") return false;
+  if (run.status === "running" && !leaseExpired) return false;
+  if (!leaseExpired && !lifecycleFailure) return false;
+
+  const nextAttemptCount = (run.attempt_count ?? 0) + 1;
+  const exhausted = nextAttemptCount >= MAX_SUGGESTION_ATTEMPTS;
+  const terminalCode = lifecycleFailure ?? (exhausted ? "worker_attempts_exhausted" : null);
+
+  if (terminalCode) {
+    // Fence the run before reconciling billing. The temporary owner prevents
+    // a concurrent GET/POST recovery or the old worker from claiming or
+    // persisting output while the authoritative attempt total is resolved.
+    const fenceToken = `reclaimer:${crypto.randomUUID()}`;
+    let fenceQuery = db.from("outline_suggestion_runs").update({
+      status: "running",
+      lease_owner: fenceToken,
+      lease_expires_at: new Date(now + SUGGESTION_LEASE_MS).toISOString(),
+    }).eq("id", run.id).eq("status", run.status);
+    if (run.status === "running") {
+      fenceQuery = observedLeaseExpiry
+        ? fenceQuery.eq("lease_expires_at", observedLeaseExpiry)
+        : fenceQuery.is("lease_expires_at", null);
+    } else {
+      fenceQuery = fenceQuery.is("lease_owner", null);
+    }
+    const fenced = await fenceQuery.select("id").maybeSingle();
+    if (fenced.error || !fenced.data) return false;
+
+    const settledCredits = await reconcileExhaustedSuggestionBilling(db, run);
+    const terminalMessage = exhaustedSuggestionBillingMessage(settledCredits);
+    const terminalized = await db.from("outline_suggestion_runs").update({
+      status: "failed",
+      error_code: terminalCode,
+      error: terminalMessage,
+      completed_at: new Date().toISOString(),
+      lease_owner: null,
+      lease_expires_at: null,
+      attempt_count: nextAttemptCount,
+    }).eq("id", run.id).eq("status", "running").eq("lease_owner", fenceToken)
+      .select("id").maybeSingle();
+    if (terminalized.error || !terminalized.data) return false;
+    if (observedLeaseExpiry) await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
+    run.status = "failed";
+    run.attempt_count = nextAttemptCount;
+    run.error_code = terminalCode;
+    run.error = terminalMessage;
+    return true;
+  }
+
+  // Non-terminal reclaim: atomically release only the observed expired lease.
+  // A concurrent recovery can win this compare-and-set, but cannot also win
+  // the pending claim inside runSuggestionJob.
+  let reclaimQuery = db.from("outline_suggestion_runs").update({
     status: "pending",
-    error_code: null,
-    error: null,
-    completed_at: null,
     lease_owner: null,
     lease_expires_at: null,
-    attempt_count: (run.attempt_count ?? 0) + 1,
-  })
-    .eq("id", run.id)
-    .eq("status", "running")
-    .eq("lease_expires_at", observedLeaseExpiry)
-    .select("id")
-    .maybeSingle();
+    attempt_count: nextAttemptCount,
+  }).eq("id", run.id).eq("status", "running");
+  reclaimQuery = observedLeaseExpiry
+    ? reclaimQuery.eq("lease_expires_at", observedLeaseExpiry)
+    : reclaimQuery.is("lease_expires_at", null);
+  const reclaimed = await reclaimQuery.select("id").maybeSingle();
   if (reclaimed.error || !reclaimed.data) return false;
-  await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
+  if (observedLeaseExpiry) await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
+  run.status = "pending";
+  run.attempt_count = nextAttemptCount;
   return true;
 }
 
@@ -3680,6 +3890,11 @@ export async function runSuggestionJob(
       ...priorWorker,
       sliceCount: workerSliceCount,
       lastSliceStartedAt: new Date().toISOString(),
+      // A dispatch/launch is not meaningful progress. Preserve the last
+      // durable checkpoint timestamp so repeated pending launches age out.
+      lastMeaningfulProgressAt: typeof priorWorker.lastMeaningfulProgressAt === "string"
+        ? priorWorker.lastMeaningfulProgressAt
+        : (claimedRun.updated_at ?? new Date().toISOString()),
       lastYieldReason: null,
       nextAction: "resume persisted planning checkpoint",
     },
@@ -3688,7 +3903,14 @@ export async function runSuggestionJob(
     await db.from("outline_suggestion_runs").update({ lease_expires_at: leaseExpiry() }).eq("id", runId).eq("lease_owner", workerToken);
   };
   const updateRun = async (patch: Record<string, unknown>) => {
-    return await db.from("outline_suggestion_runs").update(patch).eq("id", runId).eq("lease_owner", workerToken);
+    const result = await db.from("outline_suggestion_runs")
+      .update(patch)
+      .eq("id", runId)
+      .eq("lease_owner", workerToken)
+      .select("id")
+      .maybeSingle();
+    assertDurableUpdateSucceeded(result);
+    return result;
   };
   let plannedMinimumSections: number | null = null;
   let providerModelForAlert: string | null = null;
@@ -3710,7 +3932,11 @@ export async function runSuggestionJob(
     }
     providerModelForAlert = model.provider_model ?? selectedModelID;
     const creditStore = dependencies.creditStore ?? new SupabaseCreditStore(db);
-    const provider = dependencies.provider ?? new OpenAIProvider(openaiKey, model.provider_model);
+    const provider = dependencies.provider ?? new OpenAIProvider(
+      openaiKey,
+      model.provider_model,
+      OUTLINE_PROVIDER_TIMEOUT_MS,
+    );
     const billableLLM = dependencies.billableLLM ?? runBillableLLM;
     // Reclaimed workers resume from persisted billing/material state. The
     // usage-event idempotency key is the final no-double-charge guard, while
@@ -3857,10 +4083,14 @@ export async function runSuggestionJob(
           };
           const expansionCheckpoint = buildExpansionCheckpoint(current, body.existingSections ?? [], allDiagnostics);
           planningState = { ...planningState, phase: "expansion", expansionCheckpoint };
+          diagnostics = markMeaningfulProgress(
+            { ...diagnostics, expansionCheckpoint },
+            `expansion_round_checkpoint:${stableJSONStringify(expansionCheckpoint)}`,
+          );
           await updateRun({
             suggestions: current,
             planning_state: planningState,
-            diagnostics: { ...diagnostics, expansionCheckpoint },
+            diagnostics,
           });
         },
         {
@@ -3884,6 +4114,10 @@ export async function runSuggestionJob(
               expansionRounds: allDiagnostics,
               novelScale: expansionCheckpoint.scale,
             };
+            diagnostics = markMeaningfulProgress(
+              diagnostics,
+              `expansion_beat_checkpoint:${stableJSONStringify(expansionCheckpoint)}`,
+            );
             await updateRun({ suggestions: current, planning_state: planningState, diagnostics });
           },
         },
@@ -3945,6 +4179,10 @@ export async function runSuggestionJob(
       };
       const expansionCheckpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], []);
       diagnostics = { ...diagnostics, stage: outlineNeedsExpansion ? "expansion_pending" : "outline_complete", expansionCheckpoint };
+      diagnostics = markMeaningfulProgress(
+        diagnostics,
+        `validated_suggestions_persisted:${stableJSONStringify(completedSuggestions)}`,
+      );
       await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
       if (outlineNeedsExpansion) {
         const expanded = await expandNovel(completedSuggestions, recipeObligations, 1, 0, []);
@@ -4013,6 +4251,12 @@ export async function runSuggestionJob(
       // any earlier persist inside resumeOrRepairStoryMaterial — the final
       // updateRun below overwrites the same fields with completed-stage
       // diagnostics on success.
+      if (repairAudit) {
+        diagnostics = markMeaningfulProgress(
+          diagnostics,
+          `story_material_repaired:${stableJSONStringify(resumedMaterial)}`,
+        );
+      }
       await updateRun({
         story_material: resumedMaterial,
         diagnostics,
@@ -4146,12 +4390,18 @@ export async function runSuggestionJob(
         nextAction: "outline-plan",
         enrichmentRepairReason: undefined,
       };
-      await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" } });
+      diagnostics = markMeaningfulProgress(
+        { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" },
+        `story_material_complete:${stableJSONStringify(storyMaterial)}`,
+      );
+      await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics });
     }
     if (!storyMaterial) throw new Error("story material enrichment was not produced");
+    // Loading already persisted enrichment is rehydration, not progress.
+    diagnostics = { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" };
     await updateRun({
       story_material: storyMaterial,
-      diagnostics: { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" },
+      diagnostics,
     });
     await persistPlanningProvenance(db, body, runId, storyMaterial, provenance);
     body = { ...body, storyMaterialEnrichment: storyMaterial };
@@ -4188,7 +4438,13 @@ export async function runSuggestionJob(
       planningContext = persistedPlanningContext;
       planningContextHash = claimedRun.planning_context_hash;
     }
-    await updateRun({ planning_context: planningContext, planning_context_hash: planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1 });
+    if (!persistedPlanningContext) {
+      diagnostics = markMeaningfulProgress(
+        diagnostics,
+        `planning_context_persisted:${planningContextHash}`,
+      );
+    }
+    await updateRun({ planning_context: planningContext, planning_context_hash: planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1, diagnostics });
     // PR 5: allocation counts are residual NEW sections. Persist the validated
     // plan before the next provider boundary so continuation does not rerun a
     // settled allocation call or double-subtract existing coverage.
@@ -4228,7 +4484,11 @@ export async function runSuggestionJob(
         allocationEntries: Array.from(allocation.entries()),
         allocationRetryReason: undefined,
       };
-      await updateRun({ planning_state: planningState });
+      diagnostics = markMeaningfulProgress(
+        { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
+        `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
+      );
+      await updateRun({ planning_state: planningState, diagnostics });
     }
     const allocationCountsByBeat = Object.fromEntries(
       Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections]),
@@ -4312,7 +4572,11 @@ export async function runSuggestionJob(
     let completionWarnings = result.warnings;
     if (coverage.missingRequired.length > 0) {
       planningState = { ...planningState, phase: "obligation_repair_pending", nextAction: "obligation-repair" };
-      await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics: { ...diagnostics, stage: "obligation_repair_pending" } });
+      diagnostics = markMeaningfulProgress(
+        { ...diagnostics, stage: "obligation_repair_pending" },
+        "validated_suggestions_persisted",
+      );
+      await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
       throw new SuggestionWorkerYield();
     }
     await postValidatedOutline(completedSuggestions, completionWarnings);
@@ -4370,19 +4634,31 @@ export async function runSuggestionJob(
           ? "provider_error"
           : "server_error"));
     const message = err instanceof Error ? err.message : String(err);
-    const publicError = providerBillingUnavailable
+    const publicErrorBase = providerBillingUnavailable
       ? "Temporarily unavailable — try again later."
       : configurationFailure
-      ? "This selected model does not support the outline planner configuration. Choose another model; no credits were charged."
+      ? "This selected model does not support the outline planner configuration."
       : providerRateLimited
       ? "The AI provider is rate-limiting outline planning. Wait a moment before trying again."
       : providerOutage
-      ? "The AI provider is temporarily unavailable. No credits were charged; try again later."
+      ? "The AI provider is temporarily unavailable; try again later."
       : providerErrorCode
-      ? "The AI outline planner could not complete this request. No credits were charged; review the run status before retrying."
+      ? "The AI outline planner could not complete this request; review the run status before retrying."
       : message.slice(0, 2000);
+    const settledCredits = await reconcileExhaustedSuggestionBilling(db, {
+      id: runId,
+      credit_cost_charged: claimedRun.credit_cost_charged,
+    });
+    const billingStatus = settledCredits === null
+      ? "Billing reconciliation is unresolved; any settled stages were preserved."
+      : settledCredits > 0
+      ? `${settledCredits.toFixed(2)} credits were already settled for completed stages; no duplicate charge will be created.`
+      : "No settled customer charge is recorded for this run.";
+    const publicError = `${publicErrorBase} ${billingStatus}`;
     const failedDiagnostics = {
       ...diagnostics,
+      billingReconciliation: settledCredits === null ? "unresolved" : settledCredits > 0 ? "settled" : "no_settled_charge",
+      settledCredits,
       stage: "failed",
       runID: runId,
       selectedModel: providerModelForAlert,
@@ -4511,9 +4787,19 @@ Deno.serve(async (req: Request) => {
     // GET polling is a recovery backstop for suspended workers. The durable
     // pending claim inside runSuggestionJob is the final race guard.
     let recoveredRun = run;
-    if (run.status === "running") {
+    if (run.status === "running" || run.status === "pending") {
       const reclaimed = await reclaimExpiredSuggestionRun(admin(), run);
-      if (reclaimed) recoveredRun = { ...run, status: "pending", lease_expires_at: null };
+      if (reclaimed) {
+        const authoritative = await loadAuthoritativeSuggestionRun(admin(), run.id);
+        if (!authoritative) {
+          return errorResponse(
+            "recovery_state_unavailable",
+            "Could not read the authoritative recovered suggestion state; retry polling.",
+            503,
+          );
+        }
+        recoveredRun = authoritative;
+      }
     }
     if (recoveredRun.status === "pending") {
       const recoveryKey = Deno.env.get("OPENAI_API_KEY");
@@ -4530,22 +4816,7 @@ Deno.serve(async (req: Request) => {
       run = recoveredRun;
     }
     return corsResponse(
-      JSON.stringify({
-        run_id: run.id,
-        status: run.status,
-        suggestions: run.suggestions,
-        warnings: run.warnings,
-        errorCode: run.error_code,
-        error: run.error,
-        diagnostics: run.diagnostics,
-        storyMaterialEnrichment: run.story_material,
-        created_at: run.created_at,
-        updated_at: run.updated_at,
-        completed_at: run.completed_at,
-        creditCostCharged: run.credit_cost_charged,
-        remainingCredits: run.remaining_credits,
-        sourceRecipe: run.request_json?.recipe ?? null,
-      }),
+      JSON.stringify(suggestionRunResponse(recoveredRun)),
       { status: 200 },
     );
   }
@@ -4645,12 +4916,14 @@ Deno.serve(async (req: Request) => {
   // the idempotency-safe path for app reconnects / worker retries /
   // iOS suggestion-status polling that re-submits the same request after
   // a transient network failure.
-  const { data: existing, error: existingError } = await db
+  const existingResult = await db
     .from("outline_suggestion_runs")
     .select("id, status, request_fingerprint, lease_expires_at, error_code, suggestions, warnings, error, diagnostics, story_material, credit_cost_charged, remaining_credits, request_json, created_at, updated_at, completed_at, attempt_count")
     .eq("user_id", user.id)
     .in("idempotency_key", lookupKeys)
     .maybeSingle();
+  let existing = existingResult.data;
+  const existingError = existingResult.error;
   if (existingError) {
     console.error("[outline-from-recipe] existing-run resolve failed", existingError);
     return errorResponse("db_error", existingError.message ?? "Could not resolve existing run", 500);
@@ -4702,9 +4975,25 @@ Deno.serve(async (req: Request) => {
         { status: 200 },
       );
     }
-    if (existing.status === "running") {
+    if (!existing) {
+      return errorResponse("db_error", "Could not resolve existing suggestion run", 500);
+    }
+    if (existing.status === "running" || existing.status === "pending") {
       const reclaimed = await reclaimExpiredSuggestionRun(db, existing);
-      if (reclaimed) existing.status = "pending";
+      if (reclaimed) {
+        const authoritative = await loadAuthoritativeSuggestionRun(db, existing.id);
+        if (!authoritative) {
+          return errorResponse(
+            "recovery_state_unavailable",
+            "Could not read the authoritative recovered suggestion state; retry the request.",
+            503,
+          );
+        }
+        existing = authoritative;
+      }
+    }
+    if (!existing) {
+      return errorResponse("recovery_state_unavailable", "Could not read the authoritative recovered suggestion state; retry the request.", 503);
     }
     if (existing.status === "pending") {
       // Reconnects and continuation POSTs do not consume another rate-limit
@@ -4717,22 +5006,7 @@ Deno.serve(async (req: Request) => {
     // so a stray reconnect does NOT consume a rate-limit slot or produce
     // a duplicate request-log entry.
     return corsResponse(
-      JSON.stringify({
-        run_id: existing.id,
-        status: existing.status,
-        suggestions: existing.suggestions,
-        warnings: existing.warnings,
-        errorCode: existing.error_code,
-        error: existing.error,
-        diagnostics: existing.diagnostics,
-        storyMaterialEnrichment: existing.story_material,
-        created_at: existing.created_at,
-        updated_at: existing.updated_at,
-        completed_at: existing.completed_at,
-        creditCostCharged: existing.credit_cost_charged,
-        remainingCredits: existing.remaining_credits,
-        sourceRecipe: existing.request_json?.recipe ?? null,
-      }),
+      JSON.stringify(suggestionRunResponse(existing)),
       { status: 200 },
     );
   }
@@ -4795,7 +5069,17 @@ Deno.serve(async (req: Request) => {
     const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
     const resumableExpansionFailure = run.status === "failed" && run.error_code === "failed_expansion" && expansionResumeState(run) !== null;
     if (stale) {
-      if (await reclaimExpiredSuggestionRun(db, run)) run.status = "pending";
+      if (await reclaimExpiredSuggestionRun(db, run)) {
+        const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
+        if (!authoritative) {
+          return errorResponse(
+            "recovery_state_unavailable",
+            "Could not read the authoritative recovered suggestion state; retry the request.",
+            503,
+          );
+        }
+        run = authoritative;
+      }
     } else if (resumableExpansionFailure) {
       const reclaimed = await db.from("outline_suggestion_runs").update({
         status: "pending",

@@ -1,6 +1,21 @@
 import XCTest
 @testable import CathedralOSApp
 
+private final class SuggestionRunTestSessionProvider: SupabaseSessionProvider {
+    func ensureSignedInUser() async throws -> AuthUser { throw SupabaseSessionProviderError.notSignedIn }
+    func validAccessToken(forceRefresh: Bool) async throws -> String {
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+        return "test-token"
+    }
+    func refreshSessionIfNeeded() async throws -> String { "test-token" }
+    func retryOnceAfterExpiredJWT(request: URLRequest, session: URLSession) async throws -> (Data, URLResponse) {
+        throw CancellationError()
+    }
+    func diagnosticsSnapshot() -> AuthSessionDiagnosticsSnapshot {
+        AuthSessionDiagnosticsSnapshot(signedIn: true, accessTokenPresent: true, lastRefreshSucceeded: true, lastAuthError: nil)
+    }
+}
+
 // MARK: - SuggestionRunMetadataLineageTests
 //
 // PR 6 — move durable suggestion-run client identity from local project UUID
@@ -114,6 +129,107 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
 
 
 
+
+    func testConnectionUnavailablePreservesServerRunIdentityAndPersistence() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let projectID = UUID()
+        let lineageID = UUID()
+        let request = makeRequest(modelID: "gpt-6.1-sol", idempotencyKey: "server-owned-run")
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID,
+            lineageID: lineageID,
+            request: request,
+            idempotencyKey: request.idempotencyKey,
+            runID: "server-run-123",
+            status: "reconnecting",
+            createdAt: Date(timeIntervalSince1970: 100),
+            updatedAt: Date(timeIntervalSince1970: 101)
+        )
+
+        coordinator.markSuggestionConnectionUnavailable(metadata)
+
+        let active = try XCTUnwrap(coordinator.activeSuggestionRun(for: projectID))
+        XCTAssertEqual(active.status, "connection_unavailable")
+        XCTAssertTrue(active.isActive)
+        XCTAssertEqual(active.runID, "server-run-123")
+        XCTAssertEqual(active.lineageID, lineageID)
+        XCTAssertEqual(active.idempotencyKey, "server-owned-run")
+        XCTAssertEqual(active.request.modelID, "gpt-6.1-sol")
+        let persisted = coordinator.loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID,
+            expectedIdempotencyKey: "server-owned-run"
+        )
+        XCTAssertEqual(persisted?.status, "connection_unavailable")
+        XCTAssertEqual(persisted?.runID, "server-run-123")
+        XCTAssertNotNil(defaults.data(forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)"))
+    }
+
+    func testGeneratingStatusIsActiveAfterRelaunch() throws {
+        let suiteName = "SuggestionRunMetadataLineageTests.generating-relaunch.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let projectID = UUID()
+        let lineageID = UUID()
+        let request = makeRequest(modelID: "gpt-6.1-sol", idempotencyKey: "generating-run")
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID, lineageID: lineageID, request: request,
+            idempotencyKey: request.idempotencyKey, runID: "server-generating-run",
+            status: "generating", createdAt: Date().addingTimeInterval(-1),
+            updatedAt: Date()
+        )
+        defaults.set(try JSONEncoder().encode(metadata), forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)")
+
+        let relaunched = DataDurabilityCoordinator(defaults: defaults)
+        let suspendedService = OutlineSuggestionService(
+            sessionProvider: SuggestionRunTestSessionProvider()
+        )
+        relaunched.resumeSuggestionRunIfNeeded(
+            projectID: projectID, lineageID: lineageID,
+            currentIdempotencyKey: request.idempotencyKey,
+            service: suspendedService
+        )
+        let restored = try XCTUnwrap(relaunched.activeSuggestionRun(for: projectID))
+        XCTAssertTrue(restored.isActive)
+        XCTAssertEqual(restored.status, "generating")
+        XCTAssertEqual(restored.runID, "server-generating-run")
+        XCTAssertEqual(restored.request.modelID, "gpt-6.1-sol")
+        XCTAssertEqual(restored.idempotencyKey, request.idempotencyKey)
+        relaunched.cancelSuggestionRun(for: projectID)
+    }
+
+    func testGeneratingStatusBlocksConflictingSuggestionIdentity() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let projectID = UUID()
+        let lineageID = UUID()
+        let original = makeRequest(modelID: "gpt-6.1-sol", idempotencyKey: "original-generating-run")
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID, lineageID: lineageID, request: original,
+            idempotencyKey: original.idempotencyKey, runID: "server-generating-run",
+            status: "generating", createdAt: Date().addingTimeInterval(-1),
+            updatedAt: Date()
+        )
+        defaults.set(try JSONEncoder().encode(metadata), forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)")
+        let suspendedService = OutlineSuggestionService(
+            sessionProvider: SuggestionRunTestSessionProvider()
+        )
+        coordinator.resumeSuggestionRunIfNeeded(
+            projectID: projectID, lineageID: lineageID,
+            currentIdempotencyKey: original.idempotencyKey,
+            service: suspendedService
+        )
+        let replacement = makeRequest(modelID: "gpt-6-luna", idempotencyKey: "replacement-request")
+        coordinator.beginSuggestionRun(projectID: projectID, lineageID: lineageID, request: replacement)
+
+        XCTAssertEqual(coordinator.activeSuggestionRun(for: projectID)?.runID, "server-generating-run")
+        XCTAssertEqual(coordinator.activeSuggestionRun(for: projectID)?.idempotencyKey, original.idempotencyKey)
+        let rejection = coordinator.consumeSuggestionFailure(for: projectID)
+        XCTAssertTrue(rejection?.contains("still owned by the server") == true)
+        XCTAssertEqual(coordinator.activeSuggestionRun(for: projectID)?.runID, "server-generating-run")
+        coordinator.cancelSuggestionRun(for: projectID)
+    }
 
     // MARK: - Original model survives preference changes
 
@@ -359,6 +475,43 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             "Lineage entry whose key matches the current request must be returned")
         XCTAssertEqual(loaded?.lineageID, lineageID)
         XCTAssertEqual(loaded?.idempotencyKey, currentKey)
+    }
+
+    func testResumeMismatchPreservesActiveServerRunForExplicitReconnect() throws {
+        let (coordinator, defaults, suiteName) = try makeCoordinatorWithIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let projectID = UUID()
+        let lineageID = UUID()
+        let original = makeRequest(modelID: "gpt-6.1-sol", idempotencyKey: "server-original")
+        let metadata = SuggestionRunMetadata(
+            projectID: projectID,
+            lineageID: lineageID,
+            request: original,
+            idempotencyKey: original.idempotencyKey,
+            runID: "server-run-original",
+            status: "running",
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 11)
+        )
+        defaults.set(
+            try JSONEncoder().encode(metadata),
+            forKey: "cathedralos.outlineSuggestion.lineage.\(lineageID.uuidString)"
+        )
+
+        coordinator.resumeSuggestionRunIfNeeded(
+            projectID: projectID,
+            lineageID: lineageID,
+            currentIdempotencyKey: "new-recipe-key"
+        )
+
+        let preserved = try XCTUnwrap(coordinator.activeSuggestionRun(for: projectID))
+        XCTAssertEqual(preserved.status, "connection_unavailable")
+        XCTAssertEqual(preserved.runID, "server-run-original")
+        XCTAssertEqual(preserved.request.modelID, "gpt-6.1-sol")
+        XCTAssertEqual(preserved.idempotencyKey, "server-original")
+        let persisted = coordinator.loadSuggestionRunMetadata(lineageID: lineageID, projectID: projectID)
+        XCTAssertEqual(persisted?.runID, "server-run-original")
+        XCTAssertEqual(persisted?.idempotencyKey, "server-original")
     }
 
     func testLoadDiscardsLineageEntryWhenExpectedIdempotencyKeyDiffers() throws {

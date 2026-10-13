@@ -563,14 +563,13 @@ export class OpenAIProvider implements LLMProvider {
         "unknown",
         true,
       );
-    } finally {
-      clearTimeout(timer);
     }
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      const details = extractOpenAIErrorDetails(resp.status, text);
-      const code = classifyOpenAIStatus(resp.status, details.code);
+    try {
+      if (!resp.ok) {
+        const text = await resp.text();
+        const details = extractOpenAIErrorDetails(resp.status, text);
+        const code = classifyOpenAIStatus(resp.status, details.code);
       const upstream = {
         code: details.code,
         message: details.message,
@@ -581,21 +580,21 @@ export class OpenAIProvider implements LLMProvider {
       // pattern-match on instanceof AND so retryable=false is guaranteed
       // without relying on the prior (incorrect) `code === "provider_overloaded"
       // || code === "provider_billing_unavailable"` flag computation.
-      if (code === "provider_billing_unavailable") {
-        throw new ProviderBillingUnavailableError(upstream);
+        if (code === "provider_billing_unavailable") {
+          throw new ProviderBillingUnavailableError(upstream);
+        }
+        console.error("[generate-story] OpenAI request failed", details);
+        throw new ProviderError(
+          formatOpenAIError(details),
+          code,
+          // Only provider_overloaded is retryable. provider_billing_unavailable
+          // is routed to the dedicated subclass above with retryable=false.
+          code === "provider_overloaded",
+          upstream,
+        );
       }
-      console.error("[generate-story] OpenAI request failed", details);
-      throw new ProviderError(
-        formatOpenAIError(details),
-        code,
-        // Only provider_overloaded is retryable. provider_billing_unavailable
-        // is routed to the dedicated subclass above with retryable=false.
-        code === "provider_overloaded",
-        upstream,
-      );
-    }
 
-    const json: Record<string, unknown> = await resp.json();
+      const json: Record<string, unknown> = await resp.json();
     const usage = json.usage as Record<string, unknown> | undefined;
     const inputTokenDetails = usage?.input_tokens_details as
       | Record<string, unknown>
@@ -615,7 +614,24 @@ export class OpenAIProvider implements LLMProvider {
       outputTokens: usage?.output_tokens as number | undefined,
       totalTokens: usage?.total_tokens as number | undefined,
       toolCostUsd: 0,
-    };
+      };
+    } catch (err) {
+      if (err instanceof ProviderError) throw err;
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new ProviderError(
+          `OpenAI response timed out after ${this.timeoutMs}ms (model=${resolvedModel})`,
+          "provider_timeout",
+          false,
+        );
+      }
+      throw new ProviderError(
+        `OpenAI response error: ${err instanceof Error ? err.message : String(err)}`,
+        "unknown",
+        true,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -690,14 +706,13 @@ export class OpenAIProvider implements LLMProvider {
         "unknown",
         true,
       );
-    } finally {
-      clearTimeout(timer);
     }
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      const details = extractOpenAIErrorDetails(resp.status, text);
-      const code = classifyOpenAIStatus(resp.status, details.code);
+    try {
+      if (!resp.ok) {
+        const text = await resp.text();
+        const details = extractOpenAIErrorDetails(resp.status, text);
+        const code = classifyOpenAIStatus(resp.status, details.code);
       const upstream = {
         code: details.code,
         message: details.message,
@@ -706,18 +721,18 @@ export class OpenAIProvider implements LLMProvider {
       // provider_billing_unavailable is NON-RETRYABLE. Dedicated subclass
       // above; generic ProviderError only carries retryable=true for
       // provider_overloaded.
-      if (code === "provider_billing_unavailable") {
-        throw new ProviderBillingUnavailableError(upstream);
+        if (code === "provider_billing_unavailable") {
+          throw new ProviderBillingUnavailableError(upstream);
+        }
+        throw new ProviderError(
+          formatOpenAIError(details),
+          code,
+          code === "provider_overloaded",
+          upstream,
+        );
       }
-      throw new ProviderError(
-        formatOpenAIError(details),
-        code,
-        code === "provider_overloaded",
-        upstream,
-      );
-    }
 
-    const json: Record<string, unknown> = await resp.json();
+      const json: Record<string, unknown> = await resp.json();
     const choices = json.choices;
     const choice = Array.isArray(choices)
       ? choices[0] as Record<string, unknown> | undefined
@@ -746,7 +761,24 @@ export class OpenAIProvider implements LLMProvider {
       totalTokens: (json.usage as Record<string, unknown> | undefined)
         ?.total_tokens as number | undefined,
       toolCostUsd: 0,
-    };
+      };
+    } catch (err) {
+      if (err instanceof ProviderError) throw err;
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new ProviderError(
+          `OpenAI chat/completions response timed out after ${this.timeoutMs}ms (model=${resolvedModel})`,
+          "provider_timeout",
+          false,
+        );
+      }
+      throw new ProviderError(
+        `OpenAI chat/completions response error: ${err instanceof Error ? err.message : String(err)}`,
+        "unknown",
+        true,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 

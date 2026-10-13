@@ -63,13 +63,17 @@ struct SuggestionRunMetadata: Codable {
     var updatedAt: Date
 
     var isActive: Bool {
-        status == "starting" || status == "pending" || status == "running" || status == "reconnecting"
+        status == "starting" || status == "pending" || status == "running" ||
+            status == "generating" || status == "reconnecting" ||
+            status == "connection_unavailable"
     }
 }
 
 struct CompletedSuggestionRun {
     let projectID: UUID
     let result: OutlineSuggestionResult
+    let idempotencyKey: String
+    let modelID: String?
 }
 
 struct SuggestionRunFailure: Equatable {
@@ -862,13 +866,13 @@ final class DataDurabilityCoordinator: ObservableObject {
     }
 
     func cancelSuggestionRun(for projectID: UUID, message: String? = nil) {
+        guard let metadata = activeSuggestionRuns[projectID] else { return }
         suggestionPollingTasks[projectID]?.cancel()
         suggestionPollingTasks[projectID] = nil
-        clearSuggestionRun(for: projectID)
-        if let message {
-            suggestionRunFailure = SuggestionRunFailure(projectID: projectID, message: message)
-            suggestionRunRevision &+= 1
-        }
+        markSuggestionConnectionUnavailable(
+            metadata,
+            message: message ?? "The local connection stopped. The original server run is preserved for reconciliation."
+        )
     }
 
     func shouldDiscardStaleSuggestionRun(
@@ -894,8 +898,12 @@ final class DataDurabilityCoordinator: ObservableObject {
                 attachSuggestionTask(existing, service: service)
                 return
             }
-            suggestionPollingTasks[projectID]?.cancel()
-            clearSuggestionRun(for: projectID)
+            suggestionRunFailure = SuggestionRunFailure(
+                projectID: projectID,
+                message: "An existing outline suggestion is still owned by the server. Reconnect and reconcile it before starting another generation."
+            )
+            suggestionRunRevision &+= 1
+            return
         }
         let metadata = SuggestionRunMetadata(
             projectID: projectID,
@@ -935,14 +943,11 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// lineage-owned UserDefaults slot, falling back to the legacy
     /// project-keyed slot for metadata written before PR 6.
     ///
-    /// `currentIdempotencyKey` enables exact-match resume. When the caller
-    /// has already built the current `OutlineSuggestionRequest`, any
-    /// persisted or active run whose stored key differs is discarded rather
-    /// than reattached. This blocks stale in-flight runs (the user edited the
-    /// recipe, arc beats, or existing sections between launch and resume)
-    /// from completing against the user's changed planning identity. Pass
-    /// nil to skip the check (legacy / external callers that have not yet
-    /// been migrated to lineage-aware resume).
+    /// `currentIdempotencyKey` enables exact-match resume. A mismatch never
+    /// deletes the stored run: the server may still own an in-flight paid
+    /// request. Instead, preserve the original identity and expose an
+    /// explicit reconnect path. Pass nil to skip the check (legacy / external
+    /// callers that have not yet been migrated to lineage-aware resume).
     func resumeSuggestionRunIfNeeded(
         projectID: UUID,
         lineageID: UUID,
@@ -952,9 +957,9 @@ final class DataDurabilityCoordinator: ObservableObject {
         guard suggestionPollingTasks[projectID] == nil else { return }
         if let active = activeSuggestionRuns[projectID] {
             if shouldDiscardStaleSuggestionRun(active) {
-                failSuggestionRun(
-                    projectID,
-                    message: "The previous outline suggestion run timed out. You can choose a model and try again."
+                markSuggestionConnectionUnavailable(
+                    active,
+                    message: "The outline suggestion server could not be reached. The original run is preserved; reconnect to reconcile it before retrying."
                 )
                 suggestionPollingTasks[projectID]?.cancel()
                 suggestionPollingTasks[projectID] = nil
@@ -966,7 +971,12 @@ final class DataDurabilityCoordinator: ObservableObject {
             // request and the active run no longer represents their intent.
             if let currentIdempotencyKey,
                active.idempotencyKey != currentIdempotencyKey {
-                clearSuggestionRun(for: projectID)
+                markSuggestionConnectionUnavailable(
+                    active,
+                    message: "The outline recipe changed while the original server run was active. Reconnect to reconcile the original run before starting another generation."
+                )
+                suggestionPollingTasks[projectID] = nil
+                return
             } else if active.isActive {
                 attachSuggestionTask(active, service: service)
                 return
@@ -981,15 +991,48 @@ final class DataDurabilityCoordinator: ObservableObject {
         ), metadata.isActive {
             if shouldDiscardStaleSuggestionRun(metadata) {
                 activeSuggestionRuns[projectID] = metadata
-                failSuggestionRun(
-                    projectID,
-                    message: "The previous outline suggestion run timed out. You can choose a model and try again."
+                markSuggestionConnectionUnavailable(
+                    metadata,
+                    message: "The outline suggestion server could not be reached. The original run is preserved; reconnect to reconcile it before retrying."
                 )
                 return
             }
             activeSuggestionRuns[projectID] = metadata
             attachSuggestionTask(metadata, service: service)
+        } else if let preserved = loadSuggestionRunMetadata(
+            lineageID: lineageID,
+            projectID: projectID
+        ), preserved.isActive {
+            // The current recipe may have changed since the server run was
+            // persisted. Keep the original server-owned identity available
+            // for explicit reconciliation rather than deleting it.
+            activeSuggestionRuns[projectID] = preserved
+            if let currentIdempotencyKey,
+               preserved.idempotencyKey != currentIdempotencyKey {
+                markSuggestionConnectionUnavailable(
+                    preserved,
+                    message: "The outline recipe changed while the original server run was active. Reconnect to reconcile the original run before starting another generation."
+                )
+            } else {
+                attachSuggestionTask(preserved, service: service)
+            }
         }
+    }
+
+    /// Reconnects to the durable server run without rebuilding a request.
+    /// This intentionally does not accept a current request or idempotency
+    /// key: the persisted run's identity is authoritative for reconciliation.
+    func reconnectSuggestionRun(
+        projectID: UUID,
+        lineageID: UUID,
+        service: OutlineSuggestionService = OutlineSuggestionService()
+    ) {
+        guard suggestionPollingTasks[projectID] == nil else { return }
+        let metadata = activeSuggestionRuns[projectID]
+            ?? loadSuggestionRunMetadata(lineageID: lineageID, projectID: projectID)
+        guard let metadata, metadata.isActive else { return }
+        activeSuggestionRuns[projectID] = metadata
+        attachSuggestionTask(metadata, service: service)
     }
 
     /// Legacy entry point. Reads from the legacy project-keyed slot only;
@@ -1046,7 +1089,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func runSuggestion(_ initial: SuggestionRunMetadata, service: OutlineSuggestionService) async {
         var metadata = initial
         var reconnectMisses = 0
-        let maxReconnectMisses = 3
+        let maxReconnectMisses = 20
         while !Task.isCancelled {
             do {
                 let job: OutlineSuggestionJob
@@ -1067,9 +1110,9 @@ final class DataDurabilityCoordinator: ObservableObject {
                         } else {
                             reconnectMisses += 1
                             if reconnectMisses >= maxReconnectMisses {
-                                failSuggestionRun(
-                                    metadata.projectID,
-                                    message: error.localizedDescription
+                                markSuggestionConnectionUnavailable(
+                                    metadata,
+                                    message: "The outline suggestion server could not be reached. The original run is preserved; reconnect to reconcile it before retrying."
                                 )
                                 suggestionPollingTasks[metadata.projectID] = nil
                                 return
@@ -1084,6 +1127,7 @@ final class DataDurabilityCoordinator: ObservableObject {
                     }
                 }
 
+                reconnectMisses = 0
                 metadata.status = job.status
                 metadata.updatedAt = Date()
                 if metadata.runID == nil { metadata.runID = job.runID }
@@ -1119,7 +1163,12 @@ final class DataDurabilityCoordinator: ObservableObject {
                     // metadata.
                     retainCompletedSuggestionMetadata(metadata)
                     activeSuggestionRuns[metadata.projectID] = nil
-                    completedSuggestionRun = CompletedSuggestionRun(projectID: metadata.projectID, result: result)
+                    completedSuggestionRun = CompletedSuggestionRun(
+                        projectID: metadata.projectID,
+                        result: result,
+                        idempotencyKey: metadata.idempotencyKey,
+                        modelID: metadata.request.modelID
+                    )
                     suggestionRunRevision &+= 1
                     suggestionPollingTasks[metadata.projectID] = nil
                     return
@@ -1144,14 +1193,33 @@ final class DataDurabilityCoordinator: ObservableObject {
                     return
                 }
                 // Authentication/network loss is not a server generation
-                // failure. Keep the durable identity so relaunch/sign-in can
-                // reconnect to the same run.
+                // failure. Keep the durable identity for a bounded recovery
+                // window; do not refresh the local lock forever when the
+                // server cannot be reached.
+                reconnectMisses += 1
+                if reconnectMisses >= maxReconnectMisses {
+                    markSuggestionConnectionUnavailable(
+                        metadata,
+                        message: "The outline suggestion server could not be reached. The original run is preserved; reconnect to reconcile it before retrying."
+                    )
+                    suggestionPollingTasks[metadata.projectID] = nil
+                    return
+                }
                 metadata.status = "reconnecting"
                 metadata.updatedAt = Date()
                 activeSuggestionRuns[metadata.projectID] = metadata
                 persistSuggestionRun(metadata)
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             } catch {
+                reconnectMisses += 1
+                if reconnectMisses >= maxReconnectMisses {
+                    markSuggestionConnectionUnavailable(
+                        metadata,
+                        message: "The outline suggestion server could not be reached. The original run is preserved; reconnect to reconcile it before retrying."
+                    )
+                    suggestionPollingTasks[metadata.projectID] = nil
+                    return
+                }
                 metadata.status = "reconnecting"
                 metadata.updatedAt = Date()
                 activeSuggestionRuns[metadata.projectID] = metadata
@@ -1232,6 +1300,22 @@ final class DataDurabilityCoordinator: ObservableObject {
         // so a subsequent resume reads the canonical slot.
         suggestionRunDefaults.set(data, forKey: Self.lineageRunKey(for: metadata.lineageID ?? metadata.projectID))
         suggestionRunDefaults.removeObject(forKey: Self.suggestionRunKey(for: metadata.projectID))
+    }
+
+    /// Records loss of client connectivity without claiming that the server
+    /// job failed. The run identity, selected model, idempotency key, and
+    /// lineage-owned persistence remain intact for relaunch reconciliation.
+    func markSuggestionConnectionUnavailable(
+        _ metadata: SuggestionRunMetadata,
+        message: String = "The outline suggestion server could not be reached. The original run is preserved; reconnect to reconcile it before retrying."
+    ) {
+        var preserved = metadata
+        preserved.status = "connection_unavailable"
+        preserved.updatedAt = Date()
+        activeSuggestionRuns[preserved.projectID] = preserved
+        persistSuggestionRun(preserved)
+        suggestionRunFailure = SuggestionRunFailure(projectID: preserved.projectID, message: message)
+        suggestionRunRevision &+= 1
     }
 
     private func clearSuggestionRun(for projectID: UUID) {

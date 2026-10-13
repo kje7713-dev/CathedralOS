@@ -683,7 +683,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private func consumeSuggestionCoordinatorEvent() {
-        if let result = durabilityCoordinator.consumeCompletedSuggestion(for: project.id) {
+        if let completed = durabilityCoordinator.completedSuggestionRun,
+           completed.projectID == project.id,
+           let currentKey = currentSuggestionIdempotencyKey(
+               modelID: completed.modelID,
+               usePreferredModel: false
+           ),
+           currentKey == completed.idempotencyKey,
+           let result = durabilityCoordinator.consumeCompletedSuggestion(for: project.id) {
             suggestionsLoading = false
             suggestions = result.suggestions
             suggestionSourceRecipe = result.sourceRecipe
@@ -696,6 +703,13 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 feedback += " \(result.warnings.count) suggestion warning\(result.warnings.count == 1 ? "" : "s") were reported."
             }
             suggestionsFeedback = feedback
+        } else if durabilityCoordinator.completedSuggestionRun?.projectID == project.id {
+            // A completed server run may belong to the recipe snapshot that
+            // was active when it was charged, not the user's edited recipe.
+            // Do not apply or present that stale result to the current outline.
+            _ = durabilityCoordinator.consumeCompletedSuggestion(for: project.id)
+            suggestionsLoading = false
+            suggestionsError = "The original run completed for an earlier recipe snapshot. Restore that recipe to review it; no result was applied to the current outline."
         }
         if let message = durabilityCoordinator.consumeSuggestionFailure(for: project.id) {
             suggestionsLoading = false
@@ -998,25 +1012,54 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     // A completed or failed banner is historical, not an active run.
                     .disabled((projectRunStatus?.blocksNewGeneration ?? false) || isGenerationStarting)
                 }
-                Button {
-                    if suggestionRunActive {
-                        suggestionsNotice = "Your outline suggestions are still running or reconnecting. The original job and selected model are preserved. No new generation was started."
-                    } else {
-                        prepareOutlinePlanning()
+                let connectionUnavailable = durabilityCoordinator.activeSuggestionRun(for: project.id)?.status == "connection_unavailable"
+                if connectionUnavailable {
+                    Button {
+                        suggestionsLoading = true
+                        suggestionsError = nil
+                        suggestionsNotice = nil
+                        durabilityCoordinator.reconnectSuggestionRun(
+                            projectID: project.id,
+                            lineageID: project.stableLineageID
+                        )
+                    } label: {
+                        Label("Reconnect to Existing Run", systemImage: "arrow.clockwise")
+                            .font(CathedralTheme.Typography.body(13, weight: .semibold))
                     }
-                } label: {
-                    Label(
-                        suggestionRunActive ? "Suggestions Running" : "Suggest Sections",
-                        systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
-                    )
-                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                } else {
+                    Button {
+                        if suggestionRunActive {
+                            suggestionsNotice = "Your outline suggestions are still running or reconnecting. The original job and selected model are preserved. No new generation was started."
+                        } else {
+                            prepareOutlinePlanning()
+                        }
+                    } label: {
+                        Label(
+                            suggestionRunActive ? "Suggestions Running" : "Suggest Sections",
+                            systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
+                        )
+                        .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                    }
+                    .disabled(!suggestionsReady)
                 }
-                .disabled(!suggestionsReady)
             }
-            if let run = durabilityCoordinator.activeSuggestionRun(for: project.id), run.status == "reconnecting" {
-                Text("Reconnecting to the server…")
-                    .font(CathedralTheme.Typography.caption(12))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            if let run = durabilityCoordinator.activeSuggestionRun(for: project.id) {
+                switch run.status {
+                case "reconnecting":
+                    Text("Reconnecting to the server…")
+                        .font(CathedralTheme.Typography.caption(12))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                case "connection_unavailable":
+                    Text("Connection unavailable. The server run is preserved; reconnect to reconcile it.")
+                        .font(CathedralTheme.Typography.caption(12))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                case "generating", "starting", "pending", "running":
+                    Text("Generating outline suggestions…")
+                        .font(CathedralTheme.Typography.caption(12))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                default:
+                    EmptyView()
+                }
             }
             Text("Your outline defines the structure of your novel. Run your sections to turn the plan into written chapters and scenes.")
                 .font(CathedralTheme.Typography.body(13))
