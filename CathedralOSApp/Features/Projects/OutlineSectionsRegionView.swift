@@ -292,13 +292,17 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         }
     }
 
-    var body: some View {
+    private var styledRootContent: some View {
         sectionsRootContent
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(CathedralTheme.Spacing.base)
-        .background(CathedralTheme.Colors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, CathedralTheme.Spacing.base)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(CathedralTheme.Spacing.base)
+            .background(CathedralTheme.Colors.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, CathedralTheme.Spacing.base)
+    }
+
+    var body: some View {
+        styledRootContent
         // State-driven chapter reader navigation. The Button in sectionsList sets
         // readerSection; this destination presents ChapterReaderView without the
         // chevron disclosure indicator that NavigationLink adds.
