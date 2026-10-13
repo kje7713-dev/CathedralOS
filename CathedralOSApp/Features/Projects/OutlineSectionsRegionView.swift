@@ -240,6 +240,34 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         return arc.beats.sorted(by: { $0.position < $1.position })
     }
 
+    private func prepareSuggestionState() async {
+        await durabilityCoordinator.reconcilePersistedRunStatusIfNeeded(
+            for: project.stableLineageID,
+            outlineID: currentOutline?.id,
+            currentSectionCount: currentOutline?.sections.count ?? 0,
+            runOutlineService: RunOutlineService()
+        )
+        // Resolve the explicit recipe selection before any path that needs it.
+        recipeSelection = recipeSelectionService.resolve(for: project)
+        ensureOutline()
+        syncSectionsOrder()
+        refreshAllOutputs()
+        await restorePersistedPublicSharingEligibility()
+        consumeGenerationLaunch()
+
+        // Build the current request identity before resuming any persisted or
+        // active run, so stale runs are not reattached or surfaced.
+        let currentKey = currentSuggestionIdempotencyKey()
+        durabilityCoordinator.resumeSuggestionRunIfNeeded(
+            projectID: project.id,
+            lineageID: project.stableLineageID,
+            currentIdempotencyKey: currentKey
+        )
+        suggestionsLoading = durabilityCoordinator.activeSuggestionRun(for: project.id)?.isActive == true
+        consumeSuggestionCoordinatorEvent()
+        await loadRecoverableSuggestions()
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
             if isGenerationStarting && projectRunStatus == nil {
@@ -273,38 +301,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             ChapterReaderView(chapter: section, project: project)
         }
         .task {
-            await durabilityCoordinator.reconcilePersistedRunStatusIfNeeded(
-                for: project.stableLineageID,
-                outlineID: currentOutline?.id,
-                currentSectionCount: currentOutline?.sections.count ?? 0,
-                runOutlineService: RunOutlineService()
-            )
-            // PR 1: resolve the explicit recipe selection before any other
-            // path that needs it (suggestionsReady, loadSuggestions,
-            // loadRecoverableSuggestions, the review-sheet source).
-            recipeSelection = recipeSelectionService.resolve(for: project)
-            ensureOutline()
-            syncSectionsOrder()
-            refreshAllOutputs()
-            await restorePersistedPublicSharingEligibility()
-            consumeGenerationLaunch()
-            // PR 6 refactor: build the current request identity BEFORE
-            // resuming any persisted/active run. Stale runs (recipe/arc/
-            // section edits under the same project UUID) must not be
-            // reattached or surfaced. The coordinator's exact-match guard
-            // will discard any persisted/active entry whose idempotency key
-            // differs from the freshly built current key.
-            let currentKey = currentSuggestionIdempotencyKey()
-            // PR 6: pass canonical stableLineageID so resume-state survives
-            // local project UUID drift (delete + recreate, restore from backup).
-            durabilityCoordinator.resumeSuggestionRunIfNeeded(
-                projectID: project.id,
-                lineageID: project.stableLineageID,
-                currentIdempotencyKey: currentKey
-            )
-            suggestionsLoading = durabilityCoordinator.activeSuggestionRun(for: project.id)?.isActive == true
-            consumeSuggestionCoordinatorEvent()
-            await loadRecoverableSuggestions()
+            await prepareSuggestionState()
         }
         .onChange(of: durabilityCoordinator.suggestionRunRevision) { _, _ in
             consumeSuggestionCoordinatorEvent()
