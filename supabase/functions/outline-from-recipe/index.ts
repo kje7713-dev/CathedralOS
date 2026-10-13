@@ -3443,7 +3443,7 @@ export function isRetryableStoryMaterialFailure(run: {
 // long provider request returns. Keep the provider deadline below that limit
 // so the worker can persist a terminal provider_timeout instead of being
 // killed while its run remains `running`.
-const OUTLINE_PROVIDER_TIMEOUT_MS = 90_000;
+const OUTLINE_PROVIDER_TIMEOUT_MS = 120_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
 export const MAX_SUGGESTION_ATTEMPTS = 5;
 export const MAX_SUGGESTION_LIFETIME_MS = 30 * 60 * 1000;
