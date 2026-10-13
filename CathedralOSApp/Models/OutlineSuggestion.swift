@@ -57,6 +57,28 @@ struct OutlineSuggestionRequest: Codable {
     let requestedFormat: String?
     /// Optional selected planning model. Nil preserves the historical server default.
     let modelID: String? = nil
+
+    init(
+        recipe: PromptPackExportPayload,
+        arcTemplate: ArcTemplateBlob,
+        hint: String?,
+        existingSections: [ExistingSectionBlob]?,
+        idempotencyKey: String,
+        outline_id: UUID?,
+        project_lineage_id: UUID?,
+        requestedFormat: String?,
+        modelID: String? = nil
+    ) {
+        self.recipe = recipe
+        self.arcTemplate = arcTemplate
+        self.hint = hint
+        self.existingSections = existingSections
+        self.idempotencyKey = idempotencyKey
+        self.outline_id = outline_id
+        self.project_lineage_id = project_lineage_id
+        self.requestedFormat = requestedFormat
+        self.modelID = modelID
+    }
 }
 
 struct ArcTemplateBlob: Codable {
