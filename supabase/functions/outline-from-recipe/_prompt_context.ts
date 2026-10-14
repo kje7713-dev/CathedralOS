@@ -3,6 +3,14 @@ export function compactText(value: unknown, max = 500): string {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+// Story Arc beat descriptions are authored narrative contracts, not expendable
+// prompt decoration. Preserve the complete text when carrying them between
+// the request, planning view, and provider prompts; truncating these strings
+// turns a specific beat requirement back into a generic structural role.
+export function compactArcNarrativeText(value: unknown): string {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
 function sorted(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sorted);
   if (!value || typeof value !== "object") return value;
@@ -112,7 +120,18 @@ export function buildCompactPlanningView(req: any, obligations: any[] = [], mate
     recipe: compactRecipe(req?.recipe),
     obligations: compactObligations(obligations),
     materialIndex: compactMaterial(material),
-    arc: { id: req?.arcTemplate?.id, name: req?.arcTemplate?.name, beats: (req?.arcTemplate?.beats ?? []).map((b: any, beatIndex: number) => ({ beatIndex, id: b.id, role: b.role, label: compactText(b.label, 180), description: compactText(b.description, 650) })) },
+    arc: {
+      id: req?.arcTemplate?.id,
+      name: req?.arcTemplate?.name,
+      description: compactArcNarrativeText(req?.arcTemplate?.description),
+      beats: (req?.arcTemplate?.beats ?? []).map((b: any, beatIndex: number) => ({
+        beatIndex,
+        id: b.id,
+        role: b.role,
+        label: compactText(b.label, 180),
+        description: compactArcNarrativeText(b.description),
+      })),
+    },
     existingOutline: compactExistingSections(req?.existingSections ?? []),
   };
 }

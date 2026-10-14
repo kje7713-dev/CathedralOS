@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects, assertThrows } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { deriveRecipeObligations, obligationCoverage } from "./_recipe_obligations.ts";
-import { compactMaterial } from "./_prompt_context.ts";
+import { compactArcNarrativeText, compactMaterial } from "./_prompt_context.ts";
 
 Deno.test("continuation auth keeps user JWT out of apikey and authenticates watchdog explicitly", () => {
   assertEquals(continuationHeaders("Bearer user-access-jwt", "operator-secret"), {
@@ -2697,6 +2697,46 @@ Deno.test("semantic beat obligations require concrete evidence for Romantic Susp
   const intimacySchema = schema.properties.beats.properties.intimacy.items;
   assertEquals(intimacySchema.required.includes("arcObligationEvidence"), true);
   assertEquals(intimacySchema.properties.arcObligationEvidence.required, ["relationship_deepens_under_pressure"]);
+});
+
+Deno.test("authored Story Arc beat requirements survive context compaction for every template", () => {
+  const authoredRequirement = `An authored requirement that is intentionally longer than the old 650-character compaction boundary: ${"preserve this narrative obligation ".repeat(30)}`.trim();
+  const template: any = {
+    id: "custom",
+    name: "Custom Arc",
+    description: authoredRequirement,
+    beats: [{
+      id: "custom-beat",
+      role: "custom_role",
+      label: "Custom Beat",
+      description: authoredRequirement,
+    }],
+  };
+  const contract = arcRoleContract(template.beats[0], template.name);
+  assertEquals(contract.semanticObligations[0].id, "authored_beat_requirement");
+  assertEquals(contract.semanticObligations[0].instruction.includes(authoredRequirement), true);
+  assertEquals(compactArcNarrativeText(authoredRequirement), authoredRequirement);
+
+  const section: any = {
+    ...semanticSection("custom-beat", "The Requirement", "The beat's authored requirement is enacted in a concrete event.", "escalation"),
+    resultingChange: "The authored requirement changes the protagonist's relationship and the story's available choices.",
+    terminalState: "The changed condition carries the authored requirement into the next beat.",
+    arcObligationEvidence: {
+      authored_beat_requirement: `Concrete evidence that the section fulfills the complete authored requirement: ${authoredRequirement}`,
+    },
+  };
+  assertEquals(validateArcSemanticObligations([section], template), []);
+
+  const schema: any = buildSuggestionResponseSchema(
+    template.beats,
+    new Map([["custom-beat", { minSections: 1, rationale: "semantic test" }]]),
+    [],
+    template.name,
+  );
+  assertEquals(schema.properties.beats.properties["custom-beat"].items.properties.arcObligationEvidence.required, ["authored_beat_requirement"]);
+  const prompt = buildPrompt({ ...sparseRequest, arcTemplate: template } as any, new Map([["custom-beat", { minSections: 1, rationale: "semantic test" }]]));
+  assertEquals(prompt.system.includes(authoredRequirement), true);
+  assertEquals(prompt.user.includes(authoredRequirement), true);
 });
 
 Deno.test("PR3 Final Image aftermath-only content is repaired into an actual resolution", async () => {

@@ -19,6 +19,7 @@ import {
 } from "../generate-story/_provider.ts";
 import {
   buildCompactPlanningView,
+  compactArcNarrativeText,
   compactExistingSections,
   compactText,
   compactMaterial,
@@ -488,10 +489,23 @@ function fallbackRoleFamily(role: string): string {
   return "escalation";
 }
 
-export function arcRoleContract(beat: { role?: string; label?: string }, templateName = ""): ArcRoleContract {
+export function arcRoleContract(beat: { role?: string; label?: string; description?: string }, templateName = ""): ArcRoleContract {
   const template = BUILTIN_ROLE_CONTRACTS[normalizedTemplateName(templateName)];
   const role = beat.role ?? "";
-  return template?.[role] ?? CONTRACTS[fallbackRoleFamily(role)] ?? CONTRACTS.escalation;
+  const base = template?.[role] ?? CONTRACTS[fallbackRoleFamily(role)] ?? CONTRACTS.escalation;
+  const authoredRequirement = beat.description?.trim() ?? "";
+  if (!authoredRequirement) return base;
+  return {
+    ...base,
+    semanticObligations: [
+      {
+        id: "authored_beat_requirement",
+        instruction: `Satisfy the complete authored narrative requirement for this beat: ${authoredRequirement}`,
+        requiredFields: ["dramaticEvent", "resultingChange", "terminalState"],
+      },
+      ...base.semanticObligations,
+    ],
+  };
 }
 
 export function arcRoleContracts(template: Pick<ArcTemplateBlob, "beats" | "name">): Map<string, ArcRoleContract> {
@@ -522,7 +536,7 @@ const SECTION_SCHEMA = {
 } as const;
 
 export function buildSuggestionResponseSchema(
-  beats: Array<{ id: string; role?: string; label?: string }>,
+  beats: Array<{ id: string; role?: string; label?: string; description?: string }>,
   allocation: Map<string, Allocation>,
   obligations: RecipeObligation[] = [],
   templateName = "",
@@ -2352,7 +2366,15 @@ The JSON request contains the authoritative obligations exactly once.`,
       global: {
         project: req.recipe?.project ? { id: req.recipe.project.id ?? null, name: compactText((req.recipe.project as any).name, 200), summary: compactText(req.recipe.project.summary, 1200) } : null,
         recipe: { selectedStorySpark: compactRecipe(req.recipe).selectedStorySpark, selectedAftertaste: compactRecipe(req.recipe).selectedAftertaste },
-        arc: { name: req.arcTemplate.name, beats: req.arcTemplate.beats.map((b: any) => ({ id: b.id, label: compactText(b.label, 180), description: compactText(b.description, 500) })) },
+        arc: {
+          name: req.arcTemplate.name,
+          description: compactArcNarrativeText(req.arcTemplate.description),
+          beats: req.arcTemplate.beats.map((b: any) => ({
+            id: b.id,
+            label: compactText(b.label, 180),
+            description: compactArcNarrativeText(b.description),
+          })),
+        },
       },
       targetBeat: beatContext ? { ...beatContext, currentSections: compactExistingSections(beatContext.currentSections ?? []), unmetObligations: compactObligations(obligations.filter((o) => o.required && !beatContext.currentSections?.some((s) => (s.recipeRequirementIDs ?? []).includes(o.id)))) } : null,
       unusedStoryMaterial: compactMaterial({ relevant: unusedStoryMaterial }),
@@ -2477,7 +2499,7 @@ export function buildPrompt(
     const obligations = contract.semanticObligations.length > 0
       ? `; semantic obligations=${contract.semanticObligations.map((obligation) => obligation.id).join(", ")}`
       : "";
-    return `- ${beat.label} (${beat.role}): allowed functions=${contract.allowedFunctions.join(", ")}; phase=${contract.phaseDirection}; ${contract.forbidsNewPrimaryConflict ? "do not introduce a new primary conflict" : "major escalation is allowed"}${obligations}`;
+    return `- ${beat.label} (${beat.role}): authored requirement=${compactArcNarrativeText(beat.description) || "(none supplied)"}; allowed functions=${contract.allowedFunctions.join(", ")}; phase=${contract.phaseDirection}; ${contract.forbidsNewPrimaryConflict ? "do not introduce a new primary conflict" : "major escalation is allowed"}${obligations}`;
   }).join("\n");
   const semanticObligationLines = req.arcTemplate.beats.flatMap((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
