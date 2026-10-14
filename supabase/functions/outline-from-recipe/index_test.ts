@@ -2,6 +2,18 @@ import { assertEquals, assertRejects, assertThrows } from "https://deno.land/std
 import { deriveRecipeObligations, obligationCoverage } from "./_recipe_obligations.ts";
 import { compactMaterial } from "./_prompt_context.ts";
 
+Deno.test("continuation auth keeps user JWT out of apikey and authenticates watchdog explicitly", () => {
+  assertEquals(continuationHeaders("Bearer user-access-jwt", "operator-secret"), {
+    Authorization: "Bearer user-access-jwt",
+    "Content-Type": "application/json",
+  });
+  assertEquals(continuationHeaders("Bearer operator-secret", "operator-secret"), {
+    Authorization: "Bearer operator-secret",
+    apikey: "operator-secret",
+    "Content-Type": "application/json",
+  });
+});
+
 Deno.test("outline suggestion polling contract preserves structured failures and success", async () => {
   const source = await Deno.readTextFile(
     "./supabase/functions/outline-from-recipe/index.ts",
@@ -89,12 +101,14 @@ import {
   parseOutlineJSON,
   OutlineOutputExhaustedError,
   OUTLINE_PROVIDER_TIMEOUT_MS,
+  OUTLINE_OUTPUT_TOKEN_BUDGET,
   SUPABASE_FREE_WALL_CLOCK_MS,
-  MAX_SUGGESTION_LIFETIME_MS,
   MAX_SUGGESTION_NO_PROGRESS_MS,
   returnSuggestionRunToPending,
+  continuationHeaders,
   recoverPendingSuggestionRun,
   runSuggestionJob,
+  recoverWatchdogRun,
 } from "./index.ts";
 import { ProviderBillingUnavailableError } from "../generate-story/_provider.ts";
 
@@ -3662,6 +3676,8 @@ class ExecutableRunDb {
       eq(column: string, value: unknown) { filters.push([column, value]); return query; },
       is(column: string, value: unknown) { filters.push([column, value]); return query; },
       lte(column: string, value: unknown) { ranges.push([column, value]); return query; },
+      order(_column: string, _options?: unknown) { return query; },
+      limit(_count: number) { return query; },
       select(_columns?: string) { selected = true; return query; },
       maybeSingle() { return Promise.resolve(self.execute(table, patch, filters, ranges, selected)); },
       then(resolve: (value: unknown) => unknown, reject: (error: unknown) => unknown) {
@@ -4837,21 +4853,22 @@ Deno.test("meaningful progress advances only at durable checkpoints", () => {
   assertEquals((progressed.worker as Record<string, unknown>).sliceCount, 4);
 });
 
-Deno.test("suggestion lifecycle only terminalizes the absolute lifetime", () => {
+Deno.test("scheduler recovery delay never terminalizes a saved checkpoint", () => {
   const now = Date.now();
-  assertEquals(suggestionLifecycleFailure({ created_at: new Date(now - MAX_SUGGESTION_LIFETIME_MS - 1).toISOString() }, now), "worker_lifetime_exceeded");
-  // A delayed poll after a durable checkpoint remains recoverable; no-progress
-  // is diagnostic evidence, not proof that the run is unrecoverable.
   assertEquals(suggestionLifecycleFailure({
-    created_at: new Date(now - 1000).toISOString(),
-    updated_at: new Date(now - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString(),
-    diagnostics: { worker: { lastMeaningfulProgressAt: new Date(now - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString() } },
+    created_at: new Date(now - 31 * 60_000).toISOString(),
+    updated_at: new Date(now - 31 * 60_000).toISOString(),
+    diagnostics: { worker: { lastMeaningfulProgressAt: new Date(now - 31 * 60_000).toISOString() } },
   }, now), null);
 });
 
 Deno.test("outline provider deadline leaves margin before Supabase Free wall clock", () => {
   assertEquals(OUTLINE_PROVIDER_TIMEOUT_MS < SUPABASE_FREE_WALL_CLOCK_MS, true);
-  assertEquals(SUPABASE_FREE_WALL_CLOCK_MS - OUTLINE_PROVIDER_TIMEOUT_MS, 30_000);
+  assertEquals(SUPABASE_FREE_WALL_CLOCK_MS - OUTLINE_PROVIDER_TIMEOUT_MS, 20_000);
+});
+
+Deno.test("outline provider output budget is no longer capped at 16K", () => {
+  assertEquals(OUTLINE_OUTPUT_TOKEN_BUDGET > 16_000, true);
 });
 
 Deno.test("length-truncated outline JSON is classified as output exhaustion", () => {
@@ -4957,7 +4974,7 @@ Deno.test("active lease is never terminalized by an old lifecycle timestamp", as
     lease_owner: "worker-token",
     lease_expires_at: future,
     attempt_count: 4,
-    created_at: new Date(Date.now() - MAX_SUGGESTION_LIFETIME_MS - 1).toISOString(),
+    created_at: new Date(Date.now() - 31 * 60_000).toISOString(),
     updated_at: new Date(Date.now() - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString(),
   });
   const result = await reclaimExpiredSuggestionRun(db, {
@@ -5065,5 +5082,49 @@ Deno.test("final global provider call completes without an extra continuation", 
   assertEquals(providerCalls.length, 1, JSON.stringify({ providerCalls, planningState: db.row.planning_state, diagnostics: db.row.diagnostics }));
   assertEquals(providerCalls[0], "outline-suggestions");
   assertEquals(db.row.status, "completed", JSON.stringify({ providerCalls, planningState: db.row.planning_state, diagnostics: db.row.diagnostics }));
+  assertEquals(db.row.diagnostics.completedStages, ["outline"]);
   assertEquals(scheduleCount, 0);
+});
+
+
+Deno.test("privileged watchdog handler runs the real checkpointed worker exactly once", async () => {
+  const body = await executableWorkerBody();
+  const row: any = {
+    ...checkpointedWorkerRow(body),
+    id: "run-watchdog-handler",
+    user_id: "user-worker",
+    status: "pending",
+    attempt_count: 1,
+    diagnostics: { stage: "worker_interrupted", recoveryState: "waiting_for_recovery" },
+  };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  let starts = 0;
+  const startWorker = async (...args: any[]) => {
+    starts += 1;
+    await runSuggestionJob(args[0], args[1], args[2], args[3], args[4], args[5], {
+      db,
+      model: { provider_model: "fixture-model" },
+      provider: {},
+      creditStore: {},
+      billableLLM: fakeWorkerBilling(actions) as any,
+    });
+  };
+  const request = new Request("https://project.supabase.co/functions/v1/outline-from-recipe", {
+    method: "POST",
+    headers: { "apikey": "operator-secret", "Authorization": "Bearer operator-secret" },
+    body: JSON.stringify({ watchdog_run_id: row.id }),
+  });
+  const response = await recoverWatchdogRun(request, {
+    db,
+    openaiKey: "fixture-key",
+    authHeader: "Bearer operator-secret",
+    startWorker: startWorker as any,
+  });
+  assertEquals(response.status, 202);
+  assertEquals(starts, 1);
+  assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.diagnostics.recoveryState, "worker_resumed");
+  assertEquals(db.row.credit_cost_charged, 0);
 });

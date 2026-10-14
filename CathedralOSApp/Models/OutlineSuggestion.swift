@@ -145,11 +145,18 @@ struct OutlineSuggestionJob: Codable {
     let sourceRecipe: PromptPackExportPayload?
     let creditCostCharged: Double?
     let remainingCredits: Double?
+    /// Server-authoritative lifecycle metadata. The UI uses this to explain
+    /// recovery/checkpoint state instead of treating every non-terminal run as
+    /// an indeterminate spinner.
+    let diagnostics: [String: JSONValue]?
+    let attemptCount: Int?
+    let updatedAt: String?
+    let leaseExpiresAt: String?
 
     enum CodingKeys: String, CodingKey {
         case runID = "run_id"
         case status, suggestions, warnings, error, sourceRecipe, creditCostCharged, remainingCredits
-        case errorCode
+        case errorCode, diagnostics, attemptCount, updatedAt, leaseExpiresAt
     }
 }
 

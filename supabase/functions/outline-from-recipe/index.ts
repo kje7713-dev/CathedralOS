@@ -695,10 +695,10 @@ export function estimateOutlinePlanningCost(
   const baseStages = [
     stage(inputTokens, 12_000), // story-material enrichment
     stage(inputTokens, 2_048), // allocation
-    stage(inputTokens, 16_000), // first-pass suggestions
+    stage(inputTokens, OUTLINE_OUTPUT_TOKEN_BUDGET), // first-pass suggestions
   ];
   const lowerBoundCredits = baseStages.reduce((sum, value) => sum + value, 0);
-  const upperBoundCredits = lowerBoundCredits + expansionCalls * stage(inputTokens, 16_000);
+  const upperBoundCredits = lowerBoundCredits + expansionCalls * stage(inputTokens, OUTLINE_OUTPUT_TOKEN_BUDGET);
   const available = availableCredits(entitlement);
   return {
     estimatedCredits: upperBoundCredits,
@@ -3473,10 +3473,12 @@ export function isRetryableStoryMaterialFailure(run: {
 // margin for request setup, billing settlement, and the durable checkpoint;
 // a 150s provider deadline can be killed by the platform before it throws.
 export const SUPABASE_FREE_WALL_CLOCK_MS = 150_000;
-export const OUTLINE_PROVIDER_TIMEOUT_MS = 120_000;
+export const OUTLINE_PROVIDER_TIMEOUT_MS = 130_000;
+// Allow large structured outlines to complete without the former artificial
+// 16K completion ceiling. The provider still enforces its own model limit.
+export const OUTLINE_OUTPUT_TOKEN_BUDGET = 128_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
 export const MAX_SUGGESTION_ATTEMPTS = 5;
-export const MAX_SUGGESTION_LIFETIME_MS = 30 * 60 * 1000;
 export const MAX_SUGGESTION_NO_PROGRESS_MS = 10 * 60 * 1000;
 
 export class SuggestionWorkerYield extends Error {
@@ -3513,6 +3515,22 @@ export function assertDurableUpdateSucceeded(
   if (!result?.data) {
     throw new Error(`${context} persistence lost ownership or updated zero rows`);
   }
+}
+
+function completedStages(diagnostics: Record<string, unknown>): string[] {
+  return Array.isArray(diagnostics.completedStages)
+    ? diagnostics.completedStages.filter((value): value is string => typeof value === "string")
+    : [];
+}
+
+export function markCompletedStage(
+  diagnostics: Record<string, unknown>,
+  stage: string,
+): Record<string, unknown> {
+  const stages = completedStages(diagnostics);
+  return stages.includes(stage)
+    ? diagnostics
+    : { ...diagnostics, completedStages: [...stages, stage] };
 }
 
 /** Advance the no-progress clock only after a durable planning checkpoint. */
@@ -3650,19 +3668,21 @@ export function suggestionRunResponse(run: any): Record<string, unknown> {
     creditCostCharged: billingUnresolved ? null : run.credit_cost_charged,
     remainingCredits: billingUnresolved ? null : run.remaining_credits,
     sourceRecipe: run.request_json?.recipe ?? null,
+    attemptCount: run.attempt_count ?? 0,
+    updatedAt: run.updated_at,
+    leaseExpiresAt: run.lease_expires_at,
   };
 }
 
-export function suggestionLifecycleFailure(run: {
+export function suggestionLifecycleFailure(_run: {
   created_at?: string | null;
   updated_at?: string | null;
   diagnostics?: Record<string, unknown> | null;
-}, now = Date.now()): "worker_lifetime_exceeded" | null {
-  // A delayed poll is not proof that a durable checkpoint is unrecoverable.
-  // Lease expiry and bounded attempt recovery already fence/restart workers;
-  // only the absolute lifetime is allowed to terminalize an otherwise
-  // resumable run. Keep lastMeaningfulProgressAt as observability data.
-  if (run.created_at && now - new Date(run.created_at).getTime() > MAX_SUGGESTION_LIFETIME_MS) return "worker_lifetime_exceeded";
+}, _now = Date.now()): null {
+  // Recovery delay is not processing time. A scheduler outage, cold-start
+  // delay, or long pending queue must never discard a durable checkpoint just
+  // because created_at is old. Actual processing is bounded by the provider
+  // deadline and lease; failed recovery is bounded by MAX_SUGGESTION_ATTEMPTS.
   return null;
 }
 
@@ -3750,11 +3770,21 @@ export async function reclaimExpiredSuggestionRun(db: any, run: {
   // Non-terminal reclaim: atomically release only the observed expired lease.
   // A concurrent recovery can win this compare-and-set, but cannot also win
   // the pending claim inside runSuggestionJob.
+  const interruptedDiagnostics = {
+    ...(run.diagnostics ?? {}),
+    stage: "worker_interrupted",
+    recoveryState: "waiting_for_recovery",
+    recoveryAttemptCount: nextAttemptCount,
+    recoveryObservedAt: new Date(now).toISOString(),
+  };
   let reclaimQuery = db.from("outline_suggestion_runs").update({
     status: "pending",
     lease_owner: null,
     lease_expires_at: null,
     attempt_count: nextAttemptCount,
+    watchdog_failures: 0,
+    watchdog_next_attempt_at: new Date().toISOString(),
+    diagnostics: interruptedDiagnostics,
   }).eq("id", run.id).eq("status", "running");
   reclaimQuery = observedLeaseExpiry
     ? reclaimQuery.eq("lease_expires_at", observedLeaseExpiry)
@@ -3764,14 +3794,31 @@ export async function reclaimExpiredSuggestionRun(db: any, run: {
   if (observedLeaseExpiry) await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
   run.status = "pending";
   run.attempt_count = nextAttemptCount;
+  run.diagnostics = interruptedDiagnostics;
   return true;
+}
+
+export function continuationHeaders(authHeader: string, operatorSecret = ""): Record<string, string> {
+  const headers: Record<string, string> = {
+    Authorization: authHeader,
+    "Content-Type": "application/json",
+  };
+  // Only the watchdog's explicitly supplied operator credential gets an
+  // apikey header. A normal user's bearer JWT must never be repurposed as a
+  // Supabase project API key.
+  if (operatorSecret && authHeader === `Bearer ${operatorSecret}`) {
+    headers.apikey = operatorSecret;
+  }
+  return headers;
 }
 
 async function scheduleSuggestionContinuation(body: OutlineFromRecipeRequest, authHeader: string): Promise<void> {
   const url = Deno.env.get("SUPABASE_URL") ?? "";
+  const operatorSecret = readSupabaseSecretKey(Deno.env.get("SUPABASE_SECRET_KEYS")) ||
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
   const response = await fetch(`${url}/functions/v1/outline-from-recipe`, {
     method: "POST",
-    headers: { Authorization: authHeader, "Content-Type": "application/json" },
+    headers: continuationHeaders(authHeader, operatorSecret),
     body: JSON.stringify(body),
   });
   const responseText = await response.text();
@@ -3871,6 +3918,8 @@ export async function returnSuggestionRunToPending(
     lease_owner: null,
     lease_expires_at: null,
     completed_at: null,
+    watchdog_failures: 0,
+    watchdog_next_attempt_at: new Date().toISOString(),
     diagnostics,
   });
   try {
@@ -3912,9 +3961,13 @@ export async function runSuggestionJob(
     ? priorDiagnostics.worker as Record<string, unknown>
     : {};
   const workerSliceCount = Number(priorWorker.sliceCount ?? 0) + 1;
+  const wasRecovered = priorDiagnostics.recoveryState === "waiting_for_recovery" ||
+    priorDiagnostics.stage === "worker_interrupted";
   let diagnostics: Record<string, unknown> = {
     ...priorDiagnostics,
-    stage: "starting",
+    stage: wasRecovered ? "worker_resumed" : "starting",
+    recoveryState: wasRecovered ? "worker_resumed" : "not_needed",
+    recoveryResumedAt: wasRecovered ? new Date().toISOString() : undefined,
     worker: {
       ...priorWorker,
       sliceCount: workerSliceCount,
@@ -4086,7 +4139,7 @@ export async function runSuggestionJob(
           const expandedRaw = await billableCall(
             expansion.system,
             expansion.user,
-            16000,
+            OUTLINE_OUTPUT_TOKEN_BUDGET,
             { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: buildExpansionResponseSchema(beat ? arcRoleContract(body.arcTemplate.beats.find((candidate) => candidate.id === beat.beatID)!, body.arcTemplate.name) : undefined) } },
             `outline-expansion-${context.round}-${beat?.beatID ?? "global"}`,
             (content, finishReason) => {
@@ -4209,6 +4262,11 @@ export async function runSuggestionJob(
         nextAction: outlineNeedsExpansion ? "expansion" : "completed",
       };
       const expansionCheckpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], []);
+      // The outline has passed structural and obligation validation even when
+      // a novel still needs optional expansion. Persist that checkmark before
+      // dispatching expansion so the UI does not imply allocation is the last
+      // completed stage.
+      diagnostics = markCompletedStage(diagnostics, "outline");
       diagnostics = { ...diagnostics, stage: outlineNeedsExpansion ? "expansion_pending" : "outline_complete", expansionCheckpoint };
       diagnostics = markMeaningfulProgress(
         diagnostics,
@@ -4277,6 +4335,10 @@ export async function runSuggestionJob(
         stage: "expansion_resume",
         resumedFromRound: resume.startRound,
       };
+      // Recovered expansion checkpoints necessarily represent an already
+      // validated outline; keep that stage visible without marking expansion
+      // complete until the resumed expansion actually succeeds.
+      diagnostics = markCompletedStage(diagnostics, "outline");
       // PR8 (revised): persist the (possibly repaired) story_material and
       // the resume-stage diagnostics BEFORE expandNovel so a later failure
       // or interruption cannot lose the completed repair. Idempotent with
@@ -4431,9 +4493,12 @@ export async function runSuggestionJob(
         nextAction: "outline-plan",
         enrichmentRepairReason: undefined,
       };
-      diagnostics = markMeaningfulProgress(
-        { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" },
-        `story_material_complete:${stableJSONStringify(storyMaterial)}`,
+      diagnostics = markCompletedStage(
+        markMeaningfulProgress(
+          { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" },
+          `story_material_complete:${stableJSONStringify(storyMaterial)}`,
+        ),
+        "enrichment",
       );
       await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics });
     }
@@ -4526,9 +4591,12 @@ export async function runSuggestionJob(
         allocationEntries: Array.from(allocation.entries()),
         allocationRetryReason: undefined,
       };
-      diagnostics = markMeaningfulProgress(
-        { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
-        `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
+      diagnostics = markCompletedStage(
+        markMeaningfulProgress(
+          { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
+          `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
+        ),
+        "allocation",
       );
       await updateRun({ planning_state: planningState, diagnostics });
     }
@@ -4557,7 +4625,7 @@ export async function runSuggestionJob(
       const rawResponse = await billableCall(
         system,
         userPrompt,
-        16000,
+        OUTLINE_OUTPUT_TOKEN_BUDGET,
         responseFormat,
         "outline-suggestions",
         (content, finishReason) => {
@@ -4774,12 +4842,84 @@ export async function runSuggestionJob(
   }
 }
 
+function readSupabaseSecretKey(raw: string | undefined): string {
+  if (!raw) return "";
+  try {
+    const value = (JSON.parse(raw) as Record<string, unknown>).default;
+    return typeof value === "string" ? value.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function isWatchdogRequest(req: Request): boolean {
+  const configured = readSupabaseSecretKey(Deno.env.get("SUPABASE_SECRET_KEYS")) ||
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  return Boolean(configured && req.headers.get("apikey") === configured);
+}
+
+export interface WatchdogRecoveryDependencies {
+  db?: any;
+  openaiKey?: string;
+  authHeader?: string;
+  startWorker?: SuggestionWorkerStarter;
+}
+
+export async function recoverWatchdogRun(
+  req: Request,
+  dependencies: WatchdogRecoveryDependencies = {},
+): Promise<Response> {
+  let body: Record<string, unknown>;
+  try { body = await req.json(); } catch { return errorResponse("invalid_request", "Body must be JSON", 400); }
+  const db = dependencies.db ?? admin();
+  const runID = typeof body.watchdog_run_id === "string" ? body.watchdog_run_id : null;
+  let run: any = null;
+  if (runID) {
+    const result = await db.from("outline_suggestion_runs")
+      .select("id, user_id, status, request_json, attempt_count, lease_expires_at, credit_cost_charged, created_at, updated_at, diagnostics")
+      .eq("id", runID).maybeSingle();
+    if (result.error) return errorResponse("db_error", "Could not read watchdog run", 500);
+    run = result.data;
+  } else if (typeof body.idempotencyKey === "string") {
+    const result = await db.from("outline_suggestion_runs")
+      .select("id, user_id, status, request_json, attempt_count, lease_expires_at, credit_cost_charged, created_at, updated_at, diagnostics")
+      .eq("idempotency_key", body.idempotencyKey).maybeSingle();
+    if (result.error) return errorResponse("db_error", "Could not read continuation run", 500);
+    run = result.data;
+  } else {
+    return errorResponse("invalid_request", "watchdog_run_id or idempotencyKey required", 400);
+  }
+  if (!run) return errorResponse("not_found", "suggestion run not found", 404);
+  if (run.status === "running") {
+    const expired = run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
+    if (!expired) return corsResponse(JSON.stringify({ run_id: run.id, status: run.status }), { status: 200 });
+    if (!await reclaimExpiredSuggestionRun(db, run)) {
+      return corsResponse(JSON.stringify({ run_id: run.id, status: run.status }), { status: 200 });
+    }
+  }
+  if (run.status !== "pending") return corsResponse(JSON.stringify(suggestionRunResponse(run)), { status: 200 });
+  const openaiKey = dependencies.openaiKey ?? Deno.env.get("OPENAI_API_KEY");
+  if (!openaiKey) return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
+  const recoveredBody = await recoverPersistedPlanningBody(db, run);
+  const secret = readSupabaseSecretKey(Deno.env.get("SUPABASE_SECRET_KEYS")) || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  const authHeader = dependencies.authHeader ?? `Bearer ${secret}`;
+  const startWorker = dependencies.startWorker ?? (async (runID, workerBody, userID, key, attemptCount, workerAuthHeader) => {
+    // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+    EdgeRuntime.waitUntil(runSuggestionJob(runID, workerBody, userID, key, attemptCount, workerAuthHeader));
+  });
+  await startWorker(run.id, recoveredBody, run.user_id, openaiKey, run.attempt_count ?? 0, authHeader);
+  return corsResponse(JSON.stringify({ run_id: run.id, status: "pending", watchdog: true }), { status: 202 });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsResponse("", { status: 204 });
   if (req.method !== "GET" && req.method !== "POST") {
     return errorResponse("method_not_allowed", "GET or POST required", 405);
   }
   const authHeader = req.headers.get("Authorization");
+  if (req.method === "POST" && isWatchdogRequest(req)) {
+    return await recoverWatchdogRun(req);
+  }
   if (!authHeader) {
     return errorResponse(
       "not_authenticated",
