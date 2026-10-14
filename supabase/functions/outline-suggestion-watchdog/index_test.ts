@@ -15,6 +15,29 @@ Deno.test("watchdog dispatch is bound to one durable run identity", () => {
 });
 
 
+Deno.test("watchdog backs off failed dispatches so newer jobs can become due", async () => {
+  const row: any = { id: "run-stuck", status: "pending", watchdog_failures: 0, watchdog_next_attempt_at: "2026-10-14T17:00:00.000Z" };
+  const db = {
+    from(_table: string) {
+      const query: any = {
+        patch: null as Record<string, unknown> | null,
+        select() { return query; }, update(value: Record<string, unknown>) { query.patch = value; return query; },
+        eq() { return query; }, or() { return query; }, order() { return query; }, limit() { return query; },
+        then(resolve: (value: unknown) => unknown) {
+          if (query.patch) { Object.assign(row, query.patch); return Promise.resolve(resolve({ data: null, error: null })); }
+          const due = new Date(row.watchdog_next_attempt_at).getTime() <= Date.parse("2026-10-14T17:00:00.000Z");
+          return Promise.resolve(resolve({ data: due ? [{ id: row.id, watchdog_failures: row.watchdog_failures }] : [], error: null }));
+        },
+      };
+      return query;
+    },
+  };
+  const result = await runWatchdogOnce(db, async () => 503, new Date("2026-10-14T17:00:00.000Z"));
+  assertEquals(result.statuses[0].backoff, 30);
+  assertEquals(row.watchdog_failures, 1);
+  assertEquals(row.watchdog_next_attempt_at, "2026-10-14T17:00:30.000Z");
+});
+
 Deno.test("scheduled watchdog resumes one abandoned checkpoint without replaying settled stages", async () => {
   const row: any = {
     id: "run-abandoned",
@@ -28,13 +51,21 @@ Deno.test("scheduled watchdog resumes one abandoned checkpoint without replaying
   const db = {
     from(_table: string) {
       const query: any = {
+        patch: null as Record<string, unknown> | null,
         select() { return query; },
+        update(value: Record<string, unknown>) { query.patch = value; return query; },
+        eq() { return query; },
         or() { return query; },
         order() { return query; },
         limit() { return query; },
         then(resolve: (value: unknown) => unknown) {
-          const due = row.status === "pending" || row.status === "running";
-          return Promise.resolve(resolve({ data: due ? [{ id: row.id }] : [], error: null }));
+          if (query.patch) {
+            Object.assign(row, query.patch);
+            return Promise.resolve(resolve({ data: null, error: null }));
+          }
+          const due = (row.status === "pending" || row.status === "running") &&
+            (!row.watchdog_next_attempt_at || new Date(row.watchdog_next_attempt_at).getTime() <= Date.now());
+          return Promise.resolve(resolve({ data: due ? [{ id: row.id, watchdog_failures: row.watchdog_failures ?? 0 }] : [], error: null }));
         },
       };
       return query;
@@ -69,7 +100,7 @@ Deno.test("scheduled watchdog resumes one abandoned checkpoint without replaying
   const first = await runWatchdogOnce(db, dispatch, new Date("2026-10-14T17:00:00Z"));
   const second = await runWatchdogOnce(db, dispatch, new Date("2026-10-14T17:01:00Z"));
   assertEquals(first.scanned, 1);
-  assertEquals(first.statuses, [{ run_id: row.id, status: 202 }]);
+  assertEquals(first.statuses, [{ run_id: row.id, status: 202, backoff: 0 }]);
   assertEquals(second.scanned, 0);
   assertEquals(dispatches, 1);
   assertEquals(row.workerClaims, 1);

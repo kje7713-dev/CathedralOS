@@ -21,15 +21,21 @@ function response(body: unknown, status = 200): Response {
 
 export type WatchdogDispatch = (runID: string) => Promise<number>;
 
+function retryDelaySeconds(failures: number): number {
+  return Math.min(15 * 60, 2 ** Math.min(Math.max(failures, 0), 8) * 15);
+}
+
 /** One bounded scheduler pass; the cron handler and deterministic tests share this path. */
 export async function runWatchdogOnce(
   db: any,
   dispatch: WatchdogDispatch,
   now = new Date(),
 ): Promise<{ scanned: number; statuses: Array<Record<string, unknown>> }> {
+  const nowISO = now.toISOString();
   const { data: runs, error } = await db.from("outline_suggestion_runs")
-    .select("id")
-    .or(`status.eq.pending,and(status.eq.running,lease_expires_at.lt.${now.toISOString()})`)
+    .select("id, watchdog_failures")
+    .or(`and(status.eq.pending,watchdog_next_attempt_at.lte.${nowISO}),and(status.eq.running,lease_expires_at.lt.${nowISO})`)
+    .order("watchdog_next_attempt_at", { ascending: true })
     .order("updated_at", { ascending: true })
     .limit(MAX_BATCH);
   if (error) throw new Error("could not list recoverable runs");
@@ -37,9 +43,25 @@ export async function runWatchdogOnce(
   const statuses: Array<Record<string, unknown>> = [];
   for (const run of runs ?? []) {
     try {
-      statuses.push({ run_id: run.id, status: await dispatch(run.id) });
+      const status = await dispatch(run.id);
+      const failed = status === 0 || status === 408 || status === 425 || status === 429 || status >= 500;
+      const failures = Number(run.watchdog_failures ?? 0) + (failed ? 1 : 0);
+      const nextAttemptAt = failed
+        ? new Date(now.getTime() + retryDelaySeconds(failures) * 1000).toISOString()
+        : nowISO;
+      await db.from("outline_suggestion_runs").update({
+        watchdog_failures: failed ? failures : 0,
+        watchdog_next_attempt_at: nextAttemptAt,
+      }).eq("id", run.id);
+      statuses.push({ run_id: run.id, status, backoff: failed ? retryDelaySeconds(failures) : 0 });
     } catch (err) {
-      statuses.push({ run_id: run.id, error: err instanceof Error ? err.message : String(err) });
+      const failures = Number(run.watchdog_failures ?? 0) + 1;
+      const nextAttemptAt = new Date(now.getTime() + retryDelaySeconds(failures) * 1000).toISOString();
+      await db.from("outline_suggestion_runs").update({
+        watchdog_failures: failures,
+        watchdog_next_attempt_at: nextAttemptAt,
+      }).eq("id", run.id);
+      statuses.push({ run_id: run.id, error: err instanceof Error ? err.message : String(err), backoff: retryDelaySeconds(failures) });
     }
   }
   return { scanned: runs?.length ?? 0, statuses };

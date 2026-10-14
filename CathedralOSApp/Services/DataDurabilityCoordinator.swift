@@ -64,8 +64,11 @@ struct SuggestionRunMetadata: Codable {
     /// Last authoritative backend checkpoint observed by the client. These
     /// fields are optional so metadata written by older app versions decodes.
     var serverStage: String?
+    var serverRecoveryState: String?
+    var serverCompletedStages: [String]?
     var serverAttemptCount: Int?
     var serverUpdatedAt: String?
+    var serverLeaseExpiresAt: String?
 
     var isActive: Bool {
         status == "starting" || status == "pending" || status == "running" ||
@@ -921,8 +924,11 @@ final class DataDurabilityCoordinator: ObservableObject {
             createdAt: Date(),
             updatedAt: Date(),
             serverStage: nil,
+            serverRecoveryState: nil,
+            serverCompletedStages: [],
             serverAttemptCount: nil,
-            serverUpdatedAt: nil
+            serverUpdatedAt: nil,
+            serverLeaseExpiresAt: nil
         )
         suggestionRunFailure = nil
         activeSuggestionRuns[projectID] = metadata
@@ -1139,11 +1145,23 @@ final class DataDurabilityCoordinator: ObservableObject {
                 reconnectMisses = 0
                 metadata.status = job.status
                 metadata.updatedAt = Date()
-                if let diagnostics = job.diagnostics, case .string(let stage) = diagnostics["stage"] {
-                    metadata.serverStage = stage
+                if let diagnostics = job.diagnostics {
+                    if case .string(let stage) = diagnostics["stage"] {
+                        metadata.serverStage = stage
+                    }
+                    if case .string(let recovery) = diagnostics["recoveryState"] {
+                        metadata.serverRecoveryState = recovery
+                    }
+                    if case .array(let stages) = diagnostics["completedStages"] {
+                        metadata.serverCompletedStages = stages.compactMap {
+                            if case .string(let value) = $0 { return value }
+                            return nil
+                        }
+                    }
                 }
                 metadata.serverAttemptCount = job.attemptCount
-                metadata.serverUpdatedAt = job.leaseExpiresAt
+                metadata.serverUpdatedAt = job.updatedAt
+                metadata.serverLeaseExpiresAt = job.leaseExpiresAt
                 if metadata.runID == nil { metadata.runID = job.runID }
                 activeSuggestionRuns[metadata.projectID] = metadata
                 persistSuggestionRun(metadata)

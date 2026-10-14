@@ -3514,6 +3514,22 @@ export function assertDurableUpdateSucceeded(
   }
 }
 
+function completedStages(diagnostics: Record<string, unknown>): string[] {
+  return Array.isArray(diagnostics.completedStages)
+    ? diagnostics.completedStages.filter((value): value is string => typeof value === "string")
+    : [];
+}
+
+export function markCompletedStage(
+  diagnostics: Record<string, unknown>,
+  stage: string,
+): Record<string, unknown> {
+  const stages = completedStages(diagnostics);
+  return stages.includes(stage)
+    ? diagnostics
+    : { ...diagnostics, completedStages: [...stages, stage] };
+}
+
 /** Advance the no-progress clock only after a durable planning checkpoint. */
 export function markMeaningfulProgress(
   diagnostics: Record<string, unknown>,
@@ -3650,6 +3666,7 @@ export function suggestionRunResponse(run: any): Record<string, unknown> {
     remainingCredits: billingUnresolved ? null : run.remaining_credits,
     sourceRecipe: run.request_json?.recipe ?? null,
     attemptCount: run.attempt_count ?? 0,
+    updatedAt: run.updated_at,
     leaseExpiresAt: run.lease_expires_at,
   };
 }
@@ -3750,11 +3767,21 @@ export async function reclaimExpiredSuggestionRun(db: any, run: {
   // Non-terminal reclaim: atomically release only the observed expired lease.
   // A concurrent recovery can win this compare-and-set, but cannot also win
   // the pending claim inside runSuggestionJob.
+  const interruptedDiagnostics = {
+    ...(run.diagnostics ?? {}),
+    stage: "worker_interrupted",
+    recoveryState: "waiting_for_recovery",
+    recoveryAttemptCount: nextAttemptCount,
+    recoveryObservedAt: new Date(now).toISOString(),
+  };
   let reclaimQuery = db.from("outline_suggestion_runs").update({
     status: "pending",
     lease_owner: null,
     lease_expires_at: null,
     attempt_count: nextAttemptCount,
+    watchdog_failures: 0,
+    watchdog_next_attempt_at: new Date().toISOString(),
+    diagnostics: interruptedDiagnostics,
   }).eq("id", run.id).eq("status", "running");
   reclaimQuery = observedLeaseExpiry
     ? reclaimQuery.eq("lease_expires_at", observedLeaseExpiry)
@@ -3764,20 +3791,31 @@ export async function reclaimExpiredSuggestionRun(db: any, run: {
   if (observedLeaseExpiry) await markInterruptedProviderAttempts(db, run.id, observedLeaseExpiry);
   run.status = "pending";
   run.attempt_count = nextAttemptCount;
+  run.diagnostics = interruptedDiagnostics;
   return true;
+}
+
+export function continuationHeaders(authHeader: string, operatorSecret = ""): Record<string, string> {
+  const headers: Record<string, string> = {
+    Authorization: authHeader,
+    "Content-Type": "application/json",
+  };
+  // Only the watchdog's explicitly supplied operator credential gets an
+  // apikey header. A normal user's bearer JWT must never be repurposed as a
+  // Supabase project API key.
+  if (operatorSecret && authHeader === `Bearer ${operatorSecret}`) {
+    headers.apikey = operatorSecret;
+  }
+  return headers;
 }
 
 async function scheduleSuggestionContinuation(body: OutlineFromRecipeRequest, authHeader: string): Promise<void> {
   const url = Deno.env.get("SUPABASE_URL") ?? "";
+  const operatorSecret = readSupabaseSecretKey(Deno.env.get("SUPABASE_SECRET_KEYS")) ||
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
   const response = await fetch(`${url}/functions/v1/outline-from-recipe`, {
     method: "POST",
-    headers: {
-      Authorization: authHeader,
-      // Watchdog continuations use the operator secret in both headers.
-      // User-authenticated continuations still use the normal JWT path.
-      apikey: authHeader.replace(/^Bearer\s+/i, ""),
-      "Content-Type": "application/json",
-    },
+    headers: continuationHeaders(authHeader, operatorSecret),
     body: JSON.stringify(body),
   });
   const responseText = await response.text();
@@ -3877,6 +3915,8 @@ export async function returnSuggestionRunToPending(
     lease_owner: null,
     lease_expires_at: null,
     completed_at: null,
+    watchdog_failures: 0,
+    watchdog_next_attempt_at: new Date().toISOString(),
     diagnostics,
   });
   try {
@@ -3918,9 +3958,13 @@ export async function runSuggestionJob(
     ? priorDiagnostics.worker as Record<string, unknown>
     : {};
   const workerSliceCount = Number(priorWorker.sliceCount ?? 0) + 1;
+  const wasRecovered = priorDiagnostics.recoveryState === "waiting_for_recovery" ||
+    priorDiagnostics.stage === "worker_interrupted";
   let diagnostics: Record<string, unknown> = {
     ...priorDiagnostics,
-    stage: "starting",
+    stage: wasRecovered ? "worker_resumed" : "starting",
+    recoveryState: wasRecovered ? "worker_resumed" : "not_needed",
+    recoveryResumedAt: wasRecovered ? new Date().toISOString() : undefined,
     worker: {
       ...priorWorker,
       sliceCount: workerSliceCount,
@@ -4437,9 +4481,12 @@ export async function runSuggestionJob(
         nextAction: "outline-plan",
         enrichmentRepairReason: undefined,
       };
-      diagnostics = markMeaningfulProgress(
-        { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" },
-        `story_material_complete:${stableJSONStringify(storyMaterial)}`,
+      diagnostics = markCompletedStage(
+        markMeaningfulProgress(
+          { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_complete" },
+          `story_material_complete:${stableJSONStringify(storyMaterial)}`,
+        ),
+        "enrichment",
       );
       await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics });
     }
@@ -4532,9 +4579,12 @@ export async function runSuggestionJob(
         allocationEntries: Array.from(allocation.entries()),
         allocationRetryReason: undefined,
       };
-      diagnostics = markMeaningfulProgress(
-        { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
-        `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
+      diagnostics = markCompletedStage(
+        markMeaningfulProgress(
+          { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
+          `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
+        ),
+        "allocation",
       );
       await updateRun({ planning_state: planningState, diagnostics });
     }
@@ -4796,10 +4846,20 @@ function isWatchdogRequest(req: Request): boolean {
   return Boolean(configured && req.headers.get("apikey") === configured);
 }
 
-async function handleWatchdogRequest(req: Request): Promise<Response> {
+export interface WatchdogRecoveryDependencies {
+  db?: any;
+  openaiKey?: string;
+  authHeader?: string;
+  startWorker?: SuggestionWorkerStarter;
+}
+
+export async function recoverWatchdogRun(
+  req: Request,
+  dependencies: WatchdogRecoveryDependencies = {},
+): Promise<Response> {
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return errorResponse("invalid_request", "Body must be JSON", 400); }
-  const db = admin();
+  const db = dependencies.db ?? admin();
   const runID = typeof body.watchdog_run_id === "string" ? body.watchdog_run_id : null;
   let run: any = null;
   if (runID) {
@@ -4826,13 +4886,16 @@ async function handleWatchdogRequest(req: Request): Promise<Response> {
     }
   }
   if (run.status !== "pending") return corsResponse(JSON.stringify(suggestionRunResponse(run)), { status: 200 });
-  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  const openaiKey = dependencies.openaiKey ?? Deno.env.get("OPENAI_API_KEY");
   if (!openaiKey) return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
   const recoveredBody = await recoverPersistedPlanningBody(db, run);
   const secret = readSupabaseSecretKey(Deno.env.get("SUPABASE_SECRET_KEYS")) || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-  const authHeader = `Bearer ${secret}`;
-  // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
-  EdgeRuntime.waitUntil(runSuggestionJob(run.id, recoveredBody, run.user_id, openaiKey, run.attempt_count ?? 0, authHeader));
+  const authHeader = dependencies.authHeader ?? `Bearer ${secret}`;
+  const startWorker = dependencies.startWorker ?? (async (runID, workerBody, userID, key, attemptCount, workerAuthHeader) => {
+    // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+    EdgeRuntime.waitUntil(runSuggestionJob(runID, workerBody, userID, key, attemptCount, workerAuthHeader));
+  });
+  await startWorker(run.id, recoveredBody, run.user_id, openaiKey, run.attempt_count ?? 0, authHeader);
   return corsResponse(JSON.stringify({ run_id: run.id, status: "pending", watchdog: true }), { status: 202 });
 }
 
@@ -4843,7 +4906,7 @@ Deno.serve(async (req: Request) => {
   }
   const authHeader = req.headers.get("Authorization");
   if (req.method === "POST" && isWatchdogRequest(req)) {
-    return await handleWatchdogRequest(req);
+    return await recoverWatchdogRun(req);
   }
   if (!authHeader) {
     return errorResponse(

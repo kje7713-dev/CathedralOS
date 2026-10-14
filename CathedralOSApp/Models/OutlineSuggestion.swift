@@ -150,12 +150,13 @@ struct OutlineSuggestionJob: Codable {
     /// an indeterminate spinner.
     let diagnostics: [String: JSONValue]?
     let attemptCount: Int?
+    let updatedAt: String?
     let leaseExpiresAt: String?
 
     enum CodingKeys: String, CodingKey {
         case runID = "run_id"
         case status, suggestions, warnings, error, sourceRecipe, creditCostCharged, remainingCredits
-        case errorCode, diagnostics, attemptCount, leaseExpiresAt
+        case errorCode, diagnostics, attemptCount, updatedAt, leaseExpiresAt
     }
 }
 
