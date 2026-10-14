@@ -1,22 +1,15 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { watchdogDispatchBody } from "./_logic.ts";
+import { isAuthorized, readSecretKey } from "./_auth.ts";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceKey = readSecretKey(Deno.env.get("SUPABASE_SECRET_KEYS"));
 const adminKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? serviceKey;
 const MAX_BATCH = 20;
 
-function readSecretKey(raw: string | undefined): string {
-  if (!raw) return "";
-  try {
-    const value = (JSON.parse(raw) as Record<string, unknown>).default;
-    return typeof value === "string" ? value.trim() : "";
-  } catch { return ""; }
-}
-
 function authorized(req: Request): boolean {
   const supplied = req.headers.get("apikey");
-  return Boolean(serviceKey && supplied && supplied === serviceKey);
+  return isAuthorized(supplied, serviceKey);
 }
 
 function response(body: unknown, status = 200): Response {
