@@ -101,6 +101,7 @@ import {
   parseOutlineJSON,
   OutlineOutputExhaustedError,
   OUTLINE_PROVIDER_TIMEOUT_MS,
+  OUTLINE_OUTPUT_TOKEN_BUDGET,
   SUPABASE_FREE_WALL_CLOCK_MS,
   MAX_SUGGESTION_NO_PROGRESS_MS,
   returnSuggestionRunToPending,
@@ -4863,7 +4864,11 @@ Deno.test("scheduler recovery delay never terminalizes a saved checkpoint", () =
 
 Deno.test("outline provider deadline leaves margin before Supabase Free wall clock", () => {
   assertEquals(OUTLINE_PROVIDER_TIMEOUT_MS < SUPABASE_FREE_WALL_CLOCK_MS, true);
-  assertEquals(SUPABASE_FREE_WALL_CLOCK_MS - OUTLINE_PROVIDER_TIMEOUT_MS, 30_000);
+  assertEquals(SUPABASE_FREE_WALL_CLOCK_MS - OUTLINE_PROVIDER_TIMEOUT_MS, 20_000);
+});
+
+Deno.test("outline provider output budget is no longer capped at 16K", () => {
+  assertEquals(OUTLINE_OUTPUT_TOKEN_BUDGET > 16_000, true);
 });
 
 Deno.test("length-truncated outline JSON is classified as output exhaustion", () => {

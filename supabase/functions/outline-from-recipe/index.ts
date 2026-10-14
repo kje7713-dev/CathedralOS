@@ -695,10 +695,10 @@ export function estimateOutlinePlanningCost(
   const baseStages = [
     stage(inputTokens, 12_000), // story-material enrichment
     stage(inputTokens, 2_048), // allocation
-    stage(inputTokens, 16_000), // first-pass suggestions
+    stage(inputTokens, OUTLINE_OUTPUT_TOKEN_BUDGET), // first-pass suggestions
   ];
   const lowerBoundCredits = baseStages.reduce((sum, value) => sum + value, 0);
-  const upperBoundCredits = lowerBoundCredits + expansionCalls * stage(inputTokens, 16_000);
+  const upperBoundCredits = lowerBoundCredits + expansionCalls * stage(inputTokens, OUTLINE_OUTPUT_TOKEN_BUDGET);
   const available = availableCredits(entitlement);
   return {
     estimatedCredits: upperBoundCredits,
@@ -3473,7 +3473,10 @@ export function isRetryableStoryMaterialFailure(run: {
 // margin for request setup, billing settlement, and the durable checkpoint;
 // a 150s provider deadline can be killed by the platform before it throws.
 export const SUPABASE_FREE_WALL_CLOCK_MS = 150_000;
-export const OUTLINE_PROVIDER_TIMEOUT_MS = 120_000;
+export const OUTLINE_PROVIDER_TIMEOUT_MS = 130_000;
+// Allow large structured outlines to complete without the former artificial
+// 16K completion ceiling. The provider still enforces its own model limit.
+export const OUTLINE_OUTPUT_TOKEN_BUDGET = 128_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
 export const MAX_SUGGESTION_ATTEMPTS = 5;
 export const MAX_SUGGESTION_NO_PROGRESS_MS = 10 * 60 * 1000;
@@ -4136,7 +4139,7 @@ export async function runSuggestionJob(
           const expandedRaw = await billableCall(
             expansion.system,
             expansion.user,
-            16000,
+            OUTLINE_OUTPUT_TOKEN_BUDGET,
             { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: buildExpansionResponseSchema(beat ? arcRoleContract(body.arcTemplate.beats.find((candidate) => candidate.id === beat.beatID)!, body.arcTemplate.name) : undefined) } },
             `outline-expansion-${context.round}-${beat?.beatID ?? "global"}`,
             (content, finishReason) => {
@@ -4622,7 +4625,7 @@ export async function runSuggestionJob(
       const rawResponse = await billableCall(
         system,
         userPrompt,
-        16000,
+        OUTLINE_OUTPUT_TOKEN_BUDGET,
         responseFormat,
         "outline-suggestions",
         (content, finishReason) => {
