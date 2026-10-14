@@ -2801,8 +2801,10 @@ export async function logRequest(
   userId: string,
   status: string,
   errorCode?: string,
-  modelName: string = OPENAI_MODEL,
+  selectedModel?: { id: string; provider_model: string },
 ): Promise<void> {
+  // Record the resolved catalog identity, not the legacy environment default.
+  // This is observability only; provider calls and pricing are unchanged.
   const { error } = await supabase.from("generation_request_logs").insert({
     request_id: crypto.randomUUID(),
     user_id: userId,
@@ -2811,7 +2813,9 @@ export async function logRequest(
     output_budget: 0,
     status,
     error_code: errorCode ?? null,
-    model_name: modelName,
+    model_name: selectedModel?.provider_model ?? OPENAI_MODEL,
+    selected_model_id: selectedModel?.id ?? null,
+    provider_model: selectedModel?.provider_model ?? null,
     created_at: new Date().toISOString(),
   });
   if (error) {
@@ -5297,7 +5301,7 @@ Deno.serve(async (req: Request) => {
   // failure could allow one extra request through the limit window.
   if (isFreshInsert) {
     try {
-      await logRequest(db, user.id, "queued");
+      await logRequest(db, user.id, "queued", undefined, selectedModel);
     } catch (logError) {
       console.error("[outline-from-recipe] logRequest failed", logError);
     }

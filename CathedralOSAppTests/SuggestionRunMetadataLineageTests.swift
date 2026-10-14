@@ -71,6 +71,15 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         )
     }
 
+    func testSuggestionStatusPollingHasARealSuccessInterval() {
+        // Protect the normal successful pending/running path from a hot loop
+        // that previously generated roughly two requests per second.
+        XCTAssertEqual(
+            DataDurabilityCoordinator.suggestionStatusPollIntervalNanoseconds,
+            4_000_000_000
+        )
+    }
+
     // MARK: - Round-trip with lineageID
 
     func testEncodeDecodePreservesLineageID() throws {

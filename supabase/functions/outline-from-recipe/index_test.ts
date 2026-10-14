@@ -2952,6 +2952,29 @@ Deno.test("PR7 logRequest inserts one outline-from-recipe log entry with the rig
   assertEquals(typeof inserted.created_at, "string", "Log entry must carry a created_at timestamp");
 });
 
+Deno.test("outline kickoff telemetry uses the chosen model rather than the legacy default", async () => {
+  let inserted: any = null;
+  const mockSupabase = {
+    from(table: string) {
+      assertEquals(table, "generation_request_logs");
+      return {
+        insert(data: any) {
+          inserted = data;
+          return Promise.resolve({ error: null });
+        },
+      };
+    },
+  };
+  await logRequest(mockSupabase as any, "user-luna", "queued", undefined, {
+    id: "gpt-6-luna",
+    provider_model: "gpt-6-luna",
+  });
+  assertEquals(inserted.model_name, "gpt-6-luna");
+  assertEquals(inserted.selected_model_id, "gpt-6-luna");
+  assertEquals(inserted.provider_model, "gpt-6-luna");
+  assertEquals(inserted.action, "outline-from-recipe");
+});
+
 Deno.test("PR7 logRequest passes through errorCode when supplied", async () => {
   let inserted: any = null;
   const mockSupabase = {
@@ -2983,7 +3006,7 @@ Deno.test("PR7 POST handler reorders: resolve-existing BEFORE checkRateLimit", a
 Deno.test("PR7 POST handler gates logRequest on isFreshInsert (reconnects skip logRequest)", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const isFreshInsertDecl = source.indexOf("const isFreshInsert = !insert.error && !!insert.data;");
-  const logRequestCall = source.indexOf("await logRequest(db, user.id, \"queued\");");
+  const logRequestCall = source.indexOf("await logRequest(db, user.id, \"queued\", undefined, selectedModel);");
   const logRequestGuard = source.indexOf("if (isFreshInsert) {");
   assertEquals(isFreshInsertDecl > 0, true, "POST handler must declare isFreshInsert");
   assertEquals(logRequestCall > 0, true, "POST handler must call logRequest");

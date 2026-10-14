@@ -113,6 +113,9 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// left intact; this only releases the local UI lock so the user can
     /// choose a model and start a new request.
     static let staleSuggestionRunInterval: TimeInterval = 60
+    // A successful nonterminal status check must not immediately issue another GET.
+    // This polling only updates the UI; the backend and watchdog own execution.
+    static let suggestionStatusPollIntervalNanoseconds: UInt64 = 4_000_000_000
 
     enum SyncOperationKind: String, Equatable {
         case appLaunch
@@ -1216,6 +1219,10 @@ final class DataDurabilityCoordinator: ObservableObject {
                         activeSuggestionRuns[metadata.projectID] = metadata
                         persistSuggestionRun(metadata)
                     }
+                    // Normal pending/running status checks must back off too.
+                    // Otherwise a healthy run is queried continuously (~2 GETs/sec).
+                    // Completion/failure cases return immediately without sleeping.
+                    try await Task.sleep(nanoseconds: Self.suggestionStatusPollIntervalNanoseconds)
                 }
             } catch is CancellationError {
                 break
