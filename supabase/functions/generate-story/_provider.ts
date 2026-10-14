@@ -402,6 +402,15 @@ export function supportsCustomTemperature(model: {
   return !(provider === "openai" && /^gpt-(?:5|6)(?:[.-]|$)/i.test(providerModel));
 }
 
+/**
+ * Resolve the only model-specific reasoning override currently enabled.
+ * GPT-6.1 Sol supports Chat Completions `reasoning_effort: "low"`; models
+ * not listed here receive no reasoning_effort field at all.
+ */
+export function reasoningEffortForModel(model: string): "low" | undefined {
+  return model.trim().toLowerCase() === "gpt-6.1-sol" ? "low" : undefined;
+}
+
 export interface LLMProvider {
   complete(
     messages: LLMMessage[],
@@ -668,6 +677,10 @@ export class OpenAIProvider implements LLMProvider {
     }
     if (typeof options.temperature === "number" && supportsCustomTemperature(resolvedModel)) {
       body.temperature = options.temperature;
+    }
+    const reasoningEffort = reasoningEffortForModel(resolvedModel);
+    if (reasoningEffort) {
+      body.reasoning_effort = reasoningEffort;
     }
     // PR-372: chat/completions supports prompt_cache_key but NOT
     // prompt_cache_options / prompt_cache_breakpoint (those are Responses
