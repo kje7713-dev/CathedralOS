@@ -8,6 +8,7 @@ on:
       - 'supabase/functions/embed-section/**'
       - 'supabase/functions/run-outline/**'
       - 'supabase/functions/outline-from-recipe/**'
+      - 'supabase/functions/outline-suggestion-watchdog/**'
       - 'supabase/functions/export-epub/**'
       - 'supabase/functions/export-epub-list/**'
       - 'supabase/migrations/20260924080000_epub_generation_output_source.sql'
@@ -141,6 +142,15 @@ jobs:
           deno test --no-check -A
           supabase/functions/outline-from-recipe/index_test.ts
           supabase/functions/outline-from-recipe/commercial_arc_templates_test.ts
+
+      - name: Test autonomous outline watchdog and operator authentication
+        run: >-
+          deno check
+          supabase/functions/outline-suggestion-watchdog/index.ts
+          supabase/functions/outline-from-recipe/index.ts
+          && deno test --no-check -A
+          supabase/functions/outline-suggestion-watchdog/auth_test.ts
+          supabase/functions/outline-suggestion-watchdog/index_test.ts
 
 
       - name: Type check PR2 OpenAI catalog sync sources
