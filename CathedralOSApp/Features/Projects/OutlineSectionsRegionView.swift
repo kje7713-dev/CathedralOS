@@ -1408,6 +1408,7 @@ struct OutlinePlanningModelSheet: View {
         onCancel: @escaping () -> Void
     ) {
         self.initialModelID = initialModelID
+        self.initialReasoningEffort = initialReasoningEffort
         self.request = request
         self.onConfirm = onConfirm
         self.onCancel = onCancel
