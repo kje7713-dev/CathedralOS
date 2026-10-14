@@ -642,7 +642,7 @@ interface OutlineFromRecipeRequest {
   requestedFormat?: StoryMaterialFormat;
   /** Explicit MVP model selection; persisted in request_json for resume. */
   modelID?: string;
-  /** Optional GPT-6.1 Sol reasoning level selected in the iOS picker. */
+  /** Optional GPT-6-family reasoning level selected in the iOS picker. */
   reasoningEffort?: "low" | "medium" | "high";
   outline_id?: string;
   // PR 4: canonical planning identity. Server-validated pre-billable so a
@@ -1697,8 +1697,9 @@ export function validateRequest(req: unknown): string | null {
   if (r.reasoningEffort !== undefined && !["low", "medium", "high"].includes(r.reasoningEffort as string)) return "reasoningEffort must be low, medium, or high";
   if (
     r.reasoningEffort !== undefined &&
-    (typeof r.modelID !== "string" || r.modelID.trim().toLowerCase() !== "gpt-6.1-sol")
-  ) return "reasoningEffort is only supported for gpt-6.1-sol";
+    (typeof r.modelID !== "string" ||
+      !["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"].includes(r.modelID.trim().toLowerCase()))
+  ) return "reasoningEffort is only supported for GPT-6 Luna, GPT-6.1 Sol, or GPT-6 Astra";
   if (r.idempotencyKey !== undefined && (typeof r.idempotencyKey !== "string" || r.idempotencyKey.trim() === "" || r.idempotencyKey.length > 512)) return "idempotencyKey must be a non-empty string of at most 512 characters";
   if (r.storyMaterialEnrichment) {
     try {

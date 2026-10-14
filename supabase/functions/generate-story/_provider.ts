@@ -404,9 +404,10 @@ export function supportsCustomTemperature(model: {
 }
 
 /**
- * Resolve the only model-specific reasoning override currently enabled.
- * GPT-6.1 Sol supports Chat Completions `reasoning_effort` values low, medium,
- * and high; models not listed here receive no reasoning_effort field at all.
+ * Resolve the model-specific reasoning override for the GPT-6 family.
+ * GPT-6 Luna, GPT-6.1 Sol, and GPT-6 Astra support Chat Completions
+ * `reasoning_effort` values low, medium, and high; other models receive no
+ * reasoning_effort field at all.
  */
 export type ReasoningEffort = "low" | "medium" | "high";
 
@@ -414,7 +415,8 @@ export function reasoningEffortForModel(
   model: string,
   requested?: ReasoningEffort,
 ): ReasoningEffort | undefined {
-  if (model.trim().toLowerCase() !== "gpt-6.1-sol") return undefined;
+  const normalizedModel = model.trim().toLowerCase();
+  if (!new Set(["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]).has(normalizedModel)) return undefined;
   return requested ?? "low";
 }
 

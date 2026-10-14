@@ -60,7 +60,7 @@ struct OutlineSuggestionRequest: Codable {
     /// original selection rather than falling back to a server default.
     /// Missing on legacy requests; decoding preserves that distinction.
     let modelID: String?
-    /// Optional model-specific reasoning level. Currently honored only by GPT-6.1 Sol.
+    /// Optional model-specific reasoning level. Currently honored only by GPT-6 Luna, GPT-6.1 Sol, and GPT-6 Astra.
     let reasoningEffort: String?
 
     init(

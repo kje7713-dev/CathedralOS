@@ -14,6 +14,11 @@ enum OutlineSectionsModelCatalog {
     static let preferenceKey = "cathedralos.outline.selectedModelID"
     static let reasoningPreferenceKey = "cathedralos.outline.selectedReasoningEffort"
     static let reasoningEfforts = ["low", "medium", "high"]
+    static let reasoningModelIDs: Set<String> = ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]
+
+    static func supportsReasoning(for modelID: String) -> Bool {
+        reasoningModelIDs.contains(modelID)
+    }
 
     struct Option: Identifiable, Equatable {
         let id: String
@@ -767,7 +772,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             material: material,
             requestGenerationID: currentSuggestionGenerationID(),
             modelID: usePreferredModel ? (modelID ?? preferredOutlineModelID) : modelID,
-            reasoningEffort: reasoningEffort ?? (usePreferredModel && (modelID ?? preferredOutlineModelID) == OutlineSectionsModelCatalog.defaultID ? preferredOutlineReasoningEffort : nil)
+            reasoningEffort: reasoningEffort ?? (usePreferredModel && OutlineSectionsModelCatalog.supportsReasoning(for: modelID ?? preferredOutlineModelID) ? preferredOutlineReasoningEffort : nil)
         ).idempotencyKey
     }
 
@@ -863,7 +868,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         do {
             outlinePlanningRequest = try makePlanningRequest(
                 modelID: preferredOutlineModelID,
-                reasoningEffort: preferredOutlineModelID == OutlineSectionsModelCatalog.defaultID ? preferredOutlineReasoningEffort : nil
+                reasoningEffort: OutlineSectionsModelCatalog.supportsReasoning(for: preferredOutlineModelID) ? preferredOutlineReasoningEffort : nil
             )
             showingOutlineModelSheet = true
         } catch {
@@ -873,13 +878,13 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 
     private func confirmOutlinePlanningModel(_ modelID: String, _ reasoningEffort: String?) {
         preferredOutlineModelID = modelID
-        if modelID == OutlineSectionsModelCatalog.defaultID, let reasoningEffort,
+        if OutlineSectionsModelCatalog.supportsReasoning(for: modelID), let reasoningEffort,
            OutlineSectionsModelCatalog.reasoningEfforts.contains(reasoningEffort) {
             preferredOutlineReasoningEffort = reasoningEffort
         }
         showingOutlineModelSheet = false
         outlinePlanningRequest = nil
-        Task { await loadSuggestions(modelID: modelID, reasoningEffort: modelID == OutlineSectionsModelCatalog.defaultID ? reasoningEffort : nil) }
+        Task { await loadSuggestions(modelID: modelID, reasoningEffort: OutlineSectionsModelCatalog.supportsReasoning(for: modelID) ? reasoningEffort : nil) }
     }
 
     private func cancelOutlinePlanningModel() {
@@ -1455,8 +1460,8 @@ struct OutlinePlanningModelSheet: View {
                         .buttonStyle(.plain)
                     }
                 }
-                if selectedModelID == OutlineSectionsModelCatalog.defaultID {
-                    Section("Sol reasoning level") {
+                if OutlineSectionsModelCatalog.supportsReasoning(for: selectedModelID) {
+                    Section("Reasoning level") {
                         Picker("Reasoning", selection: $selectedReasoningEffort) {
                             ForEach(OutlineSectionsModelCatalog.reasoningEfforts, id: \.self) { effort in
                                 Text(effort.capitalized).tag(effort)
@@ -1490,7 +1495,7 @@ struct OutlinePlanningModelSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Confirm") {
                         guard selectedOption?.isAvailable == true else { return }
-                        onConfirm(selectedModelID, selectedModelID == OutlineSectionsModelCatalog.defaultID ? selectedReasoningEffort : nil)
+                        onConfirm(selectedModelID, OutlineSectionsModelCatalog.supportsReasoning(for: selectedModelID) ? selectedReasoningEffort : nil)
                     }
                     .fontWeight(.semibold)
                     .disabled(isLoading || selectedOption?.isAvailable != true)
@@ -1552,7 +1557,7 @@ struct OutlinePlanningModelSheet: View {
         do {
             let selectedRequest = request
                 .withModelID(selectedModelID)
-                .withReasoningEffort(selectedModelID == OutlineSectionsModelCatalog.defaultID ? selectedReasoningEffort : nil)
+                .withReasoningEffort(OutlineSectionsModelCatalog.supportsReasoning(for: selectedModelID) ? selectedReasoningEffort : nil)
             estimate = try await OutlineSuggestionService().estimate(request: selectedRequest, modelID: selectedModelID)
         } catch {
             estimate = nil

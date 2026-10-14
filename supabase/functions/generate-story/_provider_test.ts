@@ -217,13 +217,36 @@ Deno.test("OpenAIProvider: selected Sol reasoning effort passes through", async 
   }
 });
 
+Deno.test("OpenAIProvider: GPT-6 Luna and Astra receive reasoning effort", async () => {
+  for (const model of ["gpt-6-luna", "gpt-6-astra"]) {
+    installFetchStub(chatCompletionsResponse('{"sections":[]}'));
+    try {
+      const provider = new OpenAIProvider("test-key", model, PROVIDER_TIMEOUT_MS);
+      await provider.complete(
+        [{ role: "user", content: "user prompt" }],
+        12000,
+        model,
+        {
+          responseFormat: { type: "json_schema", json_schema: { name: "outline" } },
+          reasoningEffort: "medium",
+        },
+      );
+      assertExists(lastRequest);
+      assertEquals(lastRequest.body.model, model);
+      assertEquals(lastRequest.body.reasoning_effort, "medium");
+    } finally {
+      uninstallFetchStub();
+    }
+  }
+});
+
 Deno.test("OpenAIProvider: unsupported reasoning values are never configured", () => {
-  assertEquals(reasoningEffortForModel("gpt-6.1-sol"), "low");
-  assertEquals(reasoningEffortForModel("gpt-6.1-sol", "medium"), "medium");
+  assertEquals(reasoningEffortForModel("gpt-6-luna"), "low");
+  assertEquals(reasoningEffortForModel("gpt-6-luna", "medium"), "medium");
   assertEquals(reasoningEffortForModel("gpt-6.1-sol", "high"), "high");
+  assertEquals(reasoningEffortForModel("gpt-6-astra", "medium"), "medium");
   assertEquals(reasoningEffortForModel("gpt-5.6-luna", "high"), undefined);
   assertEquals(reasoningEffortForModel("gpt-4o-mini"), undefined);
-  assertEquals(reasoningEffortForModel("gpt-6-astra"), undefined);
 });
 
 Deno.test("OpenAIProvider: Responses structured output preserves cache boundary", async () => {
