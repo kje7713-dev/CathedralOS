@@ -90,7 +90,6 @@ import {
   OutlineOutputExhaustedError,
   OUTLINE_PROVIDER_TIMEOUT_MS,
   SUPABASE_FREE_WALL_CLOCK_MS,
-  MAX_SUGGESTION_LIFETIME_MS,
   MAX_SUGGESTION_NO_PROGRESS_MS,
   returnSuggestionRunToPending,
   recoverPendingSuggestionRun,
@@ -4837,15 +4836,12 @@ Deno.test("meaningful progress advances only at durable checkpoints", () => {
   assertEquals((progressed.worker as Record<string, unknown>).sliceCount, 4);
 });
 
-Deno.test("suggestion lifecycle only terminalizes the absolute lifetime", () => {
+Deno.test("scheduler recovery delay never terminalizes a saved checkpoint", () => {
   const now = Date.now();
-  assertEquals(suggestionLifecycleFailure({ created_at: new Date(now - MAX_SUGGESTION_LIFETIME_MS - 1).toISOString() }, now), "worker_lifetime_exceeded");
-  // A delayed poll after a durable checkpoint remains recoverable; no-progress
-  // is diagnostic evidence, not proof that the run is unrecoverable.
   assertEquals(suggestionLifecycleFailure({
-    created_at: new Date(now - 1000).toISOString(),
-    updated_at: new Date(now - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString(),
-    diagnostics: { worker: { lastMeaningfulProgressAt: new Date(now - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString() } },
+    created_at: new Date(now - 31 * 60_000).toISOString(),
+    updated_at: new Date(now - 31 * 60_000).toISOString(),
+    diagnostics: { worker: { lastMeaningfulProgressAt: new Date(now - 31 * 60_000).toISOString() } },
   }, now), null);
 });
 
@@ -4957,7 +4953,7 @@ Deno.test("active lease is never terminalized by an old lifecycle timestamp", as
     lease_owner: "worker-token",
     lease_expires_at: future,
     attempt_count: 4,
-    created_at: new Date(Date.now() - MAX_SUGGESTION_LIFETIME_MS - 1).toISOString(),
+    created_at: new Date(Date.now() - 31 * 60_000).toISOString(),
     updated_at: new Date(Date.now() - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString(),
   });
   const result = await reclaimExpiredSuggestionRun(db, {

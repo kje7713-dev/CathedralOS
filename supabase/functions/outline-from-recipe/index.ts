@@ -3476,7 +3476,6 @@ export const SUPABASE_FREE_WALL_CLOCK_MS = 150_000;
 export const OUTLINE_PROVIDER_TIMEOUT_MS = 120_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
 export const MAX_SUGGESTION_ATTEMPTS = 5;
-export const MAX_SUGGESTION_LIFETIME_MS = 30 * 60 * 1000;
 export const MAX_SUGGESTION_NO_PROGRESS_MS = 10 * 60 * 1000;
 
 export class SuggestionWorkerYield extends Error {
@@ -3655,16 +3654,15 @@ export function suggestionRunResponse(run: any): Record<string, unknown> {
   };
 }
 
-export function suggestionLifecycleFailure(run: {
+export function suggestionLifecycleFailure(_run: {
   created_at?: string | null;
   updated_at?: string | null;
   diagnostics?: Record<string, unknown> | null;
-}, now = Date.now()): "worker_lifetime_exceeded" | null {
-  // A delayed poll is not proof that a durable checkpoint is unrecoverable.
-  // Lease expiry and bounded attempt recovery already fence/restart workers;
-  // only the absolute lifetime is allowed to terminalize an otherwise
-  // resumable run. Keep lastMeaningfulProgressAt as observability data.
-  if (run.created_at && now - new Date(run.created_at).getTime() > MAX_SUGGESTION_LIFETIME_MS) return "worker_lifetime_exceeded";
+}, _now = Date.now()): null {
+  // Recovery delay is not processing time. A scheduler outage, cold-start
+  // delay, or long pending queue must never discard a durable checkpoint just
+  // because created_at is old. Actual processing is bounded by the provider
+  // deadline and lease; failed recovery is bounded by MAX_SUGGESTION_ATTEMPTS.
   return null;
 }
 
