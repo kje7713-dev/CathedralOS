@@ -17,6 +17,7 @@ import {
   OpenAIProvider,
   PROVIDER_TIMEOUT_MS,
   reasoningEffortForModel,
+  supportsCustomTemperature,
 } from "./_provider.ts";
 
 // ---------------------------------------------------------------------------
@@ -159,6 +160,34 @@ Deno.test("OpenAIProvider: responseFormat present routes to chat/completions + S
   } finally {
     uninstallFetchStub();
   }
+});
+
+Deno.test("supportsCustomTemperature: GPT-5.4 mini keeps verified historical temperature", () => {
+  assertEquals(supportsCustomTemperature("gpt-5.4-mini"), true);
+  assertEquals(supportsCustomTemperature("gpt-5.4-mini-2026-03-17"), true);
+  assertEquals(supportsCustomTemperature("gpt-6.1-sol"), false);
+  assertEquals(supportsCustomTemperature("gpt-6-luna"), false);
+  assertEquals(supportsCustomTemperature("gpt-6-astra"), false);
+  assertEquals(supportsCustomTemperature("gpt-5.6-luna"), false);
+  assertEquals(supportsCustomTemperature("gpt-4o-mini"), true);
+});
+
+Deno.test("OpenAIProvider: GPT-5.4 mini receives temperature 0.7", async () => {
+  installFetchStub({
+    id: "chatcmpl-mini",
+    model: "gpt-5.4-mini-2026-03-17",
+    choices: [{ message: { content: "{}" }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+  });
+  const provider = new OpenAIProvider("test-key", "gpt-5.4-mini-2026-03-17", 1_000);
+  await provider.complete(
+    [{ role: "user", content: "test" }],
+    16_000,
+    "gpt-5.4-mini-2026-03-17",
+    { responseFormat: { type: "json_object" }, temperature: 0.7 },
+  );
+  assertEquals(lastRequest?.body.temperature, 0.7);
+  assertEquals(lastRequest?.body.reasoning_effort, undefined);
 });
 
 Deno.test("OpenAIProvider: GPT-6.1 Sol receives low reasoning effort without temperature", async () => {
