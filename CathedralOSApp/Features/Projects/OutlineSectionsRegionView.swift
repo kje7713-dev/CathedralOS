@@ -26,6 +26,7 @@ enum OutlineSectionsModelCatalog {
     }
 
     static let definitions: [(id: String, tier: String, name: String, description: String)] = [
+        ("gpt-5.4-mini", "Standard", "GPT-5.4 mini", "Proven, lower-latency planning for most outlines."),
         ("gpt-6-luna", "Economy", "GPT-6 Luna", "Fast, economical planning for high-volume outlines."),
         ("gpt-6.1-sol", "Recommended", "GPT-6.1 Sol", "Balanced planning quality and cost for most novels."),
         ("gpt-6-astra", "Premium", "GPT-6 Astra", "Highest-capability planning for complex story architecture."),
