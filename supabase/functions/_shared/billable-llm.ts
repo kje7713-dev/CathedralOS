@@ -89,6 +89,7 @@ export interface BillableProviderOptions {
   responseFormat?: unknown;
   responseFormatTarget?: "chat" | "responses";
   temperature?: number;
+  reasoningEffort?: "low" | "medium" | "high";
   /** PR-372: cache capability for this request. */
   cacheMode?: "none" | "implicit" | "explicit";
   /** PR-372: stable cache key for grouping related requests. */

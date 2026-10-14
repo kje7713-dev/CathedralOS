@@ -203,6 +203,16 @@ Deno.test("POST production path validates local_project_id and lineage before bi
   assertEquals(ownership >= 0 && insert > ownership, true);
 });
 
+Deno.test("reasoningEffort accepts supported Sol levels and rejects invalid/non-Sol values", () => {
+  assertEquals(validateRequest({ ...sparseRequest, modelID: "gpt-6.1-sol", reasoningEffort: "low" }), null);
+  assertEquals(validateRequest({ ...sparseRequest, modelID: "gpt-6.1-sol", reasoningEffort: "medium" }), null);
+  assertEquals(validateRequest({ ...sparseRequest, modelID: "gpt-6.1-sol", reasoningEffort: "high" }), null);
+  assertEquals(validateRequest({ ...sparseRequest, modelID: "gpt-6-luna", reasoningEffort: "medium" }), null);
+  assertEquals(validateRequest({ ...sparseRequest, modelID: "gpt-6-astra", reasoningEffort: "low" }), null);
+  assertEquals(validateRequest({ ...sparseRequest, modelID: "gpt-6.1-sol", reasoningEffort: "xhigh" }), "reasoningEffort must be low, medium, or high");
+  assertEquals(validateRequest({ ...sparseRequest, modelID: "gpt-5.6-luna", reasoningEffort: "low" }), "reasoningEffort is only supported for GPT-6 Luna, GPT-6.1 Sol, or GPT-6 Astra");
+});
+
 Deno.test("PR4 validateRequest accepts outline_id + project_lineage_id + requestedFormat", () => {
   assertEquals(
     validateRequest({

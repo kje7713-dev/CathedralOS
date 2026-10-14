@@ -74,6 +74,7 @@ struct CompletedSuggestionRun {
     let result: OutlineSuggestionResult
     let idempotencyKey: String
     let modelID: String?
+    let reasoningEffort: String?
 }
 
 struct SuggestionRunFailure: Equatable {
@@ -1167,7 +1168,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                         projectID: metadata.projectID,
                         result: result,
                         idempotencyKey: metadata.idempotencyKey,
-                        modelID: metadata.request.modelID
+                        modelID: metadata.request.modelID,
+                        reasoningEffort: metadata.request.reasoningEffort
                     )
                     suggestionRunRevision &+= 1
                     suggestionPollingTasks[metadata.projectID] = nil

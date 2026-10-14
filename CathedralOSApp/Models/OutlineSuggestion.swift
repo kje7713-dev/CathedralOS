@@ -60,6 +60,8 @@ struct OutlineSuggestionRequest: Codable {
     /// original selection rather than falling back to a server default.
     /// Missing on legacy requests; decoding preserves that distinction.
     let modelID: String?
+    /// Optional model-specific reasoning level. Currently honored only by GPT-6 Luna, GPT-6.1 Sol, and GPT-6 Astra.
+    let reasoningEffort: String?
 
     init(
         recipe: PromptPackExportPayload,
@@ -70,7 +72,8 @@ struct OutlineSuggestionRequest: Codable {
         outline_id: UUID?,
         project_lineage_id: UUID?,
         requestedFormat: String?,
-        modelID: String? = nil
+        modelID: String? = nil,
+        reasoningEffort: String? = nil
     ) {
         self.recipe = recipe
         self.arcTemplate = arcTemplate
@@ -81,6 +84,7 @@ struct OutlineSuggestionRequest: Codable {
         self.project_lineage_id = project_lineage_id
         self.requestedFormat = requestedFormat
         self.modelID = modelID
+        self.reasoningEffort = reasoningEffort
     }
 
     func withModelID(_ modelID: String) -> OutlineSuggestionRequest {
@@ -88,7 +92,16 @@ struct OutlineSuggestionRequest: Codable {
             recipe: recipe, arcTemplate: arcTemplate, hint: hint,
             existingSections: existingSections, idempotencyKey: idempotencyKey,
             outline_id: outline_id, project_lineage_id: project_lineage_id,
-            requestedFormat: requestedFormat, modelID: modelID
+            requestedFormat: requestedFormat, modelID: modelID, reasoningEffort: reasoningEffort
+        )
+    }
+
+    func withReasoningEffort(_ reasoningEffort: String?) -> OutlineSuggestionRequest {
+        OutlineSuggestionRequest(
+            recipe: recipe, arcTemplate: arcTemplate, hint: hint,
+            existingSections: existingSections, idempotencyKey: idempotencyKey,
+            outline_id: outline_id, project_lineage_id: project_lineage_id,
+            requestedFormat: requestedFormat, modelID: modelID, reasoningEffort: reasoningEffort
         )
     }
 }

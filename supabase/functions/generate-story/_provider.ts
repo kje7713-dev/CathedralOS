@@ -380,6 +380,7 @@ export interface LLMProviderOptions {
   responseFormatTarget?: "chat" | "responses";
   /** Sampling temperature (0-2). Only forwarded by the chat/completions path. */
   temperature?: number;
+  reasoningEffort?: ReasoningEffort;
   /** PR-372: cache capability for this request. */
   cacheMode?: "none" | "implicit" | "explicit";
   /** PR-372: stable cache key for grouping related requests. Generate-story
@@ -400,6 +401,23 @@ export function supportsCustomTemperature(model: {
   const provider = typeof model === "string" ? "openai" : model.provider;
   const providerModel = typeof model === "string" ? model : (model.provider_model ?? "");
   return !(provider === "openai" && /^gpt-(?:5|6)(?:[.-]|$)/i.test(providerModel));
+}
+
+/**
+ * Resolve the model-specific reasoning override for the GPT-6 family.
+ * GPT-6 Luna, GPT-6.1 Sol, and GPT-6 Astra support Chat Completions
+ * `reasoning_effort` values low, medium, and high; other models receive no
+ * reasoning_effort field at all.
+ */
+export type ReasoningEffort = "low" | "medium" | "high";
+
+export function reasoningEffortForModel(
+  model: string,
+  requested?: ReasoningEffort,
+): ReasoningEffort | undefined {
+  const normalizedModel = model.trim().toLowerCase();
+  if (!new Set(["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]).has(normalizedModel)) return undefined;
+  return requested ?? "low";
 }
 
 export interface LLMProvider {
@@ -668,6 +686,10 @@ export class OpenAIProvider implements LLMProvider {
     }
     if (typeof options.temperature === "number" && supportsCustomTemperature(resolvedModel)) {
       body.temperature = options.temperature;
+    }
+    const reasoningEffort = reasoningEffortForModel(resolvedModel, options.reasoningEffort);
+    if (reasoningEffort) {
+      body.reasoning_effort = reasoningEffort;
     }
     // PR-372: chat/completions supports prompt_cache_key but NOT
     // prompt_cache_options / prompt_cache_breakpoint (those are Responses

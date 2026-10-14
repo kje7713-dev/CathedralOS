@@ -642,6 +642,8 @@ interface OutlineFromRecipeRequest {
   requestedFormat?: StoryMaterialFormat;
   /** Explicit MVP model selection; persisted in request_json for resume. */
   modelID?: string;
+  /** Optional GPT-6-family reasoning level selected in the iOS picker. */
+  reasoningEffort?: "low" | "medium" | "high";
   outline_id?: string;
   // PR 4: canonical planning identity. Server-validated pre-billable so a
   // stale Outline reference (delete + restore, sync race) cannot survive
@@ -1692,6 +1694,12 @@ export function validateRequest(req: unknown): string | null {
   }
   if (r.requestedFormat !== undefined && !["novel", "shortStory", "other"].includes(r.requestedFormat)) return "requestedFormat must be novel, shortStory, or other";
   if (r.modelID !== undefined && (typeof r.modelID !== "string" || r.modelID.trim() === "")) return "modelID must be a non-empty catalog model ID";
+  if (r.reasoningEffort !== undefined && !["low", "medium", "high"].includes(r.reasoningEffort as string)) return "reasoningEffort must be low, medium, or high";
+  if (
+    r.reasoningEffort !== undefined &&
+    (typeof r.modelID !== "string" ||
+      !["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"].includes(r.modelID.trim().toLowerCase()))
+  ) return "reasoningEffort is only supported for GPT-6 Luna, GPT-6.1 Sol, or GPT-6 Astra";
   if (r.idempotencyKey !== undefined && (typeof r.idempotencyKey !== "string" || r.idempotencyKey.trim() === "" || r.idempotencyKey.length > 512)) return "idempotencyKey must be a non-empty string of at most 512 characters";
   if (r.storyMaterialEnrichment) {
     try {
@@ -3443,7 +3451,7 @@ export function isRetryableStoryMaterialFailure(run: {
 // long provider request returns. Keep the provider deadline below that limit
 // so the worker can persist a terminal provider_timeout instead of being
 // killed while its run remains `running`.
-const OUTLINE_PROVIDER_TIMEOUT_MS = 120_000;
+const OUTLINE_PROVIDER_TIMEOUT_MS = 150_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
 export const MAX_SUGGESTION_ATTEMPTS = 5;
 export const MAX_SUGGESTION_LIFETIME_MS = 30 * 60 * 1000;
@@ -4003,6 +4011,7 @@ export async function runSuggestionJob(
         providerOptions: {
           responseFormat,
           ...(supportsCustomTemperature(model) ? { temperature: 0.7 } : {}),
+          reasoningEffort: body.reasoningEffort,
           cacheMode: model.cacheMode,
           promptCacheKey: model.cacheMode === "none" ? undefined : promptCacheKey,
         },
