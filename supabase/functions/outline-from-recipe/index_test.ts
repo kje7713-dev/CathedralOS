@@ -76,6 +76,7 @@ import {
   plannedWordRangeForContainer,
   findUnusedStoryMaterial,
   validateStoryArcSemantics,
+  validateArcSemanticObligations,
   validatePostRepairBeatCoverage,
   validateRequiredStoryArcFunctions,
   repairRequiredStoryArcFunctions,
@@ -2636,6 +2637,66 @@ Deno.test("PR3 required dramatic functions are validated from final section func
   const resurrection = { name: "Hero's Journey", beats: [{ id: "r", role: "resurrection", label: "Resurrection" }] };
   assertEquals(validateStoryArcSemantics([semanticSection("r", "The Test", "The hero transforms.", "transformation")] as any, resurrection as any).some((issue) => issue.includes("required dramatic function climax")), true);
   assertEquals(validateStoryArcSemantics([semanticSection("r", "The Test", "The final confrontation turns.", "climax")] as any, resurrection as any), []);
+});
+
+const romanticSuspenseFixture = {
+  name: "Romantic Suspense",
+  beats: [
+    { id: "intimacy", role: "intimacy_under_pressure", label: "Intimacy Under Pressure" },
+    { id: "showdown", role: "joint_showdown", label: "Joint Showdown" },
+    { id: "safety", role: "safety_and_commitment", label: "Safety and Commitment" },
+  ],
+};
+
+Deno.test("semantic beat obligations reject generic Romantic Suspense completion", () => {
+  const generic = [
+    semanticSection("intimacy", "The Danger", "The danger escalates.", "escalation"),
+    semanticSection("showdown", "The Confrontation", "The leads confront the threat.", "climax"),
+    semanticSection("safety", "The Aftermath", "The aftermath settles.", "resolution"),
+  ];
+  const issues = validateArcSemanticObligations(generic as any, romanticSuspenseFixture as any);
+  assertEquals(issues.length, 5);
+  assertEquals(issues.some((issue) => issue.includes("relationship_deepens_under_pressure")), true);
+  assertEquals(issues.some((issue) => issue.includes("coordinated_danger_resolution")), true);
+  assertEquals(issues.some((issue) => issue.includes("earned_romantic_future")), true);
+});
+
+Deno.test("semantic beat obligations require concrete evidence for Romantic Suspense roles", () => {
+  const sections: any[] = [
+    {
+      ...semanticSection("intimacy", "The Safehouse Confession", "The leads shelter together while the threat closes in.", "escalation"),
+      resultingChange: "The guarded lead reveals the evidence and the other lead takes a personal risk to protect them, changing their mutual trust.",
+      arcObligationEvidence: { relationship_deepens_under_pressure: "The danger forces a guarded confession and a reciprocal protective choice that changes their trust." },
+    },
+    {
+      ...semanticSection("showdown", "The Two-Way Trap", "Both leads coordinate the trap that corners the pursuer, and one stays behind to draw fire so the other can finish it.", "climax"),
+      resultingChange: "The threat is defeated because their coordinated plan succeeds, and their commitment changes the cost each is willing to pay.",
+      terminalState: "The danger is ended and the leads face the consequences together.",
+      arcObligationEvidence: {
+        coordinated_danger_resolution: "Both leads perform complementary actions that resolve the threat rather than one lead winning alone.",
+        emotional_commitment_in_action: "Their commitment determines who takes the risk and makes the decisive plan possible.",
+      },
+    },
+    {
+      ...semanticSection("safety", "A Door Left Open", "The leads expose the conspirator and choose a shared life after the danger ends.", "resolution"),
+      resultingChange: "The threat is dismantled and the leads establish an earned future together shaped by the trust they chose under pressure.",
+      terminalState: "The threat cannot resume; the leads begin their committed future with a concrete shared plan.",
+      arcObligationEvidence: {
+        threat_is_settled: "The conspirator is exposed and the threat is dismantled, so it cannot continue.",
+        earned_romantic_future: "Their shared plan grows from the risks and trust they already proved during the investigation.",
+      },
+    },
+  ];
+  assertEquals(validateArcSemanticObligations(sections, romanticSuspenseFixture as any), []);
+  const schema: any = buildSuggestionResponseSchema(
+    romanticSuspenseFixture.beats,
+    new Map(romanticSuspenseFixture.beats.map((beat) => [beat.id, { minSections: 1, rationale: "semantic test" }])),
+    [],
+    romanticSuspenseFixture.name,
+  );
+  const intimacySchema = schema.properties.beats.properties.intimacy.items;
+  assertEquals(intimacySchema.required.includes("arcObligationEvidence"), true);
+  assertEquals(intimacySchema.properties.arcObligationEvidence.required, ["relationship_deepens_under_pressure"]);
 });
 
 Deno.test("PR3 Final Image aftermath-only content is repaired into an actual resolution", async () => {
