@@ -390,17 +390,24 @@ export interface LLMProviderOptions {
 }
 
 /**
- * OpenAI reasoning-model families only accept their default temperature.
- * Keep this compatibility rule next to the provider contract so every
- * billable workflow builds the same safe request payload.
+ * Return whether the OpenAI Chat Completions request may carry temperature.
+ *
+ * GPT-5.4 mini is the verified GPT-5 exception: both its catalog ID and the
+ * dated provider model used in production accept the historical 0.7 setting.
+ * GPT-5/6 reasoning models keep their API default, while older non-reasoning
+ * models retain the existing temperature behavior.
  */
 export function supportsCustomTemperature(model: {
   provider?: string;
   provider_model?: string;
 } | string): boolean {
   const provider = typeof model === "string" ? "openai" : model.provider;
-  const providerModel = typeof model === "string" ? model : (model.provider_model ?? "");
-  return !(provider === "openai" && /^gpt-(?:5|6)(?:[.-]|$)/i.test(providerModel));
+  const providerModel = (typeof model === "string" ? model : (model.provider_model ?? ""))
+    .trim()
+    .toLowerCase();
+  if (provider !== "openai") return false;
+  if (/^gpt-5\.4-mini(?:-|$)/.test(providerModel)) return true;
+  return !/^gpt-(?:5|6)(?:[.-]|$)/.test(providerModel);
 }
 
 /**

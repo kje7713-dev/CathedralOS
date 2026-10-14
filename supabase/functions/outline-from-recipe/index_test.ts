@@ -86,6 +86,10 @@ import {
   markMeaningfulProgress,
   assertDurableUpdateSucceeded,
   suggestionLifecycleFailure,
+  parseOutlineJSON,
+  OutlineOutputExhaustedError,
+  OUTLINE_PROVIDER_TIMEOUT_MS,
+  SUPABASE_FREE_WALL_CLOCK_MS,
   MAX_SUGGESTION_LIFETIME_MS,
   MAX_SUGGESTION_NO_PROGRESS_MS,
   returnSuggestionRunToPending,
@@ -2670,6 +2674,30 @@ Deno.test("PR3 Final Image aftermath-only content is repaired into an actual res
   assertEquals(repaired.suggestions[0].terminalState?.includes("question is answered"), true);
 });
 
+Deno.test("semantic repair preserves provider output exhaustion", async () => {
+  const template = {
+    name: "Save the Cat!",
+    beats: [{ id: "final", role: "final_image", label: "Final Image" }],
+  };
+  const aftermathOnly: any = semanticSection(
+    "final",
+    "The Aftermath",
+    "The survivors mourn and remember what was lost.",
+    "aftermath",
+  );
+  await assertRejects(
+    () => repairRequiredStoryArcFunctions(
+      [aftermathOnly],
+      template as any,
+      async (...args: any[]) => {
+        await args[5]?.('{"section":', "length");
+        throw new Error("output exhaustion callback unexpectedly returned");
+      },
+    ),
+    OutlineOutputExhaustedError,
+  );
+});
+
 Deno.test("PR3 expansion schema and parser enforce beat-local semantic functions", () => {
   const template = { name: "Freytag's Pyramid", beats: [{ id: "fall", role: "falling_action", label: "Falling Action" }] };
   const schema = buildExpansionResponseSchema(arcRoleContract(template.beats[0], template.name)) as any;
@@ -3784,6 +3812,14 @@ function validatedWorkerBilling(actions: string[], responseFor: (action: string)
   };
 }
 
+function outputExhaustedBilling(actions: string[]) {
+  return async (request: any) => {
+    actions.push(request.action);
+    await request.onProviderSuccess?.({ content: '{"truncated":', finishReason: "length" });
+    throw new Error("output exhaustion callback unexpectedly returned");
+  };
+}
+
 Deno.test("enrichment semantic failure checkpoints one repair without repeating the first call", async () => {
   const fullBody = await executableWorkerBody();
   const body = { ...fullBody, storyMaterialEnrichment: undefined } as any;
@@ -4601,6 +4637,63 @@ Deno.test("two continuation workers race on one pending claim and produce one pr
   assertEquals(db.row.status, "completed");
 });
 
+Deno.test("interrupted worker recovery resumes outline stage without replaying settled stages", async () => {
+  const body = await executableWorkerBody();
+  const old = new Date(Date.now() - MAX_SUGGESTION_NO_PROGRESS_MS - 60_000).toISOString();
+  const expired = new Date(Date.now() - 60_000).toISOString();
+  const row: any = {
+    ...checkpointedWorkerRow(body),
+    status: "running",
+    lease_owner: "interrupted-worker",
+    lease_expires_at: expired,
+    attempt_count: 1,
+    created_at: new Date(Date.now() - 11 * 60_000).toISOString(),
+    updated_at: old,
+    diagnostics: { worker: { lastMeaningfulProgressAt: old } },
+  };
+  const db = new ExecutableRunDb(row);
+  db.attempts = [{
+    feature_run_id: row.id,
+    status: "started",
+    started_at: old,
+  }];
+  const actions: string[] = [];
+  const reclaimed = await reclaimExpiredSuggestionRun(db, { ...row });
+  assertEquals(reclaimed, true);
+  assertEquals(db.row.status, "pending");
+  assertEquals(db.row.planning_state.phase, "allocation_complete");
+  assertEquals(db.row.attempt_count, 2);
+  assertEquals(db.attempts[0].provider_error_code, "worker_interrupted");
+
+  let started = 0;
+  const recovered = await recoverPendingSuggestionRun(
+    db.row,
+    "user-worker",
+    "test-key",
+    "Bearer recovered",
+    async (runID, recoveredBody, userID, openaiKey, attemptCount, authHeader) => {
+      started++;
+      await runSuggestionJob(runID, recoveredBody, userID, openaiKey, attemptCount, authHeader, {
+        db,
+        model: { provider_model: "fixture-model" },
+        provider: {},
+        creditStore: {},
+        billableLLM: fakeWorkerBilling(actions) as any,
+        scheduleContinuation: async () => {},
+      });
+    },
+  );
+
+  assertEquals(recovered, true);
+  assertEquals(started, 1);
+  assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.planning_state.phase, "completed");
+  assertEquals(db.row.suggestions.length, 2);
+  assertEquals(db.row.lease_owner, null);
+  assertEquals(db.row.lease_expires_at, null);
+});
+
 Deno.test("stale reclaim is a compare-and-set race and only the winner cleans orphan attempts", async () => {
   const expired = new Date(Date.now() - 1000).toISOString();
   const db = new ExecutableRunDb({ id: "run-stale", status: "running", lease_expires_at: expired, attempt_count: 1 });
@@ -4744,13 +4837,116 @@ Deno.test("meaningful progress advances only at durable checkpoints", () => {
   assertEquals((progressed.worker as Record<string, unknown>).sliceCount, 4);
 });
 
-Deno.test("suggestion lifecycle bounds distinguish elapsed lifetime and no progress", () => {
+Deno.test("suggestion lifecycle only terminalizes the absolute lifetime", () => {
   const now = Date.now();
   assertEquals(suggestionLifecycleFailure({ created_at: new Date(now - MAX_SUGGESTION_LIFETIME_MS - 1).toISOString() }, now), "worker_lifetime_exceeded");
+  // A delayed poll after a durable checkpoint remains recoverable; no-progress
+  // is diagnostic evidence, not proof that the run is unrecoverable.
   assertEquals(suggestionLifecycleFailure({
     created_at: new Date(now - 1000).toISOString(),
     updated_at: new Date(now - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString(),
-  }, now), "worker_no_progress");
+    diagnostics: { worker: { lastMeaningfulProgressAt: new Date(now - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString() } },
+  }, now), null);
+});
+
+Deno.test("outline provider deadline leaves margin before Supabase Free wall clock", () => {
+  assertEquals(OUTLINE_PROVIDER_TIMEOUT_MS < SUPABASE_FREE_WALL_CLOCK_MS, true);
+  assertEquals(SUPABASE_FREE_WALL_CLOCK_MS - OUTLINE_PROVIDER_TIMEOUT_MS, 30_000);
+});
+
+Deno.test("length-truncated outline JSON is classified as output exhaustion", () => {
+  assertThrows(
+    () => parseOutlineJSON('{"suggestions":[{"title":"unfinished', "length"),
+    OutlineOutputExhaustedError,
+  );
+  assertEquals(parseOutlineJSON('{"ok":true}', "stop"), { ok: true });
+});
+
+Deno.test("provider output exhaustion reaches terminal run state for each production stage", async () => {
+  const fullBody = await executableWorkerBody();
+  const cases = [
+    {
+      name: "enrichment",
+      body: { ...fullBody, storyMaterialEnrichment: undefined },
+      row: {
+        ...checkpointedWorkerRow({ ...fullBody, storyMaterialEnrichment: undefined }),
+        story_material: null,
+        planning_state: { version: 2, phase: "start" },
+      },
+      action: "story-material-enrichment",
+      failureStage: "enrichment_generation",
+    },
+    {
+      name: "allocation",
+      body: fullBody,
+      row: {
+        ...checkpointedWorkerRow(fullBody),
+        planning_state: { version: 2, phase: "enrichment_complete", nextAction: "outline-plan" },
+      },
+      action: "outline-plan",
+      failureStage: "allocation_generation",
+    },
+    {
+      name: "outline",
+      body: fullBody,
+      row: checkpointedWorkerRow(fullBody),
+      action: "outline-suggestions",
+      failureStage: "outline_generation",
+    },
+    {
+      name: "obligation repair",
+      body: fullBody,
+      row: {
+        ...checkpointedWorkerRow(fullBody),
+        suggestions: [],
+        planning_state: { version: 2, phase: "obligation_repair_pending", nextAction: "obligation-repair", allocationEntries: [
+          ["beat-1", { minSections: 1, rationale: "fixture" }],
+          ["beat-2", { minSections: 1, rationale: "fixture" }],
+        ] },
+      },
+      action: "outline-obligation-repair",
+      failureStage: "obligation_repair_generation",
+    },
+  ];
+
+  for (const testCase of cases) {
+    const db = new ExecutableRunDb({ ...testCase.row, request_json: testCase.body });
+    const actions: string[] = [];
+    await runSuggestionJob(
+      "run-worker-fixture",
+      testCase.body as any,
+      "user-worker",
+      "test-key",
+      0,
+      "Bearer worker-token",
+      {
+        db,
+        model: { provider_model: "fixture-model" },
+        provider: {},
+        creditStore: {},
+        billableLLM: outputExhaustedBilling(actions) as any,
+        scheduleContinuation: async () => {},
+      },
+    );
+    assertEquals(actions, [testCase.action], testCase.name);
+    assertEquals(db.row.status, "failed", testCase.name);
+    assertEquals(db.row.error_code, "provider_output_exhausted", testCase.name);
+    assertEquals(db.row.diagnostics.errorCode, "provider_output_exhausted", testCase.name);
+    assertEquals(db.row.diagnostics.failureStage, testCase.failureStage, testCase.name);
+    assertEquals(db.row.lease_owner, null, testCase.name);
+    assertEquals(db.row.lease_expires_at, null, testCase.name);
+  }
+});
+
+Deno.test("output exhaustion is not wrapped by expansion validation", () => {
+  assertThrows(
+    () => parseExpansionResponse('{"suggestions":', new Set(["beat-1"]), [], [], undefined, "length"),
+    OutlineOutputExhaustedError,
+  );
+  assertThrows(
+    () => parseExpansionResponse('{"suggestions":', new Set(["beat-1"]), []),
+    ExpansionValidationError,
+  );
 });
 
 Deno.test("active lease is never terminalized by an old lifecycle timestamp", async () => {
@@ -4778,10 +4974,10 @@ Deno.test("active lease is never terminalized by an old lifecycle timestamp", as
   assertEquals(db.claims, 0);
 });
 
-Deno.test("pending jobs with no durable progress reach a fenced terminal failure", async () => {
+Deno.test("pending jobs with delayed progress remain recoverable", async () => {
   const old = new Date(Date.now() - MAX_SUGGESTION_NO_PROGRESS_MS - 1).toISOString();
   const db = new ExecutableRunDb({
-    id: "run-pending-stuck",
+    id: "run-pending-delayed",
     status: "pending",
     lease_owner: null,
     lease_expires_at: null,
@@ -4799,12 +4995,9 @@ Deno.test("pending jobs with no durable progress reach a fenced terminal failure
     updated_at: db.row.updated_at,
     diagnostics: db.row.diagnostics,
   });
-  assertEquals(result, true);
-  assertEquals(db.row.status, "failed");
-  assertEquals(db.row.error_code, "worker_no_progress");
-  assertEquals(db.row.lease_owner, null);
-  assertEquals(db.row.lease_expires_at, null);
-  assertEquals(db.row.error.includes("Billing reconciliation is unresolved") || db.row.error.includes("No settled customer charge"), true);
+  assertEquals(result, false);
+  assertEquals(db.row.status, "pending");
+  assertEquals(db.claims, 0);
 });
 
 Deno.test("active lease recovery is a no-op", async () => {

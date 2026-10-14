@@ -984,10 +984,26 @@ export function buildEnrichmentPrompt(
   };
 }
 
+export class OutlineOutputExhaustedError extends Error {
+  readonly code = "provider_output_exhausted";
+
+  constructor() {
+    super("outline provider output exhausted the configured completion limit before a complete JSON response was returned");
+    this.name = "OutlineOutputExhaustedError";
+  }
+}
+
+/** Parse provider JSON without allowing a length-truncated response to pass. */
+export function parseOutlineJSON<T = unknown>(content: string, finishReason?: string): T {
+  if (finishReason === "length") throw new OutlineOutputExhaustedError();
+  return JSON.parse(content) as T;
+}
+
 interface SuggestionLLMResult {
   content: string;
   creditCostCharged: number;
   remainingCredits: number;
+  finishReason?: string;
 }
 
 type SuggestionLLMCall = (
@@ -996,7 +1012,7 @@ type SuggestionLLMCall = (
   maxOutputTokens: number,
   responseFormat: unknown,
   action: string,
-  validateResponse?: (content: string) => unknown | Promise<unknown>,
+  validateResponse?: (content: string, finishReason?: string) => unknown | Promise<unknown>,
 ) => Promise<SuggestionLLMResult>;
 
 interface Suggestion {
@@ -1963,12 +1979,12 @@ export async function repairRequiredRecipeObligations(current: Suggestion[], req
   if (!before.missingRequired.length) return { suggestions: current, missing: [] };
   const prompt = buildObligationRepairPrompt(req, current, req.existingSections ?? [], before.missingRequired);
   const responseSchema = buildObligationRepairResponseSchema(new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate);
-  const raw = await billableCall(prompt.system, prompt.user, 8000, { type: "json_schema", json_schema: { name: "outline_required_obligation_repair", strict: true, schema: responseSchema } }, "outline-obligation-repair", (content) => {
-    const repaired = mergeObligationRepairOperations(current, JSON.parse(content), new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate, allocation);
+  const raw = await billableCall(prompt.system, prompt.user, 8000, { type: "json_schema", json_schema: { name: "outline_required_obligation_repair", strict: true, schema: responseSchema } }, "outline-obligation-repair", (content, finishReason) => {
+    const repaired = mergeObligationRepairOperations(current, parseOutlineJSON(content, finishReason), new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate, allocation);
     if (repaired.length > MAX_PLANNED_SECTIONS) throw new RecipeObligationValidationError("missing_recipe_obligations: repair exceeded section safety cap");
     return content;
   });
-  const repaired = mergeObligationRepairOperations(current, JSON.parse(raw.content), new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate, allocation);
+  const repaired = mergeObligationRepairOperations(current, parseOutlineJSON(raw.content, raw.finishReason), new Set(req.arcTemplate.beats.map((beat) => beat.id)), obligations, req.arcTemplate, allocation);
   return { suggestions: repaired, missing: obligationCoverage([...(req.existingSections ?? []), ...repaired], obligations).missingRequired };
 }
 
@@ -2324,10 +2340,12 @@ export function parseExpansionResponse(
   original: Suggestion[],
   obligations: RecipeObligation[] = [],
   template?: Pick<ArcTemplateBlob, "name" | "beats">,
+  finishReason?: string,
 ): ExpansionAddition[] {
   try {
-    return validateExpansionAdditions(JSON.parse(content), beatIds, original, obligations, template);
+    return validateExpansionAdditions(parseOutlineJSON(content, finishReason), beatIds, original, obligations, template);
   } catch (error) {
+    if (error instanceof OutlineOutputExhaustedError) throw error;
     throw new ExpansionValidationError(error instanceof Error ? error.message : String(error));
   }
 }
@@ -2568,11 +2586,13 @@ export function mergeRepairedSuggestions(
 export function parseAndValidateAllocation(
   raw: string,
   beats: Array<{ id: string }>,
+  finishReason?: string,
 ): Map<string, Allocation> {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
-  } catch {
+    parsed = parseOutlineJSON(raw, finishReason);
+  } catch (error) {
+    if (error instanceof OutlineOutputExhaustedError) throw error;
     throw new Error("allocation planner returned invalid JSON");
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -2704,7 +2724,7 @@ export async function planSectionAllocation(
         2048,
         responseFormat,
         correction ? "outline-plan-retry" : "outline-plan",
-        (content) => parseAndValidateAllocation(content, req.arcTemplate.beats),
+        (content, finishReason) => parseAndValidateAllocation(content, req.arcTemplate.beats, finishReason),
       )
       : {
         content: await callOpenAI(callSystem, user, apiKey, {
@@ -2729,6 +2749,7 @@ export async function planSectionAllocation(
       );
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
+      if (error instanceof OutlineOutputExhaustedError) throw error;
       if (isProviderBillingUnavailable(error)) throw error;
       if (!(error instanceof Error)) throw error;
       firstError = error;
@@ -3186,8 +3207,8 @@ export async function repairRequiredStoryArcFunctions(
           4000,
           { type: "json_schema", json_schema: { name: "outline_required_function_repair", strict: true, schema: REQUIRED_FUNCTION_REPAIR_SCHEMA } },
           `outline-semantic-repair-${beat.id}-${required}`,
-          (content) => {
-            const parsed = JSON.parse(content);
+          (content, finishReason) => {
+            const parsed = parseOutlineJSON<{ section?: Record<string, unknown> }>(content, finishReason);
             if (!parsed?.section || typeof parsed.section !== "object") throw new Error("semantic repair response missing section");
             const candidate = {
               ...parsed.section,
@@ -3199,14 +3220,15 @@ export async function repairRequiredStoryArcFunctions(
             return validated.suggestions[0];
           },
         );
-        const parsed = JSON.parse(raw.content);
+        const parsed = parseOutlineJSON<{ section?: Record<string, unknown> }>(raw.content, raw.finishReason);
         const candidate = {
           ...parsed.section,
           storyArcBeatID: beat.id,
           recipeRequirementIDs: target.recipeRequirementIDs ?? [],
         };
         repairedSection = validateSuggestions({ suggestions: [candidate] }, new Set([beat.id]), undefined, obligations, { ...template, beats: [beat] }).suggestions[0];
-      } catch {
+      } catch (error) {
+        if (error instanceof OutlineOutputExhaustedError) throw error;
         repairedSection = undefined;
       }
       if (!repairedSection) {
@@ -3447,11 +3469,11 @@ export function isRetryableStoryMaterialFailure(run: {
       run.error === "story material enrichment contains a duplicate or missing item id");
 }
 
-// Supabase Edge Functions can be terminated by the wall-clock limit before a
-// long provider request returns. Keep the provider deadline below that limit
-// so the worker can persist a terminal provider_timeout instead of being
-// killed while its run remains `running`.
-const OUTLINE_PROVIDER_TIMEOUT_MS = 150_000;
+// Supabase Free-plan Edge Functions have a 150s wall-clock limit. Leave
+// margin for request setup, billing settlement, and the durable checkpoint;
+// a 150s provider deadline can be killed by the platform before it throws.
+export const SUPABASE_FREE_WALL_CLOCK_MS = 150_000;
+export const OUTLINE_PROVIDER_TIMEOUT_MS = 120_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
 export const MAX_SUGGESTION_ATTEMPTS = 5;
 export const MAX_SUGGESTION_LIFETIME_MS = 30 * 60 * 1000;
@@ -3635,13 +3657,12 @@ export function suggestionLifecycleFailure(run: {
   created_at?: string | null;
   updated_at?: string | null;
   diagnostics?: Record<string, unknown> | null;
-}, now = Date.now()): "worker_lifetime_exceeded" | "worker_no_progress" | null {
+}, now = Date.now()): "worker_lifetime_exceeded" | null {
+  // A delayed poll is not proof that a durable checkpoint is unrecoverable.
+  // Lease expiry and bounded attempt recovery already fence/restart workers;
+  // only the absolute lifetime is allowed to terminalize an otherwise
+  // resumable run. Keep lastMeaningfulProgressAt as observability data.
   if (run.created_at && now - new Date(run.created_at).getTime() > MAX_SUGGESTION_LIFETIME_MS) return "worker_lifetime_exceeded";
-  const worker = run.diagnostics?.worker;
-  const progressAt = worker && typeof worker === "object" && typeof (worker as Record<string, unknown>).lastMeaningfulProgressAt === "string"
-    ? String((worker as Record<string, unknown>).lastMeaningfulProgressAt)
-    : run.updated_at;
-  if (progressAt && now - new Date(progressAt).getTime() > MAX_SUGGESTION_NO_PROGRESS_MS) return "worker_no_progress";
   return null;
 }
 
@@ -4028,7 +4049,7 @@ export async function runSuggestionJob(
           promptCacheKeyHash,
         },
         onProviderSuccess: async (providerResult) => {
-          if (validateResponse) await validateResponse(providerResult.content);
+          if (validateResponse) await validateResponse(providerResult.content, providerResult.finishReason);
           return providerResult.content;
         },
         }, { adminClient: db, provider, creditStore });
@@ -4040,6 +4061,7 @@ export async function runSuggestionJob(
         content: result.featureResult,
         creditCostCharged: result.charged ? result.actualCharge : 0,
         remainingCredits: result.remainingCredits,
+        finishReason: result.providerResult?.finishReason,
       };
     };
 
@@ -4067,8 +4089,8 @@ export async function runSuggestionJob(
             16000,
             { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: buildExpansionResponseSchema(beat ? arcRoleContract(body.arcTemplate.beats.find((candidate) => candidate.id === beat.beatID)!, body.arcTemplate.name) : undefined) } },
             `outline-expansion-${context.round}-${beat?.beatID ?? "global"}`,
-            (content) => {
-              const additions = parseExpansionResponse(content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate);
+            (content, finishReason) => {
+              const additions = parseExpansionResponse(content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, finishReason);
               const merged = mergeExpansionAdditions(current, additions);
               if (merged.length > MAX_PLANNED_SECTIONS) {
                 throw new ExpansionValidationError(
@@ -4078,7 +4100,7 @@ export async function runSuggestionJob(
               return additions;
             },
           );
-          return parseExpansionResponse(expandedRaw.content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate);
+          return parseExpansionResponse(expandedRaw.content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, expandedRaw.finishReason);
         },
         async (_roundDiagnostic, allDiagnostics, current) => {
           latestValidSuggestions = current;
@@ -4216,6 +4238,7 @@ export async function runSuggestionJob(
       };
     }
     if (planningState.nextAction === "obligation-repair") {
+      diagnostics = { ...diagnostics, stage: "obligation_repair_generation" };
       const repairAllocation = Array.isArray(planningState.allocationEntries)
         ? new Map<string, Allocation>(planningState.allocationEntries as Array<[string, Allocation]>)
         : undefined;
@@ -4323,6 +4346,12 @@ export async function runSuggestionJob(
     }
     if (!storyMaterial) {
       const generateEnrichment = async (action: string, prior?: StoryMaterialEnrichment, repairReason?: string) => {
+        diagnostics = {
+          ...diagnostics,
+          stage: action === "story-material-enrichment-repair"
+            ? "enrichment_repair_generation"
+            : "enrichment_generation",
+        };
         const enrichmentPrompt = buildEnrichmentPrompt(body, prior, repairReason);
         let parsedMaterial: StoryMaterialEnrichment | null = null;
         const enrichmentResult = await billableCall(
@@ -4331,10 +4360,10 @@ export async function runSuggestionJob(
           12000,
           { type: "json_schema", json_schema: { name: "story_material_enrichment", strict: true, schema: STORY_MATERIAL_ENRICHMENT_SCHEMA } },
           action,
-          (content) => {
+          (content, finishReason) => {
             try {
               const normalizedProviderMaterial = normalizeProviderStoryMaterialItemIDs(
-                downgradeUnverifiedProviderRecipeReferences(JSON.parse(content), body.recipe),
+                downgradeUnverifiedProviderRecipeReferences(parseOutlineJSON(content, finishReason), body.recipe),
               );
               parsedMaterial = validateStoryMaterialEnrichment(normalizedProviderMaterial, { allowMissingProvenance: true, recipe: body.recipe });
               // Preserve canonical authored material even when the provider
@@ -4346,7 +4375,7 @@ export async function runSuggestionJob(
                 requestedStoryMaterialFormat(body),
               );
             } catch (error) {
-              if (error instanceof StoryMaterialSufficiencyError) throw error;
+              if (error instanceof OutlineOutputExhaustedError || error instanceof StoryMaterialSufficiencyError) throw error;
               throw new StoryMaterialValidationError(error instanceof Error ? error.message : String(error));
             }
             const sufficiency = storyMaterialSufficiency(parsedMaterial, body.recipe, requestedStoryMaterialFormat(body));
@@ -4354,7 +4383,10 @@ export async function runSuggestionJob(
             return parsedMaterial;
           },
         );
-        const material = parsedMaterial ?? validateStoryMaterialEnrichment(JSON.parse(enrichmentResult.content), { allowMissingProvenance: true, recipe: body.recipe });
+        const material = parsedMaterial ?? validateStoryMaterialEnrichment(
+          parseOutlineJSON(enrichmentResult.content, enrichmentResult.finishReason),
+          { allowMissingProvenance: true, recipe: body.recipe },
+        );
         return { material: attachRecipeProvenance(material, provenance), result: enrichmentResult };
       };
       let generated: { material: StoryMaterialEnrichment; result: SuggestionLLMResult };
@@ -4465,6 +4497,7 @@ export async function runSuggestionJob(
       allocation = new Map<string, Allocation>(persistedAllocation);
     } else {
       const retryOnly = planningState.nextAction === "outline-plan-retry";
+      diagnostics = { ...diagnostics, stage: "allocation_generation" };
       try {
         allocation = await planSectionAllocation(
           body,
@@ -4527,8 +4560,8 @@ export async function runSuggestionJob(
         16000,
         responseFormat,
         "outline-suggestions",
-        (content) => {
-          const flattened = flattenSuggestionResponse(JSON.parse(content), body.arcTemplate.beats);
+        (content, finishReason) => {
+          const flattened = flattenSuggestionResponse(parseOutlineJSON(content, finishReason), body.arcTemplate.beats);
           diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
           const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
           const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []);
@@ -4538,7 +4571,10 @@ export async function runSuggestionJob(
           return validated;
         },
       );
-      const flattened = flattenSuggestionResponse(JSON.parse(rawResponse.content), body.arcTemplate.beats);
+      const flattened = flattenSuggestionResponse(
+        parseOutlineJSON(rawResponse.content, rawResponse.finishReason),
+        body.arcTemplate.beats,
+      );
       const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []), warnings: validated.warnings };
       diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions) };
@@ -4617,11 +4653,15 @@ export async function runSuggestionJob(
       : null;
     const configurationFailure = providerErrorCode === "invalid_request" ||
       providerErrorCode === "provider_rejected";
+    const outputExhausted = err instanceof OutlineOutputExhaustedError ||
+      providerErrorCode === "provider_output_exhausted";
     const providerRateLimited = providerErrorCode === "provider_rate_limited";
     const providerOutage = providerErrorCode === "provider_overloaded" ||
       providerErrorCode === "provider_timeout";
     const errorCode = providerBillingUnavailable
       ? "provider_billing_unavailable"
+      : outputExhausted
+      ? "provider_output_exhausted"
       : configurationFailure
       ? "unsupported_model_configuration"
       : providerRateLimited
@@ -4645,6 +4685,8 @@ export async function runSuggestionJob(
     const message = err instanceof Error ? err.message : String(err);
     const publicErrorBase = providerBillingUnavailable
       ? "Temporarily unavailable — try again later."
+      : outputExhausted
+      ? "The outline provider exhausted its completion limit before returning complete JSON; this run was billed for the provider attempt and requires a separate retry or output-budget change."
       : configurationFailure
       ? "This selected model does not support the outline planner configuration."
       : providerRateLimited
@@ -4669,6 +4711,7 @@ export async function runSuggestionJob(
       billingReconciliation: settledCredits === null ? "unresolved" : settledCredits > 0 ? "settled" : "no_settled_charge",
       settledCredits,
       stage: "failed",
+      failureStage: diagnostics.stage,
       runID: runId,
       selectedModel: providerModelForAlert,
       errorCode,
