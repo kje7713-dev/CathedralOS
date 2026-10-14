@@ -1077,9 +1077,16 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         .font(CathedralTheme.Typography.caption(12))
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 case "generating", "starting", "pending", "running":
-                    Text("Generating outline suggestions…")
-                        .font(CathedralTheme.Typography.caption(12))
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(suggestionRunStatusText(run))
+                            .font(CathedralTheme.Typography.caption(12))
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        if let attempt = run.serverAttemptCount, attempt > 0 {
+                            Text("Server recovery attempt \(attempt) · checkpoints are preserved")
+                                .font(CathedralTheme.Typography.caption(11))
+                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                        }
+                    }
                 default:
                     EmptyView()
                 }
@@ -1087,6 +1094,18 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             Text("Your outline defines the structure of your novel. Run your sections to turn the plan into written chapters and scenes.")
                 .font(CathedralTheme.Typography.body(13))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
+        }
+    }
+
+    private func suggestionRunStatusText(_ run: SuggestionRunMetadata) -> String {
+        switch run.serverStage {
+        case "starting": return "Starting outline planning on the server…"
+        case "story_material_enrichment", "story_material_ready": return "Enriching the story material on the server…"
+        case "allocation", "allocation_complete": return "Allocating sections across the Story Arc…"
+        case "outline_generation", "outline_complete": return "Generating and validating outline sections…"
+        case "expansion_generation", "expansion_checkpoint", "expansion_beat_checkpoint": return "Expanding the outline and saving checkpoints…"
+        case "reconnecting": return "Reconnecting to the server…"
+        default: return "Generating outline suggestions on the server…"
         }
     }
 

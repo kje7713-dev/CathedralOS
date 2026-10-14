@@ -3650,6 +3650,8 @@ export function suggestionRunResponse(run: any): Record<string, unknown> {
     creditCostCharged: billingUnresolved ? null : run.credit_cost_charged,
     remainingCredits: billingUnresolved ? null : run.remaining_credits,
     sourceRecipe: run.request_json?.recipe ?? null,
+    attemptCount: run.attempt_count ?? 0,
+    leaseExpiresAt: run.lease_expires_at,
   };
 }
 
@@ -3771,7 +3773,13 @@ async function scheduleSuggestionContinuation(body: OutlineFromRecipeRequest, au
   const url = Deno.env.get("SUPABASE_URL") ?? "";
   const response = await fetch(`${url}/functions/v1/outline-from-recipe`, {
     method: "POST",
-    headers: { Authorization: authHeader, "Content-Type": "application/json" },
+    headers: {
+      Authorization: authHeader,
+      // Watchdog continuations use the operator secret in both headers.
+      // User-authenticated continuations still use the normal JWT path.
+      apikey: authHeader.replace(/^Bearer\s+/i, ""),
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify(body),
   });
   const responseText = await response.text();
@@ -4774,12 +4782,71 @@ export async function runSuggestionJob(
   }
 }
 
+function readSupabaseSecretKey(raw: string | undefined): string {
+  if (!raw) return "";
+  try {
+    const value = (JSON.parse(raw) as Record<string, unknown>).default;
+    return typeof value === "string" ? value.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function isWatchdogRequest(req: Request): boolean {
+  const configured = readSupabaseSecretKey(Deno.env.get("SUPABASE_SECRET_KEYS")) ||
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  return Boolean(configured && req.headers.get("apikey") === configured);
+}
+
+async function handleWatchdogRequest(req: Request): Promise<Response> {
+  let body: Record<string, unknown>;
+  try { body = await req.json(); } catch { return errorResponse("invalid_request", "Body must be JSON", 400); }
+  const db = admin();
+  const runID = typeof body.watchdog_run_id === "string" ? body.watchdog_run_id : null;
+  let run: any = null;
+  if (runID) {
+    const result = await db.from("outline_suggestion_runs")
+      .select("id, user_id, status, request_json, attempt_count, lease_expires_at, credit_cost_charged, created_at, updated_at, diagnostics")
+      .eq("id", runID).maybeSingle();
+    if (result.error) return errorResponse("db_error", "Could not read watchdog run", 500);
+    run = result.data;
+  } else if (typeof body.idempotencyKey === "string") {
+    const result = await db.from("outline_suggestion_runs")
+      .select("id, user_id, status, request_json, attempt_count, lease_expires_at, credit_cost_charged, created_at, updated_at, diagnostics")
+      .eq("idempotency_key", body.idempotencyKey).maybeSingle();
+    if (result.error) return errorResponse("db_error", "Could not read continuation run", 500);
+    run = result.data;
+  } else {
+    return errorResponse("invalid_request", "watchdog_run_id or idempotencyKey required", 400);
+  }
+  if (!run) return errorResponse("not_found", "suggestion run not found", 404);
+  if (run.status === "running") {
+    const expired = run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
+    if (!expired) return corsResponse(JSON.stringify({ run_id: run.id, status: run.status }), { status: 200 });
+    if (!await reclaimExpiredSuggestionRun(db, run)) {
+      return corsResponse(JSON.stringify({ run_id: run.id, status: run.status }), { status: 200 });
+    }
+  }
+  if (run.status !== "pending") return corsResponse(JSON.stringify(suggestionRunResponse(run)), { status: 200 });
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!openaiKey) return errorResponse("not_configured", "OPENAI_API_KEY missing", 500);
+  const recoveredBody = await recoverPersistedPlanningBody(db, run);
+  const secret = readSupabaseSecretKey(Deno.env.get("SUPABASE_SECRET_KEYS")) || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  const authHeader = `Bearer ${secret}`;
+  // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+  EdgeRuntime.waitUntil(runSuggestionJob(run.id, recoveredBody, run.user_id, openaiKey, run.attempt_count ?? 0, authHeader));
+  return corsResponse(JSON.stringify({ run_id: run.id, status: "pending", watchdog: true }), { status: 202 });
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return corsResponse("", { status: 204 });
   if (req.method !== "GET" && req.method !== "POST") {
     return errorResponse("method_not_allowed", "GET or POST required", 405);
   }
   const authHeader = req.headers.get("Authorization");
+  if (req.method === "POST" && isWatchdogRequest(req)) {
+    return await handleWatchdogRequest(req);
+  }
   if (!authHeader) {
     return errorResponse(
       "not_authenticated",

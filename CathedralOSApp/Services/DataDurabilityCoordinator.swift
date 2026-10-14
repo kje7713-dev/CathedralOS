@@ -61,6 +61,11 @@ struct SuggestionRunMetadata: Codable {
     var status: String
     var createdAt: Date
     var updatedAt: Date
+    /// Last authoritative backend checkpoint observed by the client. These
+    /// fields are optional so metadata written by older app versions decodes.
+    var serverStage: String?
+    var serverAttemptCount: Int?
+    var serverUpdatedAt: String?
 
     var isActive: Bool {
         status == "starting" || status == "pending" || status == "running" ||
@@ -914,7 +919,10 @@ final class DataDurabilityCoordinator: ObservableObject {
             runID: nil,
             status: "starting",
             createdAt: Date(),
-            updatedAt: Date()
+            updatedAt: Date(),
+            serverStage: nil,
+            serverAttemptCount: nil,
+            serverUpdatedAt: nil
         )
         suggestionRunFailure = nil
         activeSuggestionRuns[projectID] = metadata
@@ -1131,6 +1139,11 @@ final class DataDurabilityCoordinator: ObservableObject {
                 reconnectMisses = 0
                 metadata.status = job.status
                 metadata.updatedAt = Date()
+                if let diagnostics = job.diagnostics, case .string(let stage) = diagnostics["stage"] {
+                    metadata.serverStage = stage
+                }
+                metadata.serverAttemptCount = job.attemptCount
+                metadata.serverUpdatedAt = job.leaseExpiresAt
                 if metadata.runID == nil { metadata.runID = job.runID }
                 activeSuggestionRuns[metadata.projectID] = metadata
                 persistSuggestionRun(metadata)
