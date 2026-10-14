@@ -12,6 +12,8 @@ private func formatRunCredits(_ value: Double) -> String {
 enum OutlineSectionsModelCatalog {
     static let defaultID = "gpt-6.1-sol"
     static let preferenceKey = "cathedralos.outline.selectedModelID"
+    static let reasoningPreferenceKey = "cathedralos.outline.selectedReasoningEffort"
+    static let reasoningEfforts = ["low", "medium", "high"]
 
     struct Option: Identifiable, Equatable {
         let id: String
@@ -250,6 +252,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var showingOutlineModelSheet = false
     @State private var outlinePlanningRequest: OutlineSuggestionRequest?
     @AppStorage(OutlineSectionsModelCatalog.preferenceKey) private var preferredOutlineModelID = OutlineSectionsModelCatalog.defaultID
+    @AppStorage(OutlineSectionsModelCatalog.reasoningPreferenceKey) private var preferredOutlineReasoningEffort = "low"
     @State private var acceptingSectionID: UUID?
     @State private var publicSharingStatuses: [UUID: PublicSharingEligibilityStatus] = [:]
     @State private var embedError: String?
@@ -350,6 +353,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             let recoveryMetadata = suggestionRunMetadataForRecovery()
             let currentKey = currentSuggestionIdempotencyKey(
                 modelID: recoveryMetadata?.request.modelID,
+                reasoningEffort: recoveryMetadata?.request.reasoningEffort,
                 usePreferredModel: recoveryMetadata == nil
             )
             // PR 6: pass canonical stableLineageID so resume-state survives
@@ -450,6 +454,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             if let request = outlinePlanningRequest {
                 OutlinePlanningModelSheet(
                     initialModelID: preferredOutlineModelID,
+                    initialReasoningEffort: preferredOutlineReasoningEffort,
                     request: request,
                     onConfirm: confirmOutlinePlanningModel,
                     onCancel: cancelOutlinePlanningModel
@@ -688,6 +693,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
            completed.projectID == project.id,
            let currentKey = currentSuggestionIdempotencyKey(
                modelID: completed.modelID,
+               reasoningEffort: completed.reasoningEffort,
                usePreferredModel: false
            ),
            currentKey == completed.idempotencyKey,
@@ -734,6 +740,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 
     private func currentSuggestionIdempotencyKey(
         modelID: String? = nil,
+        reasoningEffort: String? = nil,
         usePreferredModel: Bool = true
     ) -> String? {
         guard let recipe = recipeSelection?.selectedRecipe,
@@ -759,7 +766,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             existingSections: currentOutline?.sections ?? [],
             material: material,
             requestGenerationID: currentSuggestionGenerationID(),
-            modelID: usePreferredModel ? (modelID ?? preferredOutlineModelID) : modelID
+            modelID: usePreferredModel ? (modelID ?? preferredOutlineModelID) : modelID,
+            reasoningEffort: reasoningEffort ?? (usePreferredModel && (modelID ?? preferredOutlineModelID) == OutlineSectionsModelCatalog.defaultID ? preferredOutlineReasoningEffort : nil)
         ).idempotencyKey
     }
 
@@ -815,7 +823,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 existingSections: currentOutline?.sections ?? [],
                 material: material,
                 requestGenerationID: currentSuggestionGenerationID(),
-                modelID: suggestionRunMetadataForRecovery()?.request.modelID
+                modelID: suggestionRunMetadataForRecovery()?.request.modelID,
+                reasoningEffort: suggestionRunMetadataForRecovery()?.request.reasoningEffort
             )
             // 3 + 4. recover only a completed run whose idempotency key
             //    matches that exact request. `findRun` is best-effort and
@@ -852,18 +861,25 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 
     private func prepareOutlinePlanning() {
         do {
-            outlinePlanningRequest = try makePlanningRequest(modelID: preferredOutlineModelID)
+            outlinePlanningRequest = try makePlanningRequest(
+                modelID: preferredOutlineModelID,
+                reasoningEffort: preferredOutlineModelID == OutlineSectionsModelCatalog.defaultID ? preferredOutlineReasoningEffort : nil
+            )
             showingOutlineModelSheet = true
         } catch {
             suggestionsError = error.localizedDescription
         }
     }
 
-    private func confirmOutlinePlanningModel(_ modelID: String) {
+    private func confirmOutlinePlanningModel(_ modelID: String, _ reasoningEffort: String?) {
         preferredOutlineModelID = modelID
+        if modelID == OutlineSectionsModelCatalog.defaultID, let reasoningEffort,
+           OutlineSectionsModelCatalog.reasoningEfforts.contains(reasoningEffort) {
+            preferredOutlineReasoningEffort = reasoningEffort
+        }
         showingOutlineModelSheet = false
         outlinePlanningRequest = nil
-        Task { await loadSuggestions(modelID: modelID) }
+        Task { await loadSuggestions(modelID: modelID, reasoningEffort: modelID == OutlineSectionsModelCatalog.defaultID ? reasoningEffort : nil) }
     }
 
     private func cancelOutlinePlanningModel() {
@@ -872,7 +888,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     @MainActor
-    private func makePlanningRequest(modelID: String) throws -> OutlineSuggestionRequest {
+    private func makePlanningRequest(modelID: String, reasoningEffort: String? = nil) throws -> OutlineSuggestionRequest {
         guard let recipe = recipeSelection?.selectedRecipe,
               let arc = project.storyArcs.first,
               let templateID = arc.templateID,
@@ -883,11 +899,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         return try OutlineSuggestionService().makeRequest(
             recipe: recipe, arc: arc, arcTemplate: template, outline: currentOutline,
             requestedFormat: "novel", existingSections: currentOutline?.sections ?? [],
-            material: material, requestGenerationID: currentSuggestionGenerationID(), modelID: modelID
+            material: material, requestGenerationID: currentSuggestionGenerationID(), modelID: modelID, reasoningEffort: reasoningEffort
         )
     }
 
-    private func loadSuggestions(modelID: String) async {
+    private func loadSuggestions(modelID: String, reasoningEffort: String? = nil) async {
         // Never replace a live server run just because the local view appears stalled.
         // The durable coordinator must receive an authoritative terminal status first.
         guard !suggestionRunActive else { return }
@@ -930,7 +946,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 existingSections: currentOutline?.sections ?? [],
                 material: material,
                 requestGenerationID: currentSuggestionGenerationID(),
-                modelID: modelID
+                modelID: modelID,
+                reasoningEffort: reasoningEffort
             )
             suggestionsError = nil
             suggestionsNotice = nil
@@ -1355,13 +1372,15 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 /// server says a selected model is not currently eligible.
 struct OutlinePlanningModelSheet: View {
     let initialModelID: String
+    let initialReasoningEffort: String
     let request: OutlineSuggestionRequest
-    let onConfirm: (String) -> Void
+    let onConfirm: (String, String?) -> Void
     let onCancel: () -> Void
 
     private let generationModelService: any GenerationModelServiceProtocol = BackendGenerationModelService()
     @State private var catalogModels: [GenerationModelOption] = []
     @State private var selectedModelID: String
+    @State private var selectedReasoningEffort: String
     @State private var isLoading = true
     @State private var loadError: String?
     @State private var estimate: OutlinePlanningEstimate?
@@ -1378,8 +1397,9 @@ struct OutlinePlanningModelSheet: View {
 
     init(
         initialModelID: String,
+        initialReasoningEffort: String,
         request: OutlineSuggestionRequest,
-        onConfirm: @escaping (String) -> Void,
+        onConfirm: @escaping (String, String?) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.initialModelID = initialModelID
@@ -1387,6 +1407,7 @@ struct OutlinePlanningModelSheet: View {
         self.onConfirm = onConfirm
         self.onCancel = onCancel
         self._selectedModelID = State(initialValue: initialModelID)
+        self._selectedReasoningEffort = State(initialValue: OutlineSectionsModelCatalog.reasoningEfforts.contains(initialReasoningEffort) ? initialReasoningEffort : "low")
     }
 
     var body: some View {
@@ -1434,6 +1455,19 @@ struct OutlinePlanningModelSheet: View {
                         .buttonStyle(.plain)
                     }
                 }
+                if selectedModelID == OutlineSectionsModelCatalog.defaultID {
+                    Section("Sol reasoning level") {
+                        Picker("Reasoning", selection: $selectedReasoningEffort) {
+                            ForEach(OutlineSectionsModelCatalog.reasoningEfforts, id: \.self) { effort in
+                                Text(effort.capitalized).tag(effort)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        Text("Higher reasoning can improve complex plans but may take longer.")
+                            .font(CathedralTheme.Typography.caption(11))
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
+                }
                 estimateSection
                 if isLoading {
                     HStack(spacing: CathedralTheme.Spacing.sm) {
@@ -1456,7 +1490,7 @@ struct OutlinePlanningModelSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Confirm") {
                         guard selectedOption?.isAvailable == true else { return }
-                        onConfirm(selectedModelID)
+                        onConfirm(selectedModelID, selectedModelID == OutlineSectionsModelCatalog.defaultID ? selectedReasoningEffort : nil)
                     }
                     .fontWeight(.semibold)
                     .disabled(isLoading || selectedOption?.isAvailable != true)
@@ -1516,7 +1550,10 @@ struct OutlinePlanningModelSheet: View {
         estimateError = nil
         defer { isEstimating = false }
         do {
-            estimate = try await OutlineSuggestionService().estimate(request: request, modelID: selectedModelID)
+            let selectedRequest = request
+                .withModelID(selectedModelID)
+                .withReasoningEffort(selectedModelID == OutlineSectionsModelCatalog.defaultID ? selectedReasoningEffort : nil)
+            estimate = try await OutlineSuggestionService().estimate(request: selectedRequest, modelID: selectedModelID)
         } catch {
             estimate = nil
             estimateError = "Pricing could not be estimated. No credits were consumed."

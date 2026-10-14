@@ -642,6 +642,8 @@ interface OutlineFromRecipeRequest {
   requestedFormat?: StoryMaterialFormat;
   /** Explicit MVP model selection; persisted in request_json for resume. */
   modelID?: string;
+  /** Optional GPT-6.1 Sol reasoning level selected in the iOS picker. */
+  reasoningEffort?: "low" | "medium" | "high";
   outline_id?: string;
   // PR 4: canonical planning identity. Server-validated pre-billable so a
   // stale Outline reference (delete + restore, sync race) cannot survive
@@ -1692,6 +1694,11 @@ export function validateRequest(req: unknown): string | null {
   }
   if (r.requestedFormat !== undefined && !["novel", "shortStory", "other"].includes(r.requestedFormat)) return "requestedFormat must be novel, shortStory, or other";
   if (r.modelID !== undefined && (typeof r.modelID !== "string" || r.modelID.trim() === "")) return "modelID must be a non-empty catalog model ID";
+  if (r.reasoningEffort !== undefined && !["low", "medium", "high"].includes(r.reasoningEffort as string)) return "reasoningEffort must be low, medium, or high";
+  if (
+    r.reasoningEffort !== undefined &&
+    (typeof r.modelID !== "string" || r.modelID.trim().toLowerCase() !== "gpt-6.1-sol")
+  ) return "reasoningEffort is only supported for gpt-6.1-sol";
   if (r.idempotencyKey !== undefined && (typeof r.idempotencyKey !== "string" || r.idempotencyKey.trim() === "" || r.idempotencyKey.length > 512)) return "idempotencyKey must be a non-empty string of at most 512 characters";
   if (r.storyMaterialEnrichment) {
     try {
@@ -4003,6 +4010,7 @@ export async function runSuggestionJob(
         providerOptions: {
           responseFormat,
           ...(supportsCustomTemperature(model) ? { temperature: 0.7 } : {}),
+          reasoningEffort: body.reasoningEffort,
           cacheMode: model.cacheMode,
           promptCacheKey: model.cacheMode === "none" ? undefined : promptCacheKey,
         },

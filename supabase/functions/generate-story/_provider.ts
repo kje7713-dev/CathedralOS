@@ -380,6 +380,7 @@ export interface LLMProviderOptions {
   responseFormatTarget?: "chat" | "responses";
   /** Sampling temperature (0-2). Only forwarded by the chat/completions path. */
   temperature?: number;
+  reasoningEffort?: ReasoningEffort;
   /** PR-372: cache capability for this request. */
   cacheMode?: "none" | "implicit" | "explicit";
   /** PR-372: stable cache key for grouping related requests. Generate-story
@@ -404,11 +405,17 @@ export function supportsCustomTemperature(model: {
 
 /**
  * Resolve the only model-specific reasoning override currently enabled.
- * GPT-6.1 Sol supports Chat Completions `reasoning_effort: "low"`; models
- * not listed here receive no reasoning_effort field at all.
+ * GPT-6.1 Sol supports Chat Completions `reasoning_effort` values low, medium,
+ * and high; models not listed here receive no reasoning_effort field at all.
  */
-export function reasoningEffortForModel(model: string): "low" | undefined {
-  return model.trim().toLowerCase() === "gpt-6.1-sol" ? "low" : undefined;
+export type ReasoningEffort = "low" | "medium" | "high";
+
+export function reasoningEffortForModel(
+  model: string,
+  requested?: ReasoningEffort,
+): ReasoningEffort | undefined {
+  if (model.trim().toLowerCase() !== "gpt-6.1-sol") return undefined;
+  return requested ?? "low";
 }
 
 export interface LLMProvider {
@@ -678,7 +685,7 @@ export class OpenAIProvider implements LLMProvider {
     if (typeof options.temperature === "number" && supportsCustomTemperature(resolvedModel)) {
       body.temperature = options.temperature;
     }
-    const reasoningEffort = reasoningEffortForModel(resolvedModel);
+    const reasoningEffort = reasoningEffortForModel(resolvedModel, options.reasoningEffort);
     if (reasoningEffort) {
       body.reasoning_effort = reasoningEffort;
     }
