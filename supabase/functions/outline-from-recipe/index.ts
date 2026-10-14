@@ -4259,6 +4259,11 @@ export async function runSuggestionJob(
         nextAction: outlineNeedsExpansion ? "expansion" : "completed",
       };
       const expansionCheckpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], []);
+      // The outline has passed structural and obligation validation even when
+      // a novel still needs optional expansion. Persist that checkmark before
+      // dispatching expansion so the UI does not imply allocation is the last
+      // completed stage.
+      diagnostics = markCompletedStage(diagnostics, "outline");
       diagnostics = { ...diagnostics, stage: outlineNeedsExpansion ? "expansion_pending" : "outline_complete", expansionCheckpoint };
       diagnostics = markMeaningfulProgress(
         diagnostics,
@@ -4327,6 +4332,10 @@ export async function runSuggestionJob(
         stage: "expansion_resume",
         resumedFromRound: resume.startRound,
       };
+      // Recovered expansion checkpoints necessarily represent an already
+      // validated outline; keep that stage visible without marking expansion
+      // complete until the resumed expansion actually succeeds.
+      diagnostics = markCompletedStage(diagnostics, "outline");
       // PR8 (revised): persist the (possibly repaired) story_material and
       // the resume-stage diagnostics BEFORE expandNovel so a later failure
       // or interruption cannot lose the completed repair. Idempotent with

@@ -25,6 +25,24 @@ function retryDelaySeconds(failures: number): number {
   return Math.min(15 * 60, 2 ** Math.min(Math.max(failures, 0), 8) * 15);
 }
 
+export type WatchdogFailureKind = "none" | "transient" | "configuration";
+
+export function classifyDispatchStatus(status: number): {
+  failed: boolean;
+  failureKind: WatchdogFailureKind;
+} {
+  if (status >= 200 && status < 300) {
+    return { failed: false, failureKind: "none" };
+  }
+  // Transport failures and provider throttling/outages are retryable. Any
+  // HTTP error is still a failed dispatch; 4xx configuration/auth/contract
+  // errors must not be mistaken for a successful reset of watchdog state.
+  if (status === 0 || status === 408 || status === 425 || status === 429 || status >= 500) {
+    return { failed: true, failureKind: "transient" };
+  }
+  return { failed: true, failureKind: "configuration" };
+}
+
 /** One bounded scheduler pass; the cron handler and deterministic tests share this path. */
 export async function runWatchdogOnce(
   db: any,
@@ -34,7 +52,7 @@ export async function runWatchdogOnce(
   const nowISO = now.toISOString();
   const { data: runs, error } = await db.from("outline_suggestion_runs")
     .select("id, watchdog_failures")
-    .or(`and(status.eq.pending,watchdog_next_attempt_at.lte.${nowISO}),and(status.eq.running,lease_expires_at.lt.${nowISO})`)
+    .or(`and(status.eq.pending,watchdog_next_attempt_at.lte.${nowISO}),and(status.eq.running,lease_expires_at.lt.${nowISO},watchdog_next_attempt_at.lte.${nowISO})`)
     .order("watchdog_next_attempt_at", { ascending: true })
     .order("updated_at", { ascending: true })
     .limit(MAX_BATCH);
@@ -44,16 +62,18 @@ export async function runWatchdogOnce(
   for (const run of runs ?? []) {
     try {
       const status = await dispatch(run.id);
-      const failed = status === 0 || status === 408 || status === 425 || status === 429 || status >= 500;
+      const classification = classifyDispatchStatus(status);
+      const failed = classification.failed;
       const failures = Number(run.watchdog_failures ?? 0) + (failed ? 1 : 0);
+      const backoff = failed ? retryDelaySeconds(failures) : 0;
       const nextAttemptAt = failed
-        ? new Date(now.getTime() + retryDelaySeconds(failures) * 1000).toISOString()
+        ? new Date(now.getTime() + backoff * 1000).toISOString()
         : nowISO;
       await db.from("outline_suggestion_runs").update({
         watchdog_failures: failed ? failures : 0,
         watchdog_next_attempt_at: nextAttemptAt,
       }).eq("id", run.id);
-      statuses.push({ run_id: run.id, status, backoff: failed ? retryDelaySeconds(failures) : 0 });
+      statuses.push({ run_id: run.id, status, failureKind: classification.failureKind, backoff });
     } catch (err) {
       const failures = Number(run.watchdog_failures ?? 0) + 1;
       const nextAttemptAt = new Date(now.getTime() + retryDelaySeconds(failures) * 1000).toISOString();
@@ -61,7 +81,7 @@ export async function runWatchdogOnce(
         watchdog_failures: failures,
         watchdog_next_attempt_at: nextAttemptAt,
       }).eq("id", run.id);
-      statuses.push({ run_id: run.id, error: err instanceof Error ? err.message : String(err), backoff: retryDelaySeconds(failures) });
+      statuses.push({ run_id: run.id, error: err instanceof Error ? err.message : String(err), failureKind: "transient", backoff: retryDelaySeconds(failures) });
     }
   }
   return { scanned: runs?.length ?? 0, statuses };

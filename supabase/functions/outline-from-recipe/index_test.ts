@@ -5077,6 +5077,7 @@ Deno.test("final global provider call completes without an extra continuation", 
   assertEquals(providerCalls.length, 1, JSON.stringify({ providerCalls, planningState: db.row.planning_state, diagnostics: db.row.diagnostics }));
   assertEquals(providerCalls[0], "outline-suggestions");
   assertEquals(db.row.status, "completed", JSON.stringify({ providerCalls, planningState: db.row.planning_state, diagnostics: db.row.diagnostics }));
+  assertEquals(db.row.diagnostics.completedStages, ["outline"]);
   assertEquals(scheduleCount, 0);
 });
 
