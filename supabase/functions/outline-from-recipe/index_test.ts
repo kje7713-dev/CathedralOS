@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects, assertThrows } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { deriveRecipeObligations, obligationCoverage } from "./_recipe_obligations.ts";
-import { compactMaterial } from "./_prompt_context.ts";
+import { compactArcNarrativeText, compactMaterial } from "./_prompt_context.ts";
 
 Deno.test("continuation auth keeps user JWT out of apikey and authenticates watchdog explicitly", () => {
   assertEquals(continuationHeaders("Bearer user-access-jwt", "operator-secret"), {
@@ -76,6 +76,7 @@ import {
   plannedWordRangeForContainer,
   findUnusedStoryMaterial,
   validateStoryArcSemantics,
+  validateArcSemanticObligations,
   validatePostRepairBeatCoverage,
   validateRequiredStoryArcFunctions,
   repairRequiredStoryArcFunctions,
@@ -2636,6 +2637,106 @@ Deno.test("PR3 required dramatic functions are validated from final section func
   const resurrection = { name: "Hero's Journey", beats: [{ id: "r", role: "resurrection", label: "Resurrection" }] };
   assertEquals(validateStoryArcSemantics([semanticSection("r", "The Test", "The hero transforms.", "transformation")] as any, resurrection as any).some((issue) => issue.includes("required dramatic function climax")), true);
   assertEquals(validateStoryArcSemantics([semanticSection("r", "The Test", "The final confrontation turns.", "climax")] as any, resurrection as any), []);
+});
+
+const romanticSuspenseFixture = {
+  name: "Romantic Suspense",
+  beats: [
+    { id: "intimacy", role: "intimacy_under_pressure", label: "Intimacy Under Pressure" },
+    { id: "showdown", role: "joint_showdown", label: "Joint Showdown" },
+    { id: "safety", role: "safety_and_commitment", label: "Safety and Commitment" },
+  ],
+};
+
+Deno.test("semantic beat obligations reject generic Romantic Suspense completion", () => {
+  const generic = [
+    semanticSection("intimacy", "The Danger", "The danger escalates.", "escalation"),
+    semanticSection("showdown", "The Confrontation", "The leads confront the threat.", "climax"),
+    semanticSection("safety", "The Aftermath", "The aftermath settles.", "resolution"),
+  ];
+  const issues = validateArcSemanticObligations(generic as any, romanticSuspenseFixture as any);
+  assertEquals(issues.length, 5);
+  assertEquals(issues.some((issue) => issue.includes("relationship_deepens_under_pressure")), true);
+  assertEquals(issues.some((issue) => issue.includes("coordinated_danger_resolution")), true);
+  assertEquals(issues.some((issue) => issue.includes("earned_romantic_future")), true);
+});
+
+Deno.test("semantic beat obligations require concrete evidence for Romantic Suspense roles", () => {
+  const sections: any[] = [
+    {
+      ...semanticSection("intimacy", "The Safehouse Confession", "The leads shelter together while the threat closes in.", "escalation"),
+      resultingChange: "The guarded lead reveals the evidence and the other lead takes a personal risk to protect them, changing their mutual trust.",
+      arcObligationEvidence: { relationship_deepens_under_pressure: "The danger forces a guarded confession and a reciprocal protective choice that changes their trust." },
+    },
+    {
+      ...semanticSection("showdown", "The Two-Way Trap", "Both leads coordinate the trap that corners the pursuer, and one stays behind to draw fire so the other can finish it.", "climax"),
+      resultingChange: "The threat is defeated because their coordinated plan succeeds, and their commitment changes the cost each is willing to pay.",
+      terminalState: "The danger is ended and the leads face the consequences together.",
+      arcObligationEvidence: {
+        coordinated_danger_resolution: "Both leads perform complementary actions that resolve the threat rather than one lead winning alone.",
+        emotional_commitment_in_action: "Their commitment determines who takes the risk and makes the decisive plan possible.",
+      },
+    },
+    {
+      ...semanticSection("safety", "A Door Left Open", "The leads expose the conspirator and choose a shared life after the danger ends.", "resolution"),
+      resultingChange: "The threat is dismantled and the leads establish an earned future together shaped by the trust they chose under pressure.",
+      terminalState: "The threat cannot resume; the leads begin their committed future with a concrete shared plan.",
+      arcObligationEvidence: {
+        threat_is_settled: "The conspirator is exposed and the threat is dismantled, so it cannot continue.",
+        earned_romantic_future: "Their shared plan grows from the risks and trust they already proved during the investigation.",
+      },
+    },
+  ];
+  assertEquals(validateArcSemanticObligations(sections, romanticSuspenseFixture as any), []);
+  const schema: any = buildSuggestionResponseSchema(
+    romanticSuspenseFixture.beats,
+    new Map(romanticSuspenseFixture.beats.map((beat) => [beat.id, { minSections: 1, rationale: "semantic test" }])),
+    [],
+    romanticSuspenseFixture.name,
+  );
+  const intimacySchema = schema.properties.beats.properties.intimacy.items;
+  assertEquals(intimacySchema.required.includes("arcObligationEvidence"), true);
+  assertEquals(intimacySchema.properties.arcObligationEvidence.required, ["relationship_deepens_under_pressure"]);
+});
+
+Deno.test("authored Story Arc beat requirements survive context compaction for every template", () => {
+  const authoredRequirement = `An authored requirement that is intentionally longer than the old 650-character compaction boundary: ${"preserve this narrative obligation ".repeat(30)}`.trim();
+  const template: any = {
+    id: "custom",
+    name: "Custom Arc",
+    description: authoredRequirement,
+    beats: [{
+      id: "custom-beat",
+      role: "custom_role",
+      label: "Custom Beat",
+      description: authoredRequirement,
+    }],
+  };
+  const contract = arcRoleContract(template.beats[0], template.name);
+  assertEquals(contract.semanticObligations[0].id, "authored_beat_requirement");
+  assertEquals(contract.semanticObligations[0].instruction.includes(authoredRequirement), true);
+  assertEquals(compactArcNarrativeText(authoredRequirement), authoredRequirement);
+
+  const section: any = {
+    ...semanticSection("custom-beat", "The Requirement", "The beat's authored requirement is enacted in a concrete event.", "escalation"),
+    resultingChange: "The authored requirement changes the protagonist's relationship and the story's available choices.",
+    terminalState: "The changed condition carries the authored requirement into the next beat.",
+    arcObligationEvidence: {
+      authored_beat_requirement: `Concrete evidence that the section fulfills the complete authored requirement: ${authoredRequirement}`,
+    },
+  };
+  assertEquals(validateArcSemanticObligations([section], template), []);
+
+  const schema: any = buildSuggestionResponseSchema(
+    template.beats,
+    new Map([["custom-beat", { minSections: 1, rationale: "semantic test" }]]),
+    [],
+    template.name,
+  );
+  assertEquals(schema.properties.beats.properties["custom-beat"].items.properties.arcObligationEvidence.required, ["authored_beat_requirement"]);
+  const prompt = buildPrompt({ ...sparseRequest, arcTemplate: template } as any, new Map([["custom-beat", { minSections: 1, rationale: "semantic test" }]]));
+  assertEquals(prompt.system.includes(authoredRequirement), true);
+  assertEquals(prompt.user.includes(authoredRequirement), true);
 });
 
 Deno.test("PR3 Final Image aftermath-only content is repaired into an actual resolution", async () => {

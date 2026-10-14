@@ -19,6 +19,7 @@ import {
 } from "../generate-story/_provider.ts";
 import {
   buildCompactPlanningView,
+  compactArcNarrativeText,
   compactExistingSections,
   compactText,
   compactMaterial,
@@ -100,6 +101,12 @@ export const DRAMATIC_FUNCTIONS = [
 ] as const;
 export type DramaticFunction = typeof DRAMATIC_FUNCTIONS[number];
 export type ArcPhaseDirection = "establish" | "escalate" | "turn" | "resolve" | "settle";
+export type ArcSemanticField = "dramaticEvent" | "resultingChange" | "terminalState";
+export interface ArcSemanticObligation {
+  id: string;
+  instruction: string;
+  requiredFields: ArcSemanticField[];
+}
 export interface ArcRoleContract {
   allowedFunctions: DramaticFunction[];
   requiredFunctions: DramaticFunction[];
@@ -107,6 +114,7 @@ export interface ArcRoleContract {
   allowsMajorEscalation: boolean;
   closureExpectation: "none" | "partial" | "strong";
   phaseDirection: ArcPhaseDirection;
+  semanticObligations: ArcSemanticObligation[];
 }
 
 const contract = (
@@ -119,8 +127,41 @@ const contract = (
   allowsMajorEscalation: true,
   closureExpectation: "none",
   phaseDirection: "escalate",
+  semanticObligations: [],
   ...options,
 });
+
+const ROMANTIC_SUSPENSE_OBLIGATIONS: Record<string, ArcSemanticObligation[]> = {
+  intimacy_under_pressure: [{
+    id: "relationship_deepens_under_pressure",
+    instruction: "Show a concrete change in trust, vulnerability, desire, or mutual dependence caused by the active danger; do not merely restate that attraction exists.",
+    requiredFields: ["dramaticEvent", "resultingChange"],
+  }],
+  joint_showdown: [
+    {
+      id: "coordinated_danger_resolution",
+      instruction: "Resolve the central danger through a specific coordinated action by both leads; do not make the showdown a generic confrontation or a solo victory.",
+      requiredFields: ["dramaticEvent", "resultingChange"],
+    },
+    {
+      id: "emotional_commitment_in_action",
+      instruction: "Make emotional commitment materially affect the decisive action or its cost, rather than appearing only as a label or closing sentiment.",
+      requiredFields: ["dramaticEvent", "resultingChange", "terminalState"],
+    },
+  ],
+  safety_and_commitment: [
+    {
+      id: "threat_is_settled",
+      instruction: "State what happens to the central threat and why it can no longer continue; aftermath alone is not resolution.",
+      requiredFields: ["resultingChange", "terminalState"],
+    },
+    {
+      id: "earned_romantic_future",
+      instruction: "Establish the specific earned romantic future created by the leads' prior choices, not merely that they are happy or together.",
+      requiredFields: ["resultingChange", "terminalState"],
+    },
+  ],
+};
 
 const CONTRACTS: Record<string, ArcRoleContract> = {
   setup: contract(["setup"], { forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, phaseDirection: "establish" }),
@@ -321,13 +362,13 @@ const BUILTIN_ROLE_CONTRACTS: Record<string, Record<string, ArcRoleContract>> = 
     "danger_hook": CONTRACTS.incitement,
     "forced_alliance": CONTRACTS.commitment,
     "distrust": CONTRACTS.escalation,
-    "intimacy_under_pressure": CONTRACTS.escalation,
+    "intimacy_under_pressure": contract(CONTRACTS.escalation.allowedFunctions, { semanticObligations: ROMANTIC_SUSPENSE_OBLIGATIONS.intimacy_under_pressure }),
     "threat_escalates": CONTRACTS.escalation,
     "midpoint_reveal": CONTRACTS.reversal,
     "betrayal_or_misread": CONTRACTS.crisis,
     "trust_choice": contract(["transformation", "reversal", "consequence"], { phaseDirection: "turn" }),
-    "joint_showdown": CONTRACTS.climax,
-    "safety_and_commitment": contract(["resolution", "aftermath", "transformation", "consequence"], { requiredFunctions: ["resolution"], forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "strong", phaseDirection: "settle" }),
+    "joint_showdown": contract(CONTRACTS.climax.allowedFunctions, { requiredFunctions: ["climax"], closureExpectation: "partial", phaseDirection: "turn", semanticObligations: ROMANTIC_SUSPENSE_OBLIGATIONS.joint_showdown }),
+    "safety_and_commitment": contract(["resolution", "aftermath", "transformation", "consequence"], { requiredFunctions: ["resolution"], forbidsNewPrimaryConflict: true, allowsMajorEscalation: false, closureExpectation: "strong", phaseDirection: "settle", semanticObligations: ROMANTIC_SUSPENSE_OBLIGATIONS.safety_and_commitment }),
   },
   "conspiracy-artifact-thriller": {
     "discovery": CONTRACTS.incitement,
@@ -448,10 +489,23 @@ function fallbackRoleFamily(role: string): string {
   return "escalation";
 }
 
-export function arcRoleContract(beat: { role?: string; label?: string }, templateName = ""): ArcRoleContract {
+export function arcRoleContract(beat: { role?: string; label?: string; description?: string }, templateName = ""): ArcRoleContract {
   const template = BUILTIN_ROLE_CONTRACTS[normalizedTemplateName(templateName)];
   const role = beat.role ?? "";
-  return template?.[role] ?? CONTRACTS[fallbackRoleFamily(role)] ?? CONTRACTS.escalation;
+  const base = template?.[role] ?? CONTRACTS[fallbackRoleFamily(role)] ?? CONTRACTS.escalation;
+  const authoredRequirement = beat.description?.trim() ?? "";
+  if (!authoredRequirement) return base;
+  return {
+    ...base,
+    semanticObligations: [
+      {
+        id: "authored_beat_requirement",
+        instruction: `Satisfy the complete authored narrative requirement for this beat: ${authoredRequirement}`,
+        requiredFields: ["dramaticEvent", "resultingChange", "terminalState"],
+      },
+      ...base.semanticObligations,
+    ],
+  };
 }
 
 export function arcRoleContracts(template: Pick<ArcTemplateBlob, "beats" | "name">): Map<string, ArcRoleContract> {
@@ -473,13 +527,16 @@ const SECTION_SCHEMA = {
     resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
     terminalState: { type: "string", minLength: 1, maxLength: 1200 },
     dramaticFunction: { type: "string", enum: DRAMATIC_FUNCTIONS },
+    // Beat-specific evidence makes semantic responsibilities explicit in the
+    // provider response instead of relying on a generic role label.
+    arcObligationEvidence: { type: "object", additionalProperties: { type: "string", minLength: 20, maxLength: 1200 } },
   },
   required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "dramaticFunction"],
   additionalProperties: false,
 } as const;
 
 export function buildSuggestionResponseSchema(
-  beats: Array<{ id: string; role?: string; label?: string }>,
+  beats: Array<{ id: string; role?: string; label?: string; description?: string }>,
   allocation: Map<string, Allocation>,
   obligations: RecipeObligation[] = [],
   templateName = "",
@@ -509,7 +566,18 @@ export function buildSuggestionResponseSchema(
       properties: {
         ...sectionSchema.properties,
         dramaticFunction: { type: "string", enum: contract.allowedFunctions },
+        ...(contract.semanticObligations.length > 0 ? {
+          arcObligationEvidence: {
+            type: "object",
+            properties: Object.fromEntries(contract.semanticObligations.map((obligation) => [obligation.id, { type: "string", minLength: 20, maxLength: 1200 }])),
+            required: contract.semanticObligations.map((obligation) => obligation.id),
+            additionalProperties: false,
+          },
+        } : {}),
       },
+      required: contract.semanticObligations.length > 0
+        ? [...sectionSchema.required, "arcObligationEvidence"]
+        : sectionSchema.required,
     };
     properties[beat.id] = {
       type: "array",
@@ -1030,6 +1098,7 @@ interface Suggestion {
   plannedWordRange?: { minWords: number; maxWords: number };
   storyArcBeatID: string;
   recipeRequirementIDs?: string[];
+  arcObligationEvidence?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1823,6 +1892,7 @@ const EXPANSION_SCHEMA = {
           resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
           terminalState: { type: "string", minLength: 1, maxLength: 1200 },
           dramaticFunction: { type: "string", enum: DRAMATIC_FUNCTIONS },
+          arcObligationEvidence: { type: "object", additionalProperties: { type: "string", minLength: 20, maxLength: 1200 } },
           storyArcBeatID: { type: "string" },
           insertAfterTitle: { type: ["string", "null"] },
           recipeRequirementIDs: { type: "array", minItems: 0, maxItems: 50, items: { type: "string", minLength: 1 } },
@@ -1847,7 +1917,18 @@ export function buildExpansionResponseSchema(contract?: ArcRoleContract) {
           properties: {
             ...EXPANSION_SCHEMA.properties.suggestions.items.properties,
             dramaticFunction: { type: "string", enum: dramaticFunction },
+            ...(contract?.semanticObligations.length ? {
+              arcObligationEvidence: {
+                type: "object",
+                properties: Object.fromEntries(contract.semanticObligations.map((obligation) => [obligation.id, { type: "string", minLength: 20, maxLength: 1200 }])),
+                required: contract.semanticObligations.map((obligation) => obligation.id),
+                additionalProperties: false,
+              },
+            } : {}),
           },
+          required: contract?.semanticObligations.length
+            ? [...EXPANSION_SCHEMA.properties.suggestions.items.required, "arcObligationEvidence"]
+            : EXPANSION_SCHEMA.properties.suggestions.items.required,
         },
       },
     },
@@ -2271,7 +2352,7 @@ export function buildExpansionPrompt(
   const targetContract = targetBeat ? arcRoleContract(targetBeat, req.arcTemplate.name) : undefined;
   const unsatisfiedRequiredFunctions = targetContract?.requiredFunctions.filter((required) => !beatContext?.currentSections.some((section) => section.dramaticFunction === required)) ?? [];
   const semanticContract = targetContract
-    ? `Authoritative semantic contract for this beat: allowedFunctions=${targetContract.allowedFunctions.join(", ")}; requiredFunctionsStillUnsatisfied=${unsatisfiedRequiredFunctions.join(", ") || "none"}; forbidsNewPrimaryConflict=${targetContract.forbidsNewPrimaryConflict}; allowsMajorEscalation=${targetContract.allowsMajorEscalation}; closureExpectation=${targetContract.closureExpectation}; phaseDirection=${targetContract.phaseDirection}. The server is the source of truth.`
+    ? `Authoritative semantic contract for this beat: allowedFunctions=${targetContract.allowedFunctions.join(", ")}; requiredFunctionsStillUnsatisfied=${unsatisfiedRequiredFunctions.join(", ") || "none"}; forbidsNewPrimaryConflict=${targetContract.forbidsNewPrimaryConflict}; allowsMajorEscalation=${targetContract.allowsMajorEscalation}; closureExpectation=${targetContract.closureExpectation}; phaseDirection=${targetContract.phaseDirection}; semanticObligations=${targetContract.semanticObligations.map((obligation) => `${obligation.id} (${obligation.instruction})`).join(" | ") || "none"}. The server is the source of truth.`
     : "No beat-local semantic contract applies to this global repair call; preserve each existing section's contract.";
   const beatDirective = beatContext
     ? `This is beat-local expansion for Story Arc beat ${beatContext.beatID}${beatContext.beatLabel ? ` (${beatContext.beatLabel})` : ""}. Develop only this beat; every returned section must use storyArcBeatID ${beatContext.beatID}. The beat currently contains approximately ${Math.round(beatContext.projectedWords).toLocaleString()} projected words. Its description is: ${beatContext.beatDescription ?? "(not supplied)"}. ${semanticContract}`
@@ -2285,7 +2366,15 @@ The JSON request contains the authoritative obligations exactly once.`,
       global: {
         project: req.recipe?.project ? { id: req.recipe.project.id ?? null, name: compactText((req.recipe.project as any).name, 200), summary: compactText(req.recipe.project.summary, 1200) } : null,
         recipe: { selectedStorySpark: compactRecipe(req.recipe).selectedStorySpark, selectedAftertaste: compactRecipe(req.recipe).selectedAftertaste },
-        arc: { name: req.arcTemplate.name, beats: req.arcTemplate.beats.map((b: any) => ({ id: b.id, label: compactText(b.label, 180), description: compactText(b.description, 500) })) },
+        arc: {
+          name: req.arcTemplate.name,
+          description: compactArcNarrativeText(req.arcTemplate.description),
+          beats: req.arcTemplate.beats.map((b: any) => ({
+            id: b.id,
+            label: compactText(b.label, 180),
+            description: compactArcNarrativeText(b.description),
+          })),
+        },
       },
       targetBeat: beatContext ? { ...beatContext, currentSections: compactExistingSections(beatContext.currentSections ?? []), unmetObligations: compactObligations(obligations.filter((o) => o.required && !beatContext.currentSections?.some((s) => (s.recipeRequirementIDs ?? []).includes(o.id)))) } : null,
       unusedStoryMaterial: compactMaterial({ relevant: unusedStoryMaterial }),
@@ -2407,7 +2496,16 @@ export function buildPrompt(
     .join("\n");
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
-    return `- ${beat.label} (${beat.role}): allowed functions=${contract.allowedFunctions.join(", ")}; phase=${contract.phaseDirection}; ${contract.forbidsNewPrimaryConflict ? "do not introduce a new primary conflict" : "major escalation is allowed"}`;
+    const obligations = contract.semanticObligations.length > 0
+      ? `; semantic obligations=${contract.semanticObligations.map((obligation) => obligation.id).join(", ")}`
+      : "";
+    return `- ${beat.label} (${beat.role}): authored requirement=${compactArcNarrativeText(beat.description) || "(none supplied)"}; allowed functions=${contract.allowedFunctions.join(", ")}; phase=${contract.phaseDirection}; ${contract.forbidsNewPrimaryConflict ? "do not introduce a new primary conflict" : "major escalation is allowed"}${obligations}`;
+  }).join("\n");
+  const semanticObligationLines = req.arcTemplate.beats.flatMap((beat) => {
+    const contract = arcRoleContract(beat, req.arcTemplate.name);
+    return contract.semanticObligations.map((obligation) =>
+      `- ${beat.label} / ${obligation.id}: ${obligation.instruction} Provide concrete evidence in arcObligationEvidence.${obligation.id} and make the required fields materially express it.`,
+    );
   }).join("\n");
 
   const system =
@@ -2475,6 +2573,9 @@ ${allocationLines}
 
 ## Semantic Story Arc contracts
 ${contractLines}
+
+## Beat-specific semantic obligations
+${semanticObligationLines || "No beat-specific semantic obligations are defined for this template."}
 
 The Resurrection must not replay the Ordeal at greater scale. The Ordeal must create a cost, revelation, failure, or changed condition that materially alters how the final confrontation works. The Resurrection must depend on that changed condition and must develop or resolve the conflict in a materially different way — not simply replay the Ordeal's essential conflict and solution at greater scale.
 
@@ -2979,6 +3080,9 @@ export function validateSuggestions(
       ...(typeof s.resultingChange === "string" ? { resultingChange: s.resultingChange.slice(0, 1200) } : {}),
       ...(typeof s.terminalState === "string" ? { terminalState: s.terminalState.slice(0, 1200) } : {}),
       ...(DRAMATIC_FUNCTIONS.includes(s.dramaticFunction) ? { dramaticFunction: s.dramaticFunction as DramaticFunction } : {}),
+      ...(s.arcObligationEvidence && typeof s.arcObligationEvidence === "object" && !Array.isArray(s.arcObligationEvidence)
+        ? { arcObligationEvidence: Object.fromEntries(Object.entries(s.arcObligationEvidence).filter(([_, value]) => typeof value === "string").map(([key, value]) => [key, String(value).slice(0, 1200)])) }
+        : {}),
       plannedWordRange: plannedWordRangeForContainer(s.container),
       storyArcBeatID: s.storyArcBeatID,
       ...(validRequirementIDs.length > 0 ? { recipeRequirementIDs: validRequirementIDs } : {}),
@@ -3089,6 +3193,35 @@ export function findCausalScaleIssues(
 function semanticText(suggestion: Suggestion): string {
   return [suggestion.title, suggestion.summary, suggestion.dramaticEvent, suggestion.resultingChange, suggestion.terminalState, suggestion.terminalBeat]
     .filter(Boolean).join(" ").toLowerCase();
+}
+
+/**
+ * Beat roles describe broad structure; semantic obligations describe the
+ * concrete dramatic work that makes a role real. Evidence is required from
+ * the provider, but the server still checks that the obligated state-change
+ * fields are present rather than trusting a role label alone.
+ */
+export function validateArcSemanticObligations(
+  suggestions: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+): string[] {
+  const issues: string[] = [];
+  for (const beat of template.beats) {
+    const obligations = arcRoleContract(beat, template.name).semanticObligations;
+    if (obligations.length === 0) continue;
+    const sections = suggestions.filter((section) => section.storyArcBeatID === beat.id);
+    for (const obligation of obligations) {
+      const section = sections.find((candidate) => {
+        const evidence = candidate.arcObligationEvidence?.[obligation.id];
+        if (typeof evidence !== "string" || evidence.trim().length < 20) return false;
+        return obligation.requiredFields.every((field) => typeof candidate[field] === "string" && candidate[field]!.trim().length > 0);
+      });
+      if (!section) {
+        issues.push(`beat ${beat.label} (${beat.id}) is missing semantic obligation ${obligation.id}: ${obligation.instruction}`);
+      }
+    }
+  }
+  return issues;
 }
 
 const PRIMARY_CONFLICT_SIGNALS = /\b(launch(?:es|ed)?|mount(?:s|ed)?|wage(?:s|d)?|invade(?:s|d)?|attack(?:s|ed)?|assault(?:s|ed)?|conquer(?:s|ed)?|take over|seize(?:s|d)?|overthrow(?:s|n)?|decisive assault|citywide takeover)\b/;
@@ -3260,6 +3393,7 @@ export function validateStoryArcSemantics(
   const issues: string[] = [
     ...validatePostRepairBeatCoverage(suggestions, template, allocation),
     ...validateRequiredStoryArcFunctions(suggestions, template),
+    ...validateArcSemanticObligations(suggestions, template),
   ];
   const contracts = arcRoleContracts(template);
   const ordered = [...suggestions].sort((a, b) => {
