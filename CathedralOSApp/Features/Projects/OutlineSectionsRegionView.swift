@@ -1081,6 +1081,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         Text(suggestionRunStatusText(run))
                             .font(CathedralTheme.Typography.caption(12))
                             .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        if let recoveryStatus = suggestionRecoveryStatusText(run) {
+                            Text(recoveryStatus)
+                                .font(CathedralTheme.Typography.caption(11))
+                                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                        }
                         Text("Generation continues on the server if you close the app.")
                             .font(CathedralTheme.Typography.caption(11))
                             .foregroundStyle(CathedralTheme.Colors.tertiaryText)
@@ -1113,9 +1118,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         if run.serverStage == "worker_interrupted" || run.serverRecoveryState == "waiting_for_recovery" {
             return "Worker interrupted. Waiting for automatic recovery…"
         }
-        if run.serverStage == "worker_resumed" || run.serverRecoveryState == "worker_resumed" {
-            return "New worker resumed from the saved checkpoint…"
-        }
         switch run.serverStage {
         case "starting": return "Starting outline planning on the server…"
         case "story_material_enrichment", "enrichment_generation", "enrichment_repair_pending": return "Enriching story material…"
@@ -1126,8 +1128,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         case "outline_validated", "obligation_repair_pending", "obligation_repair_generation": return "Outline validated; checking required story obligations…"
         case "expansion_generation", "expansion_checkpoint", "expansion_beat_checkpoint", "expansion_resume": return "Expanding the outline and saving checkpoints…"
         case "reconnecting": return "Reconnecting to the server…"
+        case "worker_resumed": return "Continuing outline planning on the server…"
         default: return "Generating outline suggestions on the server…"
         }
+    }
+
+    private func suggestionRecoveryStatusText(_ run: SuggestionRunMetadata) -> String? {
+        guard run.serverRecoveryState == "worker_resumed" || run.serverStage == "worker_resumed" else { return nil }
+        return "Recovered successfully from the saved checkpoint."
     }
 
     private func suggestionStageShortName(_ stage: String) -> String {

@@ -69,6 +69,15 @@ export async function runWatchdogOnce(
       const nextAttemptAt = failed
         ? new Date(now.getTime() + backoff * 1000).toISOString()
         : nowISO;
+      if (classification.failureKind === "configuration" && failures === 3) {
+        // Surface a stable, secret-free operator signal instead of allowing a
+        // broken auth/configuration path to retry silently forever.
+        console.error("[outline-suggestion-watchdog] repeated configuration failure", {
+          run_id: run.id,
+          status,
+          watchdog_failures: failures,
+        });
+      }
       await db.from("outline_suggestion_runs").update({
         watchdog_failures: failed ? failures : 0,
         watchdog_next_attempt_at: nextAttemptAt,
