@@ -535,19 +535,36 @@ const SECTION_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+export const NOVEL_LEAF_CONTAINERS = ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"] as const;
+
+export function validateNovelLeafContainers(
+  suggestions: Array<{ container?: string | null }>,
+  format: StoryMaterialFormat = "novel",
+): void {
+  if (format !== "novel") return;
+  for (const suggestion of suggestions) {
+    if (!NOVEL_LEAF_CONTAINERS.includes(suggestion.container as typeof NOVEL_LEAF_CONTAINERS[number])) {
+      throw new Error(`new novel planning does not allow generation-bearing leaf container ${String(suggestion.container)}`);
+    }
+  }
+}
+
 export function buildSuggestionResponseSchema(
   beats: Array<{ id: string; role?: string; label?: string; description?: string }>,
   allocation: Map<string, Allocation>,
   obligations: RecipeObligation[] = [],
   templateName = "",
+  requestedFormat: StoryMaterialFormat = "other",
 ) {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
+  const allowedContainers = requestedFormat === "novel" ? [...NOVEL_LEAF_CONTAINERS] : SECTION_SCHEMA.properties.container.enum;
   const sectionSchema = obligations.length > 0
     ? {
       ...SECTION_SCHEMA,
       properties: {
         ...SECTION_SCHEMA.properties,
+        container: { type: "string", enum: allowedContainers },
         recipeRequirementIDs: {
           type: "array",
           minItems: 1,
@@ -557,7 +574,7 @@ export function buildSuggestionResponseSchema(
       },
       required: [...SECTION_SCHEMA.required, "recipeRequirementIDs"],
     }
-    : SECTION_SCHEMA;
+    : { ...SECTION_SCHEMA, properties: { ...SECTION_SCHEMA.properties, container: { type: "string", enum: allowedContainers } } };
   for (const beat of beats) {
     const minimum = allocation.get(beat.id)?.minSections ?? 0;
     const contract = arcRoleContract(beat, templateName);
@@ -628,7 +645,7 @@ const CONTAINER_EXPECTED_RANGES: Record<string, [number, number]> = {
 const NOVEL_TARGET_WORDS: [number, number] = [70000, 90000];
 export const NOVEL_PREFERRED_MIN_WORDS = 80000;
 const TOKENS_PER_WORD = 1.3;
-const NOVEL_MIN_PROJECTED_TOKENS = NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD;
+const NOVEL_MIN_PROJECTED_TOKENS = NOVEL_PREFERRED_MIN_WORDS * TOKENS_PER_WORD;
 const MAX_PLANNED_SECTIONS = 200;
 export const MAX_EXPANSION_ROUNDS = 3;
 
@@ -693,6 +710,9 @@ interface CanonicalRecipeEnvelope {
   };
 }
 
+type StoryArcRelationshipFocus = "none" | "supporting" | "primary";
+type IntimacyMilestoneRating = "romantic" | "fade_to_black" | "open_door" | "explicit";
+
 interface ArcTemplateBlob {
   id: string;
   name: string;
@@ -700,6 +720,10 @@ interface ArcTemplateBlob {
   beats: Array<
     { id: string; role: string; label: string; description?: string }
   >;
+  /** Optional for old callers; absence conservatively means no romance obligation. */
+  relationshipFocus?: StoryArcRelationshipFocus;
+  /** Authoritative template roles where a whole-arc intimacy milestone may occur. */
+  intimacyMilestoneRoles?: string[];
 }
 
 interface OutlineFromRecipeRequest {
@@ -1863,7 +1887,7 @@ export function evaluateNovelScale(
   return {
     projectedTokens,
     projectedWords: projectedTokens / TOKENS_PER_WORD,
-    minimumWords: NOVEL_TARGET_WORDS[0],
+    minimumWords: NOVEL_PREFERRED_MIN_WORDS,
     preferredMinimumWords: NOVEL_PREFERRED_MIN_WORDS,
     deficitTokens,
     meetsMinimum: deficitTokens === 0,
@@ -1875,7 +1899,7 @@ export function needsNovelExpansion(
   suggestions: PlannedSectionLike[],
   existingSections: PlannedSectionLike[] = [],
 ): boolean {
-  return !evaluateNovelScale(suggestions, existingSections).meetsMinimum;
+  return !evaluateNovelScale(suggestions, existingSections).meetsPreferredMinimum;
 }
 
 const EXPANSION_SCHEMA = {
@@ -1910,8 +1934,9 @@ const EXPANSION_SCHEMA = {
 } as const;
 
 /** Beat-local expansion uses the same server-owned contract as first-pass generation. */
-export function buildExpansionResponseSchema(contract?: ArcRoleContract) {
+export function buildExpansionResponseSchema(contract?: ArcRoleContract, requestedFormat: StoryMaterialFormat = "other") {
   const dramaticFunction = contract?.allowedFunctions ?? [...DRAMATIC_FUNCTIONS];
+  const allowedContainers = requestedFormat === "novel" ? [...NOVEL_LEAF_CONTAINERS] : EXPANSION_SCHEMA.properties.suggestions.items.properties.container.enum;
   return {
     ...EXPANSION_SCHEMA,
     properties: {
@@ -1922,6 +1947,7 @@ export function buildExpansionResponseSchema(contract?: ArcRoleContract) {
           properties: {
             ...EXPANSION_SCHEMA.properties.suggestions.items.properties,
             dramaticFunction: { type: "string", enum: dramaticFunction },
+            container: { type: "string", enum: allowedContainers },
             ...(contract?.semanticObligations.length ? {
               arcObligationEvidence: {
                 type: "object",
@@ -2288,7 +2314,7 @@ export async function progressivelyExpandOutline(
       await onRound?.(diagnostic, diagnostics, suggestions);
       throw new NovelScalePlanningError(
         "failed_expansion",
-        `Novel expansion failed validation in round ${round}; the outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum.`,
+        `Novel expansion failed validation in round ${round}; the outline remains below the ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word preferred planning floor.`,
       );
     }
   }
@@ -2296,7 +2322,7 @@ export async function progressivelyExpandOutline(
   if (!finalScale.meetsMinimum) {
     throw new NovelScalePlanningError(
       "failed_under_target",
-      `Novel outline remains below the ${NOVEL_TARGET_WORDS[0].toLocaleString()}-word minimum after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
+      `Novel outline remains below the ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word preferred planning floor after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
     );
   }
   return { suggestions, warnings: [...new Set(warnings)], diagnostics };
@@ -2488,23 +2514,47 @@ export function calculateRepairAllocation(
 }
 
 
-function intimacyPlanningDirective(req: OutlineFromRecipeRequest): string {
-  const rating = normalizeIntimacyRating(req.recipe?.project?.intimacyRating);
-  if (rating === "unspecified") return "";
-  const relationshipRoles = new Set(["meet_attraction", "connection_deepens", "midpoint_intimacy", "chemistry_builds", "intimacy_under_pressure", "first_commitment", "hea_hfn"]);
-  const beats = req.arcTemplate.beats.filter((beat) => {
-    const text = `${beat.role ?? ""} ${beat.label ?? ""}`.toLowerCase();
-    return relationshipRoles.has(beat.role ?? "") || /romance|relationship|intimacy|chemistry|commitment|hea|hfn|attraction/.test(text);
-  });
-  if (beats.length === 0) return `## Intimacy level\nThe selected intimacy level is ${rating}, but this Story Arc has no relationship-centered/intimacy-bearing beat. Do not invent romance or sexual content solely because of this setting.`;
-  const target = rating === "romantic"
-    ? "reach an unmistakable romantic/physical threshold such as earned attraction, affection, or kissing; do not require sexual activity"
+export const SELECTED_INTIMACY_LEVEL_OBLIGATION = "selected_intimacy_level";
+
+export function intimacyRequirement(
+  req: Pick<OutlineFromRecipeRequest, "recipe" | "arcTemplate">,
+): { level: IntimacyMilestoneRating; roles: string[]; instruction: string } | null {
+  const rating = normalizeIntimacyRating(req.recipe?.project?.intimacyRating) as string;
+  const focus = req.arcTemplate.relationshipFocus ?? "none";
+  if (focus !== "primary" || rating === "unspecified") return null;
+  if (!["romantic", "fade_to_black", "open_door", "explicit"].includes(rating)) return null;
+  const roles = Array.isArray(req.arcTemplate.intimacyMilestoneRoles)
+    ? req.arcTemplate.intimacyMilestoneRoles.filter((role) => typeof role === "string" && role.trim() !== "")
+    : [];
+  if (roles.length === 0) return null;
+  const instruction = rating === "romantic"
+    ? "The relationship must cross an unmistakable romantic or physical threshold; attraction, affection, or kissing can satisfy this, and sexual activity is not required."
     : rating === "fade_to_black"
-    ? "reach an earned consensual adult sexual-intimacy milestone whose treatment transitions away before explicit activity"
+    ? "The outline must contain an earned consensual adult sexual-intimacy event. The Section Contract must make consummation/sexual activity clear, while the prose treatment transitions away before explicit activity is rendered."
     : rating === "open_door"
-    ? "reach an earned on-page consensual adult sexual-intimacy milestone with meaningful sensual detail"
-    : "reach an earned explicit on-page consensual adult sexual-intimacy milestone";
-  return `## Intimacy planning obligation\nThe frozen project selects intimacy level ${rating}. This is a permitted/desired level, not a command to add sex to unrelated stories. Never plan sexual content for a character established as under 18. In the relationship-centered beats below, build causally toward ${target}; place the milestone at an appropriate beat rather than dumping it into an unearned epilogue, and do not require every section in the beat to contain intimacy.\n${beats.map((beat) => `- ${beat.label} (${beat.role}): may carry the milestone when the surrounding Story Arc and Section Contract earn it`).join("\n")}`;
+    ? "The outline must contain an earned consensual adult sexual-intimacy event that occurs on-page."
+    : "The outline must contain at least one earned consensual adult sexual-intimacy event that the Section Contract explicitly requires to occur on-page. Kissing, implication, rumpled sheets, an oversized shirt, waking together, erotic tension, or nudity without sexual activity do not satisfy this obligation.";
+  return {
+    level: rating as IntimacyMilestoneRating,
+    roles,
+    instruction,
+  };
+}
+
+function intimacyEligibleBeats(req: Pick<OutlineFromRecipeRequest, "arcTemplate">) {
+  const roles = new Set(req.arcTemplate.intimacyMilestoneRoles ?? []);
+  return req.arcTemplate.beats.filter((beat) => roles.has(beat.role));
+}
+
+export function intimacyPlanningDirective(req: OutlineFromRecipeRequest): string {
+  const rating = normalizeIntimacyRating(req.recipe?.project?.intimacyRating);
+  const requirement = intimacyRequirement(req);
+  if (rating === "unspecified") return "";
+  if (!requirement) {
+    return `## Intimacy level\nThe selected intimacy level is ${rating}, but the Story Arc template declares no primary relationship focus. Treat intimacy as a rendering permission/ceiling only. Do not invent romance or sexual content solely because of this setting.`;
+  }
+  const beats = intimacyEligibleBeats(req);
+  return `## Whole-arc intimacy obligation\nThe template declares relationshipFocus=primary and the frozen project selects intimacy level ${requirement.level}. This is a hard whole-arc semantic obligation with synthetic ID ${SELECTED_INTIMACY_LEVEL_OBLIGATION}; it is not satisfied by a model-authored claim or by every section containing intimacy. Use only the template's eligible milestone roles. ${requirement.instruction}\nEligible milestone beats: ${beats.map((beat) => `${beat.label} (${beat.role})`).join(", ") || "none"}. If no eligible beat can carry the milestone, the outline is unresolved rather than silently accepted. Never plan sexual content for a character established as under 18.`;
 }
 
 export function buildPrompt(
@@ -2564,11 +2614,12 @@ Maintain the established narrative POV mode across the outline unless the suppli
 ## Container semantics for planning
 
 Choose a container for the scale of one dramatic unit, not to fake novel length:
-- scene: one continuous dramatic event, expected 800-1,800 tokens
-- developedScene: a fuller scene with escalation and multiple tactics, 1,500-3,000
-- setPiece: a major action, confrontation, ceremony, or reveal, 2,000-5,000
-- sceneSequence: several connected scenes pursuing one objective, 3,000-7,000
-- chapter: a publishing or pacing division, 3,000-8,000+
+- scene: one focused dramatic event that genuinely develops and resolves within a relatively compact unit, expected 800-1,800 tokens
+- developedScene: prefer this for a substantial reader-facing novel section where one objective requires multiple tactics, meaningful resistance, escalation, reversal, emotional development, or a consequential relationship change, 1,500-3,000
+- setPiece: a major confrontation, action, ceremony, revelation, or complex high-stakes event, 2,000-5,000
+- sceneSequence: several connected scenes, locations, or times pursuing one coherent objective, 3,000-7,000
+- chapter: a publishing unit containing multiple substantial movements that belong together, 3,000-8,000+
+For a new novel, use only scene, developedScene, setPiece, sceneSequence, or chapter as generation-bearing leaves. Do not create moment, vignette, microScene, beat, shortStory, or episode leaves. Do not split one continuous dramatic objective into several short sections merely because each tactic can be named as its own event: setup → attempt → resistance → changed tactic → consequence usually belongs in one developedScene. A brief final image, kiss, gesture, or emotional beat should normally close the preceding substantive scene rather than become an isolated tiny novel section. Favor more developed story, never padding; preserve distinct state change, no duplicate revelations or resolutions, and no filler sections.
 The expected ranges are literary targets; runtime/provider headroom is not a desired length.
 
 ## Recipe obligations
@@ -2789,7 +2840,7 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections.
+This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections.
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
@@ -3302,6 +3353,7 @@ export type SemanticVerificationObligation = {
 };
 
 export type SemanticVerificationResult = {
+  arcWideObligations: SemanticVerificationObligation[];
   beats: Array<{ beatID: string; obligations: SemanticVerificationObligation[] }>;
   unsatisfied: Array<{ beatID: string; obligationID: string; reason: string }>;
 };
@@ -3309,6 +3361,22 @@ export type SemanticVerificationResult = {
 const SEMANTIC_VERIFICATION_SCHEMA = {
   type: "object",
   properties: {
+    arcWideObligations: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          obligationID: { type: "string" },
+          satisfied: { type: "boolean" },
+          sectionIndex: { type: "integer" },
+          field: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] },
+          quote: { type: "string", maxLength: 1200 },
+          reason: { type: "string", minLength: 1, maxLength: 1200 },
+        },
+        required: ["obligationID", "satisfied", "sectionIndex", "field", "quote", "reason"],
+        additionalProperties: false,
+      },
+    },
     beats: {
       type: "array",
       items: {
@@ -3337,16 +3405,31 @@ const SEMANTIC_VERIFICATION_SCHEMA = {
       },
     },
   },
-  required: ["beats"],
+  required: ["arcWideObligations", "beats"],
   additionalProperties: false,
 } as const;
 
-function semanticVerificationInput(
+export function semanticVerificationInput(
   suggestions: Suggestion[],
-  template: Pick<ArcTemplateBlob, "name" | "beats">,
+  template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
+  recipe?: Pick<CanonicalRecipeEnvelope, "project">,
 ): Record<string, unknown> {
+  const requirement = intimacyRequirement({ arcTemplate: template as ArcTemplateBlob, recipe: recipe as CanonicalRecipeEnvelope });
+  const eligible = new Set((template.intimacyMilestoneRoles ?? []));
   return {
     storyArcName: template.name,
+    relationshipFocus: template.relationshipFocus ?? "none",
+    intimacyMilestoneRoles: template.intimacyMilestoneRoles ?? [],
+    selectedIntimacyLevel: requirement?.level ?? "unspecified",
+    arcWideObligations: requirement ? [{
+      obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION,
+      instruction: requirement.instruction,
+      eligibleMilestoneRoles: requirement.roles,
+      sections: suggestions.flatMap((section, sectionIndex) => {
+        const beat = template.beats.find((candidate) => candidate.id === section.storyArcBeatID);
+        return beat && eligible.has(beat.role) ? [{ sectionIndex, beatID: beat.id, role: beat.role, label: beat.label, dramaticEvent: section.dramaticEvent ?? "", resultingChange: section.resultingChange ?? "", terminalState: section.terminalState ?? "" }] : [];
+      }),
+    }] : [],
     beats: template.beats.map((beat) => ({
       beatID: beat.id,
       role: beat.role,
@@ -3365,24 +3448,58 @@ function semanticVerificationInput(
 
 export async function verifyStoryArcSemantics(
   suggestions: Suggestion[],
-  template: Pick<ArcTemplateBlob, "name" | "beats">,
+  template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
   billableCall: SuggestionLLMCall,
+  recipe?: Pick<CanonicalRecipeEnvelope, "project">,
 ): Promise<SemanticVerificationResult> {
-  const input = semanticVerificationInput(suggestions, template);
-  const knownBeats = new Map(template.beats.map((beat) => [beat.id, beat]));
-  const knownObligations = new Map(template.beats.flatMap((beat) => arcRoleContract(beat, template.name).semanticObligations.map((obligation) => [`${beat.id}:${obligation.id}`, obligation])));
+  const input = semanticVerificationInput(suggestions, template, recipe);
   const raw = await billableCall(
-    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
+    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and any whole-arc intimacy obligation. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
     "outline-semantic-verification",
   );
-  const parsed = parseOutlineJSON<{ beats?: unknown }>(raw.content, raw.finishReason);
+  const parsed = parseOutlineJSON<{ beats?: unknown; arcWideObligations?: unknown }>(raw.content, raw.finishReason);
   if (!parsed || !Array.isArray(parsed.beats)) throw new Error("story_arc_semantic_verification: response missing beats");
+  const requirement = intimacyRequirement({ arcTemplate: template as ArcTemplateBlob, recipe: recipe as CanonicalRecipeEnvelope });
+  const rawArcWide = Array.isArray(parsed.arcWideObligations) ? parsed.arcWideObligations : [];
+  const arcWideObligations: SemanticVerificationObligation[] = [];
+  const knownBeats = new Map(template.beats.map((beat) => [beat.id, beat]));
+  const knownObligations = new Map(template.beats.flatMap((beat) => arcRoleContract(beat, template.name).semanticObligations.map((obligation) => [`${beat.id}:${obligation.id}`, obligation])));
   const seen = new Set<string>();
   const beats: SemanticVerificationResult["beats"] = [];
   const unsatisfied: SemanticVerificationResult["unsatisfied"] = [];
+  if (requirement) {
+    const rawObligation = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === SELECTED_INTIMACY_LEVEL_OBLIGATION);
+    const eligibleSections = suggestions.map((section, sectionIndex) => ({ section, sectionIndex })).filter(({ section }) => {
+      const beat = template.beats.find((candidate) => candidate.id === section.storyArcBeatID);
+      return beat && requirement.roles.includes(beat.role);
+    });
+    const sectionIndex = Number(rawObligation?.sectionIndex);
+    const field = rawObligation?.field;
+    const quote = normalizeEvidenceText(String(rawObligation?.quote ?? ""));
+    const section = eligibleSections.find((candidate) => candidate.sectionIndex === sectionIndex)?.section;
+    const actual = section && ["dramaticEvent", "resultingChange", "terminalState"].includes(field)
+      ? normalizeEvidenceText(String((section as any)[field] ?? ""))
+      : "";
+    if (rawObligation?.satisfied && (!section || !quote || !actual.includes(quote))) {
+      throw new Error(`story_arc_semantic_verification: quote is not grounded for ${SELECTED_INTIMACY_LEVEL_OBLIGATION}`);
+    }
+    const verified = {
+      obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION,
+      satisfied: Boolean(rawObligation?.satisfied),
+      sectionIndex: Number.isInteger(sectionIndex) ? sectionIndex : -1,
+      field: ["dramaticEvent", "resultingChange", "terminalState"].includes(field) ? field : "dramaticEvent",
+      quote,
+      reason: String(rawObligation?.reason ?? "missing whole-arc intimacy milestone"),
+    } as SemanticVerificationObligation;
+    arcWideObligations.push(verified);
+    if (!verified.satisfied) {
+      const repairBeat = eligibleSections[0]?.section.storyArcBeatID ?? "__story_arc__";
+      unsatisfied.push({ beatID: repairBeat, obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION, reason: verified.reason });
+    }
+  }
   for (const rawBeat of parsed.beats as any[]) {
     const beatID = String(rawBeat?.beatID ?? "");
     if (!knownBeats.has(beatID) || seen.has(beatID)) throw new Error(`story_arc_semantic_verification: unknown or duplicate beat ${beatID}`);
@@ -3415,7 +3532,7 @@ export async function verifyStoryArcSemantics(
     beats.push({ beatID, obligations });
   }
   for (const beat of template.beats) if (arcRoleContract(beat, template.name).semanticObligations.length > 0 && !seen.has(beat.id)) throw new Error(`story_arc_semantic_verification: missing beat ${beat.id}`);
-  return { beats, unsatisfied };
+  return { arcWideObligations, beats, unsatisfied };
 }
 
 
@@ -3444,8 +3561,18 @@ export async function repairStoryArcSemanticObligations(
   failures: Array<{ beatID: string; obligationID: string; reason: string }>,
   billableCall: SuggestionLLMCall,
   recipeObligations: RecipeObligation[] = [],
+  recipe?: Pick<CanonicalRecipeEnvelope, "project">,
 ): Promise<Suggestion[]> {
+  const intimacyFailure = failures.some((failure) => failure.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION);
+  const intimacy = intimacyRequirement({ arcTemplate: template as ArcTemplateBlob, recipe: recipe as CanonicalRecipeEnvelope });
+  const intimacyRepairBeat = intimacyFailure && intimacy
+    ? template.beats.find((beat) => intimacy.roles.includes(beat.role) && suggestions.some((section) => section.storyArcBeatID === beat.id))?.id
+    : undefined;
   const affected = new Set(failures.map((failure) => failure.beatID));
+  if (intimacyRepairBeat) {
+    affected.delete("__story_arc__");
+    affected.add(intimacyRepairBeat);
+  }
   const input = template.beats.filter((beat) => affected.has(beat.id)).map((beat) => ({
     beatID: beat.id,
     role: beat.role,
@@ -3455,7 +3582,7 @@ export async function repairStoryArcSemanticObligations(
     sections: suggestions.flatMap((section, sectionIndex) => section.storyArcBeatID === beat.id ? [{ sectionIndex, section }] : []),
   }));
   const raw = await billableCall(
-    "Repair only the affected Section Contracts. Preserve beat identity, recipe requirement IDs, established causal state, and the primary conflict. Rewrite the minimum number of sections so their dramaticEvent, resultingChange, and terminalState materially satisfy the failed authored Story Arc obligations. Return only the required JSON.",
+    `Repair only the affected Section Contracts. Preserve beat identity, recipe requirement IDs, established causal state, and the primary conflict. Rewrite the minimum number of sections so their dramaticEvent, resultingChange, and terminalState materially satisfy the failed obligations. ${intimacyFailure && intimacy ? `The whole-arc obligation ${SELECTED_INTIMACY_LEVEL_OBLIGATION} requires this selected ${intimacy.level} milestone to occur in the current eligible section; do not use implication, kissing, rumpled sheets, or a relationship label as a substitute.` : ""} Return only the required JSON.`,
     JSON.stringify(input),
     7000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_repair", strict: true, schema: SEMANTIC_REPAIR_SCHEMA } },
@@ -4530,10 +4657,11 @@ export async function runSuggestionJob(
             expansion.system,
             expansion.user,
             OUTLINE_OUTPUT_TOKEN_BUDGET,
-            { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: buildExpansionResponseSchema(beat ? arcRoleContract(body.arcTemplate.beats.find((candidate) => candidate.id === beat.beatID)!, body.arcTemplate.name) : undefined) } },
+            { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: buildExpansionResponseSchema(beat ? arcRoleContract(body.arcTemplate.beats.find((candidate) => candidate.id === beat.beatID)!, body.arcTemplate.name) : undefined, requestedStoryMaterialFormat(body)) } },
             `outline-expansion-${context.round}-${beat?.beatID ?? "global"}`,
             (content, finishReason) => {
               const additions = parseExpansionResponse(content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, finishReason);
+              validateNovelLeafContainers(additions, requestedStoryMaterialFormat(body));
               const merged = mergeExpansionAdditions(current, additions);
               if (merged.length > MAX_PLANNED_SECTIONS) {
                 throw new ExpansionValidationError(
@@ -4543,7 +4671,9 @@ export async function runSuggestionJob(
               return additions;
             },
           );
-          return parseExpansionResponse(expandedRaw.content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, expandedRaw.finishReason);
+          const additions = parseExpansionResponse(expandedRaw.content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, expandedRaw.finishReason);
+          validateNovelLeafContainers(additions, requestedStoryMaterialFormat(body));
+          return additions;
         },
         async (_roundDiagnostic, allDiagnostics, current) => {
           latestValidSuggestions = current;
@@ -4730,7 +4860,7 @@ export async function runSuggestionJob(
       await postValidatedOutline(suggestions, []);
     };
     if (planningState.nextAction === "semantic-verification") {
-      const verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall);
+      const verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
       diagnostics = { ...diagnostics, stage: "semantic_verified", semanticVerification: verification };
       if (verification.unsatisfied.length > 0) {
         planningState = { ...planningState, phase: "semantic_repair_pending", nextAction: "semantic-repair", semanticRepairFailures: verification.unsatisfied };
@@ -4749,6 +4879,7 @@ export async function runSuggestionJob(
         Array.isArray(planningState.semanticRepairFailures) ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }> : [],
         billableCall,
         recipeObligations,
+        body.recipe,
       );
       planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification" };
       diagnostics = { ...diagnostics, stage: "semantic_reverification_pending" };
@@ -4756,7 +4887,7 @@ export async function runSuggestionJob(
       throw new SuggestionWorkerYield();
     }
     if (planningState.nextAction === "semantic-reverification") {
-      const verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall);
+      const verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
       diagnostics = { ...diagnostics, stage: "semantic_reverified", semanticVerification: verification };
       await updateRun({ suggestions: persistedSemanticSuggestions, diagnostics });
       if (verification.unsatisfied.length > 0) {
@@ -5084,7 +5215,7 @@ export async function runSuggestionJob(
       recipeObligations,
     };
     const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial);
-    const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations, body.arcTemplate.name);
+    const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations, body.arcTemplate.name, requestedStoryMaterialFormat(body));
     const responseFormat = {
       type: "json_schema",
       json_schema: { name: "outline_suggestions_by_beat", strict: true, schema: responseSchema },
@@ -5104,6 +5235,7 @@ export async function runSuggestionJob(
           const flattened = flattenSuggestionResponse(parseOutlineJSON(content, finishReason), body.arcTemplate.beats);
           diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
           const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
+          validateNovelLeafContainers(validated.suggestions, requestedStoryMaterialFormat(body));
           const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []);
           if (merged.length > MAX_PLANNED_SECTIONS) {
             throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
@@ -5116,6 +5248,7 @@ export async function runSuggestionJob(
         body.arcTemplate.beats,
       );
       const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
+      validateNovelLeafContainers(validated.suggestions, requestedStoryMaterialFormat(body));
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []), warnings: validated.warnings };
       diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions) };
       if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
@@ -5147,7 +5280,7 @@ export async function runSuggestionJob(
     };
 
     const authoredSemanticBeatCount = body.arcTemplate.beats.filter((beat) => arcRoleContract(beat, body.arcTemplate.name).semanticObligations.length > 0).length;
-    if (authoredSemanticBeatCount > 0) {
+    if (authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null) {
       // Semantic verification is its own durable provider stage. Persist the
       // validated outline before yielding so a one-dispatch worker slice never
       // replays the paid outline call or loses the verifier checkpoint.

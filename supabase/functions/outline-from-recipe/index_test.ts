@@ -90,6 +90,12 @@ import {
   repairStoryArcMacroStructure,
   arcRoleContract,
   buildExpansionResponseSchema,
+  validateNovelLeafContainers,
+  NOVEL_LEAF_CONTAINERS,
+  intimacyRequirement,
+  intimacyPlanningDirective,
+  semanticVerificationInput,
+  SELECTED_INTIMACY_LEVEL_OBLIGATION,
   planSectionAllocation,
   checkRateLimit,
   logRequest,
@@ -1218,7 +1224,7 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   ]), [2300, 4800]);
   assertEquals(projectedExpectedTokens([{ container: "scene" }]), 1300);
   assertEquals(evaluateNovelScale([{ container: "scene" }]).meetsMinimum, false);
-  assertEquals(evaluateNovelScale([{ container: "scene" }]).minimumWords, 70000);
+  assertEquals(evaluateNovelScale([{ container: "scene" }]).minimumWords, 80000);
   assertEquals(projectedExpectedTokens([{ container: "sceneSequence" }]), 5000);
   assertEquals(projectedExpectedTokens([{ container: "scene" }, { container: "scene" }]), 2600);
   assertEquals(needsNovelExpansion([{ container: "sceneSequence" }]), true);
@@ -1281,9 +1287,9 @@ Deno.test("optional repair failure keeps the original structurally valid outline
 });
 
 Deno.test("beat-local expansion visits canonical beats and isolates additions", async () => {
-  const initial = sceneOutline(55).map((section, index) => ({
+  const initial = sceneOutline(76).map((section, index) => ({
     ...section,
-    storyArcBeatID: index < 28 ? "beat-1" : "beat-2",
+    storyArcBeatID: index < 39 ? "beat-1" : "beat-2",
   }));
   const calls: Array<{ beatID: string; currentSections: number }> = [];
   const result = await progressivelyExpandOutline(
@@ -1293,8 +1299,8 @@ Deno.test("beat-local expansion visits canonical beats and isolates additions", 
       if (!beat) throw new Error("beat context missing");
       calls.push({ beatID: beat.beatID, currentSections: beat.currentSections.length });
       return [
-        expansionSection(`${beat.beatID} addition 1`, "chapter", beat.beatID),
-        expansionSection(`${beat.beatID} addition 2`, "chapter", beat.beatID),
+        expansionSection(`${beat.beatID} addition 1`, "scene", beat.beatID),
+        expansionSection(`${beat.beatID} addition 2`, "scene", beat.beatID),
       ];
     },
     undefined,
@@ -1306,12 +1312,12 @@ Deno.test("beat-local expansion visits canonical beats and isolates additions", 
     },
   );
   assertEquals(calls, [
-    { beatID: "beat-1", currentSections: 28 },
-    { beatID: "beat-2", currentSections: 27 },
+    { beatID: "beat-1", currentSections: 39 },
+    { beatID: "beat-2", currentSections: 37 },
   ]);
-  assertEquals(result.suggestions.length, 59);
-  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-1").length, 30);
-  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-2").length, 29);
+  assertEquals(result.suggestions.length, 80);
+  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-1").length, 41);
+  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-2").length, 39);
 });
 
 Deno.test("beat-local expansion rejects additions assigned to another beat", async () => {
@@ -1353,17 +1359,17 @@ Deno.test("beat-local expansion prompt carries the target beat contract", () => 
 });
 
 Deno.test("novel scale evaluates existing accepted sections together with the generated delta", () => {
-  const existing = sceneOutline(50);
+  const existing = sceneOutline(60);
   const generated = sceneOutline(21);
   const deltaOnly = evaluateNovelScale(generated);
   const complete = evaluateNovelScale(generated, existing);
   assertEquals(deltaOnly.meetsMinimum, false);
   assertEquals(complete.meetsMinimum, true);
-  assertEquals(complete.projectedWords >= 70000, true);
+  assertEquals(complete.projectedWords >= 80000, true);
 });
 
 Deno.test("existing accepted sections can prevent unnecessary expansion", async () => {
-  const existing = sceneOutline(70);
+  const existing = sceneOutline(80);
   let calls = 0;
   const result = await progressivelyExpandOutline(
     [],
@@ -1450,7 +1456,7 @@ function sceneOutline(count: number): any[] {
 
 Deno.test("progressive expansion runs round 2 after a short round 1 and succeeds when scale is reached", async () => {
   const calls: any[] = [];
-  const initial = sceneOutline(27);
+  const initial = sceneOutline(60);
   const result = await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async (current, context) => {
     calls.push({ current: current.length, context });
     return context.round === 1
@@ -1458,13 +1464,13 @@ Deno.test("progressive expansion runs round 2 after a short round 1 and succeeds
       : Array.from({ length: 10 }, (_, i) => expansionSection(`Round 2 ${i + 1}`, "chapter"));
   });
   assertEquals(calls.map((call) => call.context.round), [1, 2]);
-  assertEquals(calls[0].current, 27);
-  assertEquals(calls[1].current, 37);
+  assertEquals(calls[0].current, 60);
+  assertEquals(calls[1].current, 70);
   assertEquals(result.diagnostics.length, 2);
-  assertEquals(result.diagnostics[0].sectionCountBefore, 27);
-  assertEquals(result.diagnostics[0].sectionCountAfter, 37);
-  assertEquals(result.diagnostics[1].sectionCountBefore, 37);
-  assertEquals(result.diagnostics[1].sectionCountAfter, 47);
+  assertEquals(result.diagnostics[0].sectionCountBefore, 60);
+  assertEquals(result.diagnostics[0].sectionCountAfter, 70);
+  assertEquals(result.diagnostics[1].sectionCountBefore, 70);
+  assertEquals(result.diagnostics[1].sectionCountAfter, 80);
   assertEquals(result.warnings, []);
 });
 
@@ -1482,7 +1488,7 @@ Deno.test("Test3-shaped undersized outline fails closed after bounded expansion"
   }
   assertEquals(calls, MAX_EXPANSION_ROUNDS);
   assertEquals((failure as NovelScalePlanningError).code, "failed_under_target");
-  assertEquals((failure as NovelScalePlanningError).message.includes("70,000-word minimum"), true);
+  assertEquals((failure as NovelScalePlanningError).message.includes("80,000-word preferred planning floor"), true);
 });
 
 Deno.test("stale expansion anchors append within their beat while exact anchors remain stable", () => {
@@ -1676,7 +1682,7 @@ Deno.test("existing sections survive progressive expansion and global cap fails 
     failure = error;
   }
   assertEquals((failure as NovelScalePlanningError).code, "failed_under_target");
-  assertEquals((failure as NovelScalePlanningError).message.includes("70,000-word minimum"), true);
+  assertEquals((failure as NovelScalePlanningError).message.includes("80,000-word preferred planning floor"), true);
 });
 
 Deno.test("expansion prompt includes round projection, broad range, and remaining deficit", () => {
@@ -4114,7 +4120,7 @@ Deno.test("multi-beat expansion checkpoints beat one before the one-dispatch yie
     if (action === "outline-suggestions") return { beats: { "beat-1": [baseSection("beat-1", "Opening")], "beat-2": [baseSection("beat-2", "Closing")] } };
     const beat = action.endsWith("beat-1") ? "beat-1" : "beat-2";
     const count = beat === "beat-1" ? 7 : 2;
-    return { suggestions: Array.from({ length: count }, (_, index) => expansionSection(`${action}-${index}`, "episode", beat)) };
+    return { suggestions: Array.from({ length: count }, (_, index) => expansionSection(`${action}-${index}`, "scene", beat)) };
   });
   const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
     db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
@@ -4134,7 +4140,8 @@ Deno.test("multi-beat expansion checkpoints beat one before the one-dispatch yie
   assertEquals(db.row.suggestions.some((section: any) => section.title.includes("beat-1-0")), true);
   await run();
   assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-beat-1", "outline-expansion-1-beat-2"]);
-  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.status, "pending");
+  assertEquals(db.row.planning_state.phase, "expansion");
   assertEquals(db.row.attempt_count, 0);
 });
 
@@ -5358,9 +5365,11 @@ Deno.test("Story Arc evidence must quote the actual Section Contract field", () 
     terminalState: "The court has a documented evidence sequence.",
   };
   const rejected = validateGroundedArcEvidence({ authored_beat_requirement: [{ field: "resultingChange", quote: "This proves what their relationship means." }] }, section, new Set(["authored_beat_requirement"]));
-  assertStringIncludes(rejected.error ?? "", "exact normalized substring");
+  assertEquals(rejected.error, undefined);
+  assertEquals(rejected.value, {});
   const grounded = validateGroundedArcEvidence({ authored_beat_requirement: [{ field: "resultingChange", quote: "The case becomes auditable." }] }, section, new Set(["authored_beat_requirement"]));
   assertEquals(grounded.error, undefined);
+  assertEquals(grounded.value?.authored_beat_requirement?.length, 1);
 });
 
 Deno.test("Story Arc obligations are beat-level rather than required on every section", () => {
@@ -5370,4 +5379,45 @@ Deno.test("Story Arc obligations are beat-level rather than required on every se
     { storyArcBeatID: "beat", title: "Threshold", summary: "Threshold", dramaticEvent: "They kiss after each entrusts the other with damaging professional evidence.", resultingChange: "Their relationship crosses from charged possibility into acknowledged intimacy.", terminalState: "They leave more vulnerable to each other.", arcObligationEvidence: { authored_beat_requirement: [{ field: "resultingChange", quote: "Their relationship crosses from charged possibility into acknowledged intimacy." }] } },
   ];
   assertEquals(validateArcSemanticObligations(suggestions as any, template), []);
+});
+
+
+Deno.test("relationship metadata drives intimacy capability without role detection", async () => {
+  const darkRomance = {
+    name: "Dark Romance",
+    relationshipFocus: "primary",
+    intimacyMilestoneRoles: ["entanglement", "vulnerability_revealed", "chosen_terms", "earned_resolution"],
+    beats: [{ id: "e", role: "entanglement", label: "Entanglement", description: "" }],
+  } as any;
+  const mystery = { name: "Mystery", beats: [{ id: "m", role: "the_crime", label: "The Crime", description: "" }] } as any;
+  const recipe = { project: { intimacyRating: "explicit" } } as any;
+  assertEquals(intimacyRequirement({ arcTemplate: darkRomance, recipe })?.level, "explicit");
+  assertEquals(intimacyRequirement({ arcTemplate: mystery, recipe }), null);
+  assertStringIncludes(intimacyPlanningDirective({ arcTemplate: darkRomance, recipe } as any), SELECTED_INTIMACY_LEVEL_OBLIGATION);
+  assertEquals((await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts")).includes('new Set(["meet_attraction"'), false);
+});
+
+Deno.test("explicit intimacy is a whole-arc verifier obligation and generic arcs stay clean", () => {
+  const template = {
+    name: "Dark Romance",
+    relationshipFocus: "primary",
+    intimacyMilestoneRoles: ["entanglement"],
+    beats: [{ id: "e", role: "entanglement", label: "Entanglement", description: "" }],
+  } as any;
+  const recipe = { project: { intimacyRating: "explicit" } } as any;
+  const suggestions = [{ storyArcBeatID: "e", dramaticEvent: "Mira reaches for Julian's hand and closes the distance.", resultingChange: "Their intimacy becomes chosen rather than engineered.", terminalState: "They remain together." }];
+  const input = semanticVerificationInput(suggestions as any, template, recipe);
+  assertEquals((input.arcWideObligations as any[])[0].obligationID, SELECTED_INTIMACY_LEVEL_OBLIGATION);
+  assertEquals((input.arcWideObligations as any[])[0].sections.length, 1);
+  const generic = { name: "Mystery", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "m", role: "the_crime", label: "The Crime", description: "" }] } as any;
+  assertEquals((semanticVerificationInput(suggestions as any, generic, recipe).arcWideObligations as any[]).length, 0);
+});
+
+Deno.test("novel scale uses the preferred 80,000-word floor and rejects tiny new leaves", () => {
+  assertEquals(NOVEL_LEAF_CONTAINERS, ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"]);
+  assertThrows(() => validateNovelLeafContainers([{ container: "moment" }]));
+  assertThrows(() => validateNovelLeafContainers([{ container: "vignette" }]));
+  validateNovelLeafContainers([{ container: "moment" }], "shortStory");
+  assertEquals(true, true);
+  assertEquals(needsNovelExpansion(Array.from({ length: 54 }, () => ({ container: "scene" }))), true);
 });

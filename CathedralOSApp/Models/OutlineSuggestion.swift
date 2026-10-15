@@ -111,6 +111,38 @@ struct ArcTemplateBlob: Codable {
     let name: String
     let description: String?
     let beats: [BeatBlob]
+    let relationshipFocus: StoryArcRelationshipFocus
+    let intimacyMilestoneRoles: [String]
+
+    init(
+        id: String,
+        name: String,
+        description: String?,
+        beats: [BeatBlob],
+        relationshipFocus: StoryArcRelationshipFocus = .none,
+        intimacyMilestoneRoles: [String] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.beats = beats
+        self.relationshipFocus = relationshipFocus
+        self.intimacyMilestoneRoles = intimacyMilestoneRoles
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, description, beats, relationshipFocus, intimacyMilestoneRoles
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        beats = try container.decode([BeatBlob].self, forKey: .beats)
+        relationshipFocus = try container.decodeIfPresent(StoryArcRelationshipFocus.self, forKey: .relationshipFocus) ?? .none
+        intimacyMilestoneRoles = try container.decodeIfPresent([String].self, forKey: .intimacyMilestoneRoles) ?? []
+    }
 }
 
 struct BeatBlob: Codable {

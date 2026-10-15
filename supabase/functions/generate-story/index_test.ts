@@ -6063,3 +6063,19 @@ Deno.test("generation alert ownership uses validated requestClass, not raw durab
   // An arbitrary durable_run_id is intentionally not an input to this
   // helper. Only the server-derived request class and validated lineage are.
 });
+
+
+Deno.test("planned development targets are rendered as bounded generation guidance", () => {
+  const result = buildPrompt({
+    ...MINIMAL_PROMPT_ARGS,
+    container: "scene",
+    plannedTargetWords: 1000,
+    plannedTargetWordsMin: 615,
+    plannedTargetWordsMax: 1385,
+  });
+  const prompt = `${result.craft}\n${result.context}`;
+  assertStringIncludes(prompt, "Planned Development Length");
+  assertStringIncludes(prompt, "approximately 1,000 words");
+  assertStringIncludes(prompt, "615–1,385 words");
+  assertStringIncludes(prompt, "container hard cap and Section Contract remain authoritative");
+});
