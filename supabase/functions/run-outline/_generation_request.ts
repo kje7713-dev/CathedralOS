@@ -181,6 +181,13 @@ export function buildGenerateStoryRequest(args: {
     generationAction: "generate",
     generationLengthMode: args.lengthMode,
     sourcePayloadJSON: payload,
+    // These top-level fields are consumed by generate-story. They are derived
+    // only from the immutable recipe captured for this outline, never from
+    // mutable current project state.
+    readingLevel: String(project?.readingLevel ?? ""),
+    contentRating: String(project?.contentRating ?? ""),
+    intimacyRating: String(project?.intimacyRating ?? "unspecified"),
+    audienceNotes: String(project?.audienceNotes ?? ""),
     // Frozen provenance makes every Run All request auditable and prevents
     // later project edits from changing canon for an active outline.
     frozenRecipeHash: args.frozenRecipeHash ?? undefined,

@@ -89,6 +89,7 @@ struct ProjectImportExportPayload: Codable {
         let tags: [String]
         let readingLevel: String
         let contentRating: String
+        let intimacyRating: String
         let audienceNotes: String
 
         init(
@@ -100,6 +101,7 @@ struct ProjectImportExportPayload: Codable {
             tags: [String],
             readingLevel: String = "",
             contentRating: String = "",
+            intimacyRating: String = "unspecified",
             audienceNotes: String = ""
         ) {
             self.id = id
@@ -110,6 +112,7 @@ struct ProjectImportExportPayload: Codable {
             self.tags = tags
             self.readingLevel = readingLevel
             self.contentRating = contentRating
+            self.intimacyRating = StoryIntimacyRating.storageValue(for: intimacyRating)
             self.audienceNotes = audienceNotes
         }
 
@@ -123,6 +126,7 @@ struct ProjectImportExportPayload: Codable {
             tags         = try c.decode([String].self, forKey: .tags)
             readingLevel = try c.decodeIfPresent(String.self, forKey: .readingLevel) ?? ""
             contentRating = try c.decodeIfPresent(String.self, forKey: .contentRating) ?? ""
+            intimacyRating = StoryIntimacyRating.storageValue(for: c.decodeIfPresent(String.self, forKey: .intimacyRating))
             audienceNotes = try c.decodeIfPresent(String.self, forKey: .audienceNotes) ?? ""
         }
     }

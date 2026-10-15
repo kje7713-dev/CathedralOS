@@ -108,15 +108,17 @@ struct PromptPackExportPayload: Codable {
         let summary: String
         let readingLevel: String
         let contentRating: String
+        let intimacyRating: String
         let audienceNotes: String
 
         init(id: UUID, name: String, summary: String,
-             readingLevel: String = "", contentRating: String = "", audienceNotes: String = "") {
+             readingLevel: String = "", contentRating: String = "", intimacyRating: String = "unspecified", audienceNotes: String = "") {
             self.id = id
             self.name = name
             self.summary = summary
             self.readingLevel = readingLevel
             self.contentRating = contentRating
+            self.intimacyRating = StoryIntimacyRating.storageValue(for: intimacyRating)
             self.audienceNotes = audienceNotes
         }
 
@@ -127,6 +129,7 @@ struct PromptPackExportPayload: Codable {
             summary = try c.decode(String.self, forKey: .summary)
             readingLevel  = try c.decodeIfPresent(String.self, forKey: .readingLevel)  ?? ""
             contentRating = try c.decodeIfPresent(String.self, forKey: .contentRating) ?? ""
+            intimacyRating = StoryIntimacyRating.storageValue(for: c.decodeIfPresent(String.self, forKey: .intimacyRating))
             audienceNotes = try c.decodeIfPresent(String.self, forKey: .audienceNotes) ?? ""
         }
     }

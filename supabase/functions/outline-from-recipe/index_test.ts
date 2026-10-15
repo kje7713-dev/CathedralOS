@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects, assertThrows } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals, assertRejects, assertThrows, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { deriveRecipeObligations, obligationCoverage } from "./_recipe_obligations.ts";
 import { compactArcNarrativeText, compactMaterial } from "./_prompt_context.ts";
 
@@ -77,6 +77,7 @@ import {
   findUnusedStoryMaterial,
   validateStoryArcSemantics,
   validateArcSemanticObligations,
+  validateGroundedArcEvidence,
   validatePostRepairBeatCoverage,
   validateRequiredStoryArcFunctions,
   repairRequiredStoryArcFunctions,
@@ -2666,15 +2667,15 @@ Deno.test("semantic beat obligations require concrete evidence for Romantic Susp
     {
       ...semanticSection("intimacy", "The Safehouse Confession", "The leads shelter together while the threat closes in.", "escalation"),
       resultingChange: "The guarded lead reveals the evidence and the other lead takes a personal risk to protect them, changing their mutual trust.",
-      arcObligationEvidence: { relationship_deepens_under_pressure: "The danger forces a guarded confession and a reciprocal protective choice that changes their trust." },
+      arcObligationEvidence: { relationship_deepens_under_pressure: [{ field: "dramaticEvent", quote: "The guarded lead reveals the evidence" }] },
     },
     {
       ...semanticSection("showdown", "The Two-Way Trap", "Both leads coordinate the trap that corners the pursuer, and one stays behind to draw fire so the other can finish it.", "climax"),
       resultingChange: "The threat is defeated because their coordinated plan succeeds, and their commitment changes the cost each is willing to pay.",
       terminalState: "The danger is ended and the leads face the consequences together.",
       arcObligationEvidence: {
-        coordinated_danger_resolution: "Both leads perform complementary actions that resolve the threat rather than one lead winning alone.",
-        emotional_commitment_in_action: "Their commitment determines who takes the risk and makes the decisive plan possible.",
+        coordinated_danger_resolution: [{ field: "dramaticEvent", quote: "Both leads coordinate the trap" }],
+        emotional_commitment_in_action: [{ field: "resultingChange", quote: "their commitment changes the cost" }],
       },
     },
     {
@@ -2682,8 +2683,8 @@ Deno.test("semantic beat obligations require concrete evidence for Romantic Susp
       resultingChange: "The threat is dismantled and the leads establish an earned future together shaped by the trust they chose under pressure.",
       terminalState: "The threat cannot resume; the leads begin their committed future with a concrete shared plan.",
       arcObligationEvidence: {
-        threat_is_settled: "The conspirator is exposed and the threat is dismantled, so it cannot continue.",
-        earned_romantic_future: "Their shared plan grows from the risks and trust they already proved during the investigation.",
+        threat_is_settled: [{ field: "dramaticEvent", quote: "expose the conspirator" }],
+        earned_romantic_future: [{ field: "resultingChange", quote: "establish an earned future together" }],
       },
     },
   ];
@@ -2695,8 +2696,8 @@ Deno.test("semantic beat obligations require concrete evidence for Romantic Susp
     romanticSuspenseFixture.name,
   );
   const intimacySchema = schema.properties.beats.properties.intimacy.items;
-  assertEquals(intimacySchema.required.includes("arcObligationEvidence"), true);
-  assertEquals(intimacySchema.properties.arcObligationEvidence.required, ["relationship_deepens_under_pressure"]);
+  assertEquals(intimacySchema.required.includes("arcObligationEvidence"), false);
+  assertEquals(intimacySchema.properties.arcObligationEvidence.properties.relationship_deepens_under_pressure.type, "array");
 });
 
 Deno.test("authored Story Arc beat requirements survive context compaction for every template", () => {
@@ -2722,7 +2723,7 @@ Deno.test("authored Story Arc beat requirements survive context compaction for e
     resultingChange: "The authored requirement changes the protagonist's relationship and the story's available choices.",
     terminalState: "The changed condition carries the authored requirement into the next beat.",
     arcObligationEvidence: {
-      authored_beat_requirement: `Concrete evidence that the section fulfills the complete authored requirement: ${authoredRequirement}`,
+      authored_beat_requirement: [{ field: "dramaticEvent", quote: "The beat's authored requirement is enacted in a concrete event." }],
     },
   };
   assertEquals(validateArcSemanticObligations([section], template), []);
@@ -2733,7 +2734,7 @@ Deno.test("authored Story Arc beat requirements survive context compaction for e
     [],
     template.name,
   );
-  assertEquals(schema.properties.beats.properties["custom-beat"].items.properties.arcObligationEvidence.required, ["authored_beat_requirement"]);
+  assertEquals(schema.properties.beats.properties["custom-beat"].items.required.includes("arcObligationEvidence"), false);
   const prompt = buildPrompt({ ...sparseRequest, arcTemplate: template } as any, new Map([["custom-beat", { minSections: 1, rationale: "semantic test" }]]));
   assertEquals(prompt.system.includes(authoredRequirement), true);
   assertEquals(prompt.user.includes(authoredRequirement), true);
@@ -3927,6 +3928,9 @@ function fakeWorkerBilling(requestedActions: string[], providerCalls = requested
   return async (request: any) => {
     requestedActions.push(request.action);
     if (providerCalls !== requestedActions) providerCalls.push(request.action);
+    if (request.action === "outline-semantic-verification") {
+      return { featureResult: JSON.stringify(semanticVerifierFixture(request)), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+    }
     if (request.action === "outline-suggestions") {
       const section = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`), entryState: "The prior state holds.", dramaticEvent: `${title} happens.`, resultingChange: `${title} changes the pressure.`, terminalState: `${title} hands forward a new pressure.` });
       return { featureResult: JSON.stringify({ beats: { "beat-1": [section("beat-1", "Opening route")], "beat-2": [section("beat-2", "Cost of the route")] } }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
@@ -3941,10 +3945,25 @@ function fakeWorkerBilling(requestedActions: string[], providerCalls = requested
   };
 }
 
+function semanticVerifierFixture(request: any): unknown {
+  const input = JSON.parse(request.messages?.find((message: any) => message.role === "user")?.content ?? "{}");
+  return { beats: (input.beats ?? []).map((beat: any) => ({
+    beatID: beat.beatID,
+    obligations: (beat.obligations ?? []).map((obligation: any) => {
+      const section = (beat.sections ?? [])[0];
+      const field = "resultingChange";
+      const quote = section?.[field] ?? "";
+      return { obligationID: obligation.obligationID, satisfied: Boolean(section && quote), sectionIndex: section?.sectionIndex ?? -1, field, quote, reason: "fixture evidence" };
+    }),
+  })) };
+}
+
 function validatedWorkerBilling(actions: string[], responseFor: (action: string) => string | unknown) {
   return async (request: any) => {
     actions.push(request.action);
-    const content = responseFor(request.action);
+    const content = request.action === "outline-semantic-verification"
+      ? semanticVerifierFixture(request)
+      : responseFor(request.action);
     if (request.onProviderSuccess) {
       await request.onProviderSuccess({ content: typeof content === "string" ? content : JSON.stringify(content) });
     }
@@ -4049,14 +4068,17 @@ Deno.test("multi-beat expansion checkpoints beat one before the one-dispatch yie
   });
   await run();
   assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(db.row.status, "pending");
+  await run();
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.planning_state.phase, "expansion");
   await run();
-  assertEquals(actions, ["outline-suggestions", "outline-expansion-1-beat-1"]);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-beat-1"]);
   assertEquals(db.row.planning_state.expansionCheckpoint.nextRound, 1);
   assertEquals(db.row.planning_state.expansionCheckpoint.nextBeatIndex, 1);
   assertEquals(db.row.suggestions.some((section: any) => section.title.includes("beat-1-0")), true);
   await run();
-  assertEquals(actions, ["outline-suggestions", "outline-expansion-1-beat-1", "outline-expansion-1-beat-2"]);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-beat-1", "outline-expansion-1-beat-2"]);
   assertEquals(db.row.status, "completed");
   assertEquals(db.row.attempt_count, 0);
 });
@@ -4090,7 +4112,8 @@ Deno.test("fresh novel worker sequence is enrichment then allocation then one gl
   await run();
   await run();
   await run();
-  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions"]);
+  await run();
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.attempt_count, 0);
   assertEquals(actions.some((action) => action.startsWith("outline-route-")), false);
   assertEquals(actions.some((action) => action.startsWith("outline-suggestions-beat-")), false);
@@ -4130,7 +4153,8 @@ Deno.test("worker resume rehydrates prior stages without fabricating cross-stage
 
   const replayStart = db.patchHistory.length;
   await run();
-  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions"]);
+  await run();
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
   const replayedStages = db.patchHistory.slice(replayStart)
     .filter((patch) => (patch.diagnostics as any)?.stage === "story_material_ready")
@@ -4262,7 +4286,8 @@ Deno.test("reclaimed worker trusts an intact persisted planning checkpoint after
   })(persistedPlanningContext);
   await run();
   await run();
-  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions"]);
+  await run();
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
 });
 
@@ -4272,7 +4297,7 @@ Deno.test("production checkpoint resume executes the single global outline call 
   const billableActions: string[] = [];
   const providerCalls: string[] = [];
   const scheduled: Array<{ body: any; auth: string }> = [];
-  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
     db,
     model: { provider_model: "fixture-model" },
     provider: {},
@@ -4280,12 +4305,12 @@ Deno.test("production checkpoint resume executes the single global outline call 
     billableLLM: fakeWorkerBilling(billableActions, providerCalls) as any,
     scheduleContinuation: async (continuationBody, auth) => { scheduled.push({ body: continuationBody, auth }); },
   });
-  assertEquals(providerCalls.length, 1);
-  assertEquals(providerCalls[0], "outline-suggestions");
-  assertEquals(billableActions.length, 1);
-  assertEquals(billableActions[0], "outline-suggestions");
+  await run();
+  await run();
+  assertEquals(providerCalls, ["outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(billableActions, ["outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
-  assertEquals(scheduled.length, 0);
+  assertEquals(scheduled.length, 1);
 });
 
 Deno.test("global outline completion preserves advisory quality and obligation audit diagnostics", async () => {
@@ -4300,7 +4325,12 @@ Deno.test("global outline completion preserves advisory quality and obligation a
     billableLLM: fakeWorkerBilling(actions) as any,
     scheduleContinuation: async () => {},
   });
-  assertEquals(actions, ["outline-suggestions"]);
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
   const diagnostics = db.row.diagnostics;
   assertEquals(Array.isArray(diagnostics.dramaticDistinctnessIssues), true);
@@ -4414,13 +4444,14 @@ Deno.test("durable worker lifecycle checkpoints missing obligations then complet
   });
   await run();
   assertEquals(db.row.status, "pending", JSON.stringify({ actions, error: db.row.error, diagnostics: db.row.diagnostics, planningState: db.row.planning_state }));
+  await run();
   assertEquals(db.row.planning_state.phase, "obligation_repair_pending");
   assertEquals(db.row.planning_state.nextAction, "obligation-repair");
   assertEquals(db.row.suggestions.length, 2);
   assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.length > 0, true);
-  assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
   await run();
-  assertEquals(actions, ["outline-suggestions", "outline-obligation-repair"]);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-obligation-repair"]);
   assertEquals(db.row.status, "completed");
   assertEquals(db.row.diagnostics.missingRequiredRecipeObligations, []);
 });
@@ -4439,11 +4470,12 @@ Deno.test("failed obligation repair becomes a terminal missing_recipe_obligation
   });
   await run();
   assertEquals(db.row.status, "pending");
+  await run();
   assertEquals(db.row.planning_state.nextAction, "obligation-repair");
   assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.includes("R14"), true);
-  assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
   await run();
-  assertEquals(actions, ["outline-suggestions", "outline-obligation-repair"]);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-obligation-repair"]);
   assertEquals(db.row.status, "failed", JSON.stringify({ error: db.row.error, diagnostics: db.row.diagnostics }));
   assertEquals(db.row.error_code, "missing_recipe_obligations");
   assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.includes("R14"), true);
@@ -4490,10 +4522,11 @@ Deno.test("successful obligation repair enters novel expansion instead of comple
   });
   await run();
   await run();
+  await run();
   assertEquals(db.row.status, "pending", JSON.stringify({ actions, error: db.row.error, diagnostics: db.row.diagnostics, planningState: db.row.planning_state }));
   assertEquals(db.row.planning_state.phase, "expansion");
   assertEquals(db.row.status === "completed", false);
-  assertEquals(actions.slice(0, 2), ["outline-suggestions", "outline-obligation-repair"]);
+  assertEquals(actions.slice(0, 3), ["outline-suggestions", "outline-semantic-verification", "outline-obligation-repair"]);
 });
 
 Deno.test("provider billing unavailable during allocation bypasses retry and fails safely", async () => {
@@ -4773,8 +4806,8 @@ Deno.test("two continuation workers race on one pending claim and produce one pr
   ]);
   assertEquals(providerCalls.length, 1);
   assertEquals(providerCalls[0], "outline-suggestions");
-  assertEquals(schedules.length, 0);
-  assertEquals(db.row.status, "completed");
+  assertEquals(schedules.length, 1);
+  assertEquals(db.row.status, "pending");
 });
 
 Deno.test("interrupted worker recovery resumes outline stage without replaying settled stages", async () => {
@@ -4821,12 +4854,16 @@ Deno.test("interrupted worker recovery resumes outline stage without replaying s
         billableLLM: fakeWorkerBilling(actions) as any,
         scheduleContinuation: async () => {},
       });
+      await runSuggestionJob(runID, recoveredBody, userID, openaiKey, attemptCount, authHeader, {
+        db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+        billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
+      });
     },
   );
 
   assertEquals(recovered, true);
   assertEquals(started, 1);
-  assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
   assertEquals(db.row.planning_state.phase, "completed");
   assertEquals(db.row.suggestions.length, 2);
@@ -5198,16 +5235,18 @@ Deno.test("final global provider call completes without an extra continuation", 
   const db = new ExecutableRunDb(row);
   const providerCalls: string[] = [];
   let scheduleCount = 0;
-  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
     db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
     billableLLM: fakeWorkerBilling(providerCalls) as any,
     scheduleContinuation: async () => { scheduleCount++; },
   });
-  assertEquals(providerCalls.length, 1, JSON.stringify({ providerCalls, planningState: db.row.planning_state, diagnostics: db.row.diagnostics }));
-  assertEquals(providerCalls[0], "outline-suggestions");
+  await run();
+  await run();
+  assertEquals(providerCalls.length, 2, JSON.stringify({ providerCalls, planningState: db.row.planning_state, diagnostics: db.row.diagnostics }));
+  assertEquals(providerCalls, ["outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed", JSON.stringify({ providerCalls, planningState: db.row.planning_state, diagnostics: db.row.diagnostics }));
   assertEquals(db.row.diagnostics.completedStages, ["outline"]);
-  assertEquals(scheduleCount, 0);
+  assertEquals(scheduleCount, 1);
 });
 
 
@@ -5233,6 +5272,10 @@ Deno.test("privileged watchdog handler runs the real checkpointed worker exactly
       creditStore: {},
       billableLLM: fakeWorkerBilling(actions) as any,
     });
+    await runSuggestionJob(args[0], args[1], args[2], args[3], args[4], args[5], {
+      db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+      billableLLM: fakeWorkerBilling(actions) as any,
+    });
   };
   const request = new Request("https://project.supabase.co/functions/v1/outline-from-recipe", {
     method: "POST",
@@ -5247,8 +5290,29 @@ Deno.test("privileged watchdog handler runs the real checkpointed worker exactly
   });
   assertEquals(response.status, 202);
   assertEquals(starts, 1);
-  assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
-  assertEquals(db.row.diagnostics.recoveryState, "worker_resumed");
+  assertEquals(db.row.diagnostics.recoveryState, "not_needed");
   assertEquals(db.row.credit_cost_charged, 0);
+});
+
+Deno.test("Story Arc evidence must quote the actual Section Contract field", () => {
+  const section: any = {
+    dramaticEvent: "Elin and Temur arrange the source documents at the winter court.",
+    resultingChange: "The case becomes auditable.",
+    terminalState: "The court has a documented evidence sequence.",
+  };
+  const rejected = validateGroundedArcEvidence({ authored_beat_requirement: [{ field: "resultingChange", quote: "This proves what their relationship means." }] }, section, new Set(["authored_beat_requirement"]));
+  assertStringIncludes(rejected.error ?? "", "exact normalized substring");
+  const grounded = validateGroundedArcEvidence({ authored_beat_requirement: [{ field: "resultingChange", quote: "The case becomes auditable." }] }, section, new Set(["authored_beat_requirement"]));
+  assertEquals(grounded.error, undefined);
+});
+
+Deno.test("Story Arc obligations are beat-level rather than required on every section", () => {
+  const template: any = { name: "Custom", beats: [{ id: "beat", role: "midpoint_intimacy", label: "Midpoint", description: "Deepen the relationship." }] };
+  const suggestions: any[] = [
+    { storyArcBeatID: "beat", title: "Plot cleanup", summary: "Cleanup", dramaticEvent: "The record is filed.", resultingChange: "The case becomes auditable.", terminalState: "The hearing continues.", arcObligationEvidence: {} },
+    { storyArcBeatID: "beat", title: "Threshold", summary: "Threshold", dramaticEvent: "They kiss after each entrusts the other with damaging professional evidence.", resultingChange: "Their relationship crosses from charged possibility into acknowledged intimacy.", terminalState: "They leave more vulnerable to each other.", arcObligationEvidence: { authored_beat_requirement: [{ field: "resultingChange", quote: "Their relationship crosses from charged possibility into acknowledged intimacy." }] } },
+  ];
+  assertEquals(validateArcSemanticObligations(suggestions as any, template), []);
 });

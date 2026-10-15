@@ -49,3 +49,16 @@ Deno.test("generation request: Run All future context is forwarded to generate-s
     "## Future Outline Obligations\n- Later",
   );
 });
+
+Deno.test("Run All generation request forwards frozen audience controls", () => {
+  const request = buildGenerateStoryRequest({
+    snapshot: { project: { name: "Mutable", contentRating: "all_ages" }, promptPacks: [{ id: "pack-1", name: "Pack" }] },
+    frozenRecipe: { project: { id: "p", name: "Frozen", contentRating: "18_plus", intimacyRating: "explicit", readingLevel: "adult", audienceNotes: "FROZEN" }, promptPack: { id: "pack-1", name: "Pack" } },
+    section: { id: "s", title: "S", summary: "S", container: "scene", pov: "thirdPersonLimited", terminal_beat: null },
+    projectId: "p",
+    lengthMode: "short",
+  });
+  assertEquals(request.contentRating, "18_plus");
+  assertEquals(request.intimacyRating, "explicit");
+  assertEquals(request.audienceNotes, "FROZEN");
+});

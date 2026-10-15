@@ -165,6 +165,42 @@ enum StoryContentAgeRating: String, Codable, CaseIterable, Equatable {
     }
 }
 
+/// Canonical project intimacy control, separate from the age/content rating.
+enum StoryIntimacyRating: String, Codable, CaseIterable, Equatable {
+    case unspecified
+    case romantic
+    case fadeToBlack = "fade_to_black"
+    case openDoor = "open_door"
+    case explicit
+
+    var displayName: String {
+        switch self {
+        case .unspecified: return "Unspecified"
+        case .romantic: return "Romance / Kissing"
+        case .fadeToBlack: return "Fade to Black"
+        case .openDoor: return "Open Door"
+        case .explicit: return "Explicit"
+        }
+    }
+
+    static func normalize(_ rawValue: String?) -> StoryIntimacyRating {
+        let value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_") ?? ""
+        return StoryIntimacyRating(rawValue: value) ?? .unspecified
+    }
+
+    static func storageValue(for rawValue: String?) -> String { normalize(rawValue).rawValue }
+
+    func isCompatible(with age: StoryContentAgeRating) -> Bool {
+        switch age {
+        case .allAges, .age13Plus: return self == .unspecified || self == .romantic
+        case .age16Plus: return self == .unspecified || self == .romantic || self == .fadeToBlack
+        case .age18Plus: return true
+        }
+    }
+}
+
 enum StoryViewerAgeTier: Equatable {
     case unknown
     case under13

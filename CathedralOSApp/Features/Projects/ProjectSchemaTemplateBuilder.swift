@@ -922,6 +922,7 @@ enum ProjectSchemaTemplateBuilder {
                 tags: [],
                 readingLevel: project.readingLevel,
                 contentRating: project.contentRating,
+                intimacyRating: project.intimacyRating,
                 audienceNotes: project.audienceNotes
             ),
             setting: settingPayload,

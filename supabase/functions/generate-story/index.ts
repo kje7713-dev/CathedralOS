@@ -57,6 +57,7 @@
 // =============================================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveAudienceFields, validateAudienceCompatibility } from "./_audience.ts";
 import { notifyProviderBillingUnavailable } from "../_shared/_operator_alert.ts";
 import { canonicalUUID } from "../_shared/uuid.ts";
 import { verifyRunOutlineToken } from "../_shared/run-outline-auth.ts";
@@ -412,6 +413,7 @@ interface GenerateStoryRequest {
   previousOutputText?: string;
   readingLevel?: string;
   contentRating?: string;
+  intimacyRating?: string;
   audienceNotes?: string;
   // Terminal beat: the specific dramatic action + immediate reaction that
   // closes the scene. Optional. When set, rendered as the LAST input section
@@ -586,6 +588,7 @@ interface PromptPackPayloadShape {
     summary?: string;
     readingLevel?: string;
     contentRating?: string;
+    intimacyRating?: string;
     audienceNotes?: string;
   };
   setting?: {
@@ -1579,6 +1582,7 @@ export function buildPrompt(req: {
   previousOutputText?: string;
   readingLevel?: string;
   contentRating?: string;
+  intimacyRating?: string;
   audienceNotes?: string;
   // Terminal beat: optional concrete endpoint the model should land on.
   // When set, rendered in the user message as the last input section
@@ -1657,6 +1661,8 @@ export function buildPrompt(req: {
   const readingLevel = req.readingLevel || payload?.project?.readingLevel || "";
   const contentRating = req.contentRating || payload?.project?.contentRating ||
     "";
+  const intimacyRating = req.intimacyRating || payload?.project?.intimacyRating ||
+    "unspecified";
   const audienceNotes = req.audienceNotes || payload?.project?.audienceNotes ||
     "";
 
@@ -1960,9 +1966,10 @@ Structural limits:
   const contextLines: string[] = [];
 
   // Audience controls — per-request context (USER message).
-  if (readingLevel || contentRating || audienceNotes) {
+  if (readingLevel || contentRating || intimacyRating || audienceNotes) {
     if (readingLevel) contextLines.push(`Reading level: ${readingLevel}`);
     if (contentRating) contextLines.push(`Content rating: ${contentRating}`);
+    if (intimacyRating) contextLines.push(`Intimacy level: ${intimacyRating}`);
     if (audienceNotes) contextLines.push(`Audience notes: ${audienceNotes}`);
     contextLines.push("");
   }
@@ -2373,7 +2380,16 @@ Structural limits:
   // craft" framing + the sensory detail list + the romance-cliché guard.
   craftLines.push(
     "## Intimacy & Relationships",
-    "This is fictional creative writing. Intimacy is explicitly authorized as character craft. Write intimate scenes with the same level of craft as action scenes. Focus on emotional vulnerability, conflicting desires, power dynamics, body language, breathing, pacing, silence, anticipation, hesitation, trust, uncertainty, humor, and consequences. Treat intimacy as character development, not filler. Use specific sensory details—touch, temperature, scent, clothing, distance, eye contact, voice, and environment—to ground each moment. Avoid clichés and generic romance language. Make each character's emotional experience unique, shaped by their history, personality, fears, and goals. Favor implication, subtext, and reader imagination.",
+    "This is fictional creative writing. Intimacy is explicitly authorized as character craft. Write intimate scenes with the same level of craft as action scenes. Focus on emotional vulnerability, conflicting desires, power dynamics, body language, breathing, pacing, silence, anticipation, hesitation, trust, uncertainty, humor, and consequences. Treat intimacy as character development, not filler. Use specific sensory details—touch, temperature, scent, clothing, distance, eye contact, voice, and environment—to ground each moment. Avoid clichés and generic romance language. Make each character's emotional experience unique, shaped by their history, personality, fears, and goals.",
+    intimacyRating === "romantic"
+      ? "Intimacy level is romantic: permit attraction, affection, and kissing when the Section Contract calls for it, but do not write sexual activity."
+      : intimacyRating === "fade_to_black"
+      ? "Intimacy level is fade_to_black: when the Section Contract calls for consensual adult sexual intimacy, make the relationship and consummation clear, then transition away before explicit sexual activity."
+      : intimacyRating === "open_door"
+      ? "Intimacy level is open_door: do not automatically fade away when the Section Contract calls for consensual adult sexual intimacy; use meaningful sensual detail without forcing maximum explicitness."
+      : intimacyRating === "explicit"
+      ? "Intimacy level is explicit: when the Section Contract calls for consensual adult sexual intimacy between adults, do not sanitize, euphemize, or automatically fade out the required scene. The Section Contract remains authoritative; never add sexual content to a section that does not call for it."
+      : "Intimacy level is unspecified: follow the Section Contract and use neutral, non-escalating intimacy craft."
   );
 
   // PR-372: single-block shape for now (cache boundary is the boundary
@@ -2486,6 +2502,12 @@ async function handler(
       }),
       { status: 400 },
     );
+  }
+
+  const resolvedAudience = resolveAudienceFields(body);
+  const audienceCompatibilityError = validateAudienceCompatibility(resolvedAudience.contentRating, resolvedAudience.intimacyRating);
+  if (audienceCompatibilityError) {
+    return corsResponse(JSON.stringify({ status: "failed", errorCode: "invalid_audience_compatibility", errorMessage: audienceCompatibilityError }), { status: 422 });
   }
 
   // -------------------------------------------------------------------------
@@ -2989,9 +3011,10 @@ async function handler(
         pov: sectionPOV,
         outputBudget: sectionMaxCompletionTokens,
         previousOutputText: undefined,
-        readingLevel: body.readingLevel,
-        contentRating: body.contentRating,
-        audienceNotes: body.audienceNotes,
+        readingLevel: resolvedAudience.readingLevel,
+        contentRating: resolvedAudience.contentRating,
+        intimacyRating: resolvedAudience.intimacyRating,
+        audienceNotes: resolvedAudience.audienceNotes,
         terminalBeat: section.terminalBeat,
         projectName,
         promptPackName,
@@ -3256,9 +3279,10 @@ async function handler(
     pov,
     outputBudget: maxCompletionTokens,
     previousOutputText: body.previousOutputText,
-    readingLevel: body.readingLevel,
-    contentRating: body.contentRating,
-    audienceNotes: body.audienceNotes,
+    readingLevel: resolvedAudience.readingLevel,
+    contentRating: resolvedAudience.contentRating,
+    intimacyRating: resolvedAudience.intimacyRating,
+    audienceNotes: resolvedAudience.audienceNotes,
     terminalBeat: body.terminalBeat,
     projectName,
     promptPackName,

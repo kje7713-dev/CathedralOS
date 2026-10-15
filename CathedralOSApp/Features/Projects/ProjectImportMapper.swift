@@ -14,6 +14,7 @@ enum ProjectImportMapper {
         project.notes = payload.project.notes
         project.readingLevel = payload.project.readingLevel
         project.contentRating = payload.project.contentRating
+        project.intimacyRating = StoryIntimacyRating.storageValue(for: payload.project.intimacyRating)
         project.audienceNotes = payload.project.audienceNotes
 
         if let sp = payload.setting {
