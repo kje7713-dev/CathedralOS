@@ -14,6 +14,12 @@ Deno.test("continuation auth keeps user JWT out of apikey and authenticates watc
   });
 });
 
+Deno.test("Suggest Sections defaults missing model selection to GPT-5.4 Mini", () => {
+  assertEquals(LEGACY_PLANNING_MODEL_ID, "gpt-5.4-mini");
+  assertEquals(canonicalizeNewPlanningRequest({} as any).modelID, "gpt-5.4-mini");
+  assertEquals(canonicalizeNewPlanningRequest({ modelID: "gpt-6-luna" } as any).modelID, "gpt-6-luna");
+});
+
 Deno.test("outline suggestion polling contract preserves structured failures and success", async () => {
   const source = await Deno.readTextFile(
     "./supabase/functions/outline-from-recipe/index.ts",
@@ -108,6 +114,8 @@ import {
   MAX_SUGGESTION_NO_PROGRESS_MS,
   returnSuggestionRunToPending,
   continuationHeaders,
+  canonicalizeNewPlanningRequest,
+  LEGACY_PLANNING_MODEL_ID,
   recoverPendingSuggestionRun,
   runSuggestionJob,
   recoverWatchdogRun,
