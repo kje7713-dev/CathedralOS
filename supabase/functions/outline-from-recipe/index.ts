@@ -2312,6 +2312,10 @@ export async function progressivelyExpandOutline(
       };
       diagnostics.push(diagnostic);
       await onRound?.(diagnostic, diagnostics, suggestions);
+      if (evaluateNovelScale(suggestions, existingSections).meetsMinimum) {
+        warnings.push("Optional novel expansion was skipped after a validation mismatch; the durable outline already meets the hard planning floor.");
+        break;
+      }
       throw new NovelScalePlanningError(
         "failed_expansion",
         `Novel expansion failed validation in round ${round}; the outline remains below the ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word preferred planning floor.`,
@@ -2447,7 +2451,12 @@ export function validateExpansionAdditions(
     }
     if (resolvedInsertAfterTitle !== null) {
       const anchor = original.find((s) => s.title === resolvedInsertAfterTitle);
-      if (!anchor || anchor.storyArcBeatID !== validated.storyArcBeatID) throw new Error("expansion placement crosses arc beats");
+      // The provider may reuse a stale or cross-beat title as an insertion
+      // anchor. Placement is server-owned: preserve the addition and append it
+      // within its validated beat rather than rejecting the whole expansion.
+      if (!anchor || anchor.storyArcBeatID !== validated.storyArcBeatID) {
+        resolvedInsertAfterTitle = null;
+      }
     }
     const fingerprint = `${validated.title}|${validated.summary}|${validated.storyArcBeatID}`;
     if (fingerprints.has(fingerprint)) throw new Error("expansion introduced a duplicate section contract");

@@ -1514,6 +1514,41 @@ Deno.test("stale expansion anchors append within their beat while exact anchors 
   ]);
 });
 
+Deno.test("hard-valid novel preserves the outline when optional expansion validation fails", async () => {
+  const initial = sceneOutline(88);
+  let providerCalls = 0;
+  const result = await progressivelyExpandOutline(
+    initial as any,
+    new Set(["beat-1"]),
+    async () => {
+      providerCalls++;
+      throw new ExpansionValidationError("expansion placement crosses arc beats");
+    },
+    undefined,
+    { qualityGate: () => true },
+  );
+  assertEquals(providerCalls, 1);
+  assertEquals(result.suggestions.length, initial.length);
+  assertEquals(result.diagnostics[0].status, "invalid");
+  assertEquals(result.warnings.length, 1);
+});
+
+Deno.test("cross-beat expansion anchors append within the addition's validated beat", () => {
+  const original = [
+    expansionSection("Beat One", "scene", "beat-1"),
+    expansionSection("Beat Two", "scene", "beat-2"),
+  ];
+  const additions = validateExpansionAdditions(
+    { suggestions: [expansionSection("Beat Two Addition", "scene", "beat-2", "Beat One")] },
+    new Set(["beat-1", "beat-2"]),
+    original as any,
+  );
+  assertEquals(additions[0].insertAfterTitle, null);
+  assertEquals(mergeExpansionAdditions(original as any, additions as any).map((section) => section.title), [
+    "Beat One", "Beat Two", "Beat Two Addition",
+  ]);
+});
+
 Deno.test("invalid expansion responses remain typed at the billable boundary", () => {
   const initial = sceneOutline(22);
   let failure: unknown;
