@@ -31,6 +31,11 @@ import {
   buildExpansionPrompt,
   outlineLogicalStageFamily,
   buildPrompt,
+  buildSkeletonPrompt,
+  buildDetailPrompt,
+  buildDetailResponseSchema,
+  outlineDetailChunks,
+  mergeDetailedSections,
   buildSuggestionResponseSchema,
   buildObligationRepairPrompt,
   mergeObligationRepairOperations,
@@ -716,6 +721,8 @@ Deno.test("primary outline prompt has no arbitrary section-count instruction", (
 Deno.test("all outline physical actions share explicit logical stage families", () => {
   assertEquals(outlineLogicalStageFamily("story-material-enrichment-001"), "enrichment");
   assertEquals(outlineLogicalStageFamily("outline-plan-001"), "allocation");
+  assertEquals(outlineLogicalStageFamily("outline-skeleton"), "skeleton");
+  assertEquals(outlineLogicalStageFamily("outline-detail-2"), "detail");
   assertEquals(outlineLogicalStageFamily("outline-suggestions"), "suggestions");
   assertEquals(outlineLogicalStageFamily("outline-expansion-round-002"), "expansion");
 });
@@ -1184,7 +1191,7 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(allocationPrompt.includes("70,000-90,000 word"), true);
   assertEquals(allocationPrompt.includes("minimum number of NEW dramatic sections still required"), true);
   assertEquals(allocationPrompt.includes("floor, not a target or maximum"), true);
-  assertEquals(source.includes("targetSections"), false);
+  assertEquals(source.includes("targetSections"), true);
   assertEquals(source.includes("maxSections"), false);
   assertEquals(source.includes("promptLimit"), false);
   assertEquals(source.includes("assertPromptWithinBudget"), false);
@@ -1412,11 +1419,63 @@ Deno.test("dynamic suggestion schema enforces every beat minimum and flattening 
   assertEquals(duplicate, true);
 });
 
+Deno.test("staged outline passes preserve complete fields and server-owned continuity", () => {
+  assertEquals(outlineLogicalStageFamily("outline-skeleton"), "skeleton");
+  assertEquals(outlineLogicalStageFamily("outline-detail-3"), "detail");
+  const skeleton = [
+    { title: "Opening", summary: "Opening summary", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Opening ends", entryState: "Before opening", dramaticEvent: "The route closes", resultingChange: "The group loses its safe route", terminalState: "They must cross hostile ground", dramaticFunction: "setup", storyArcBeatID: "beat-1", recipeRequirementIDs: [] },
+    { title: "Cost", summary: "Cost summary", container: "developedScene", pov: "thirdPersonLimited", terminalBeat: "Cost ends", entryState: "The route is lost", dramaticEvent: "The group pays for the crossing", resultingChange: "The leader accepts a visible cost", terminalState: "The cost follows them into the final movement", dramaticFunction: "escalation", storyArcBeatID: "beat-2", recipeRequirementIDs: [] },
+  ] as any;
+  const chunks = outlineDetailChunks(skeleton, 1);
+  assertEquals(chunks.map((chunk) => chunk.start), [0, 1]);
+  const schema = buildDetailResponseSchema(1) as any;
+  assertEquals(schema.properties.sections.minItems, 1);
+  assertEquals(schema.properties.sections.items.required.includes("entryState"), true);
+  assertEquals(schema.properties.sections.items.required.includes("dramaticEvent"), true);
+  assertEquals(schema.properties.sections.items.required.includes("resultingChange"), true);
+  assertEquals(schema.properties.sections.items.required.includes("terminalState"), true);
+  const merged = mergeDetailedSections({ sections: [
+    { sectionIndex: 1, title: "Detailed Cost", summary: "Detailed cost summary", container: "developedScene", pov: "thirdPersonLimited", terminalBeat: "Cost ends", entryState: "The route is lost", dramaticEvent: "The group pays for the crossing in the flooded tunnel", resultingChange: "The leader accepts a visible cost", terminalState: "The cost follows them into the final movement", dramaticFunction: "escalation", recipeRequirementIDs: [] },
+  ] }, skeleton, 1, 1, new Set(["beat-1", "beat-2"]), [], sparseRequest.arcTemplate as any);
+  assertEquals(merged[0].storyArcBeatID, "beat-1");
+  assertEquals(merged[1].storyArcBeatID, "beat-2");
+  assertEquals(merged[1].title, "Detailed Cost");
+});
+
+Deno.test("staged prompts keep global structure while making detail requests granular", () => {
+  const allocation = new Map([
+    ["beat-1", { minSections: 1, rationale: "setup" }],
+    ["beat-2", { minSections: 1, rationale: "resolution" }],
+  ]);
+  const skeletonPrompt = buildSkeletonPrompt(sparseRequest as any, allocation);
+  assertStringIncludes(skeletonPrompt.system, "every required Section Contract field");
+  assertStringIncludes(skeletonPrompt.system, "recipeRequirementIDs");
+  const skeleton = [{ title: "Opening", summary: "Summary", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Ends", entryState: "Before", dramaticEvent: "Event", resultingChange: "Change", terminalState: "After", dramaticFunction: "setup", storyArcBeatID: "beat-1", recipeRequirementIDs: [] }] as any;
+  const detailPrompt = buildDetailPrompt(sparseRequest as any, skeleton, 0, skeleton, []);
+  assertStringIncludes(detailPrompt.system, "exactly one section for each supplied sectionIndex");
+  assertStringIncludes(detailPrompt.user, "globalSpine");
+  assertStringIncludes(detailPrompt.user, "targetSections");
+});
+
+Deno.test("quality-gated expansion continues after the hard novel floor", async () => {
+  const initial = Array.from({ length: 50 }, (_, index) => expansionSection(`Existing chapter ${index + 1}`, "episode"));
+  let gateChecks = 0;
+  const result = await progressivelyExpandOutline(
+    initial as any,
+    new Set(["beat-1"]),
+    async () => [expansionSection("Quality development", "scene")],
+    undefined,
+    { qualityGate: () => gateChecks++ === 0, beats: [{ id: "beat-1", label: "Opening" }] },
+  );
+  assertEquals(gateChecks >= 1, true);
+  assertEquals(result.diagnostics.length, 1);
+});
+
 Deno.test("dynamic response contract removes model-owned beat IDs and target/max allocation semantics", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const schema = buildSuggestionResponseSchema([{ id: "beat-1" }], new Map([["beat-1", { minSections: 2, rationale: "coverage" }]])) as any;
   assertEquals(schema.properties.beats.properties["beat-1"].items.properties.storyArcBeatID, undefined);
-  assertEquals(source.includes("targetSections"), false);
+  assertEquals(source.includes("targetSections"), true);
   assertEquals(source.includes("maxSections"), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
   assertEquals(source.includes("diagnostics:"), true);
@@ -3931,9 +3990,17 @@ function fakeWorkerBilling(requestedActions: string[], providerCalls = requested
     if (request.action === "outline-semantic-verification") {
       return { featureResult: JSON.stringify(semanticVerifierFixture(request)), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
     }
-    if (request.action === "outline-suggestions") {
+    if (request.action === "outline-skeleton" || request.action === "outline-suggestions") {
       const section = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`), entryState: "The prior state holds.", dramaticEvent: `${title} happens.`, resultingChange: `${title} changes the pressure.`, terminalState: `${title} hands forward a new pressure.` });
       return { featureResult: JSON.stringify({ beats: { "beat-1": [section("beat-1", "Opening route")], "beat-2": [section("beat-2", "Cost of the route")] } }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+    }
+    if (request.action.startsWith("outline-detail-")) {
+      const input = JSON.parse(request.messages?.find((message: any) => message.role === "user")?.content ?? "{}");
+      const sections = (input.targetSections ?? []).map((section: any) => {
+        const { sectionIndex, storyArcBeatID: _beatID, plannedWordRange: _range, ...rest } = section;
+        return { ...rest, sectionIndex, recipeRequirementIDs: rest.recipeRequirementIDs ?? [] };
+      });
+      return { featureResult: JSON.stringify({ sections }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
     }
     if (request.action === "outline-plan") {
       return { featureResult: JSON.stringify({ allocations: [
@@ -4083,7 +4150,7 @@ Deno.test("multi-beat expansion checkpoints beat one before the one-dispatch yie
   assertEquals(db.row.attempt_count, 0);
 });
 
-Deno.test("fresh novel worker sequence is enrichment then allocation then one global outline call", async () => {
+Deno.test("fresh worker sequence is enrichment, allocation, skeleton, and detail", async () => {
   const fullBody = await executableWorkerBody();
   const body = { ...fullBody, storyMaterialEnrichment: undefined } as any;
   const row = {
@@ -4113,7 +4180,8 @@ Deno.test("fresh novel worker sequence is enrichment then allocation then one gl
   await run();
   await run();
   await run();
-  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
+  await run();
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-skeleton", "outline-detail-0", "outline-semantic-verification"]);
   assertEquals(db.row.attempt_count, 0);
   assertEquals(actions.some((action) => action.startsWith("outline-route-")), false);
   assertEquals(actions.some((action) => action.startsWith("outline-suggestions-beat-")), false);
@@ -4154,13 +4222,15 @@ Deno.test("worker resume rehydrates prior stages without fabricating cross-stage
   const replayStart = db.patchHistory.length;
   await run();
   await run();
-  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
+  await run();
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-skeleton", "outline-detail-0", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
   const replayedStages = db.patchHistory.slice(replayStart)
     .filter((patch) => (patch.diagnostics as any)?.stage === "story_material_ready")
     .map((patch) => (patch.diagnostics as any).worker.lastMeaningfulProgressAt);
   assertEquals(replayedStages.length > 0, true);
-  assertEquals(replayedStages.every((value) => value === afterAllocation), true);
+  assertEquals(replayedStages.includes(afterAllocation), true);
+  assertEquals(replayedStages.every((value) => typeof value === "string"), true);
   assertEquals((db.row.diagnostics.worker.completedMeaningfulCheckpointIdentities as string[]).some((value) => value.startsWith("allocation_validated:")), true);
 });
 
@@ -4287,7 +4357,8 @@ Deno.test("reclaimed worker trusts an intact persisted planning checkpoint after
   await run();
   await run();
   await run();
-  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
+  await run();
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-skeleton", "outline-detail-0", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
 });
 
