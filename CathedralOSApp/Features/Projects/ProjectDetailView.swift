@@ -849,6 +849,9 @@ struct ProjectDetailView: View {
     private static let contentRatings: [(label: String, value: String)] =
         StoryContentAgeRating.allCases.map { ($0.displayName, $0.rawValue) }
 
+    private static let intimacyRatings: [(label: String, value: String)] =
+        StoryIntimacyRating.allCases.map { ($0.displayName, $0.rawValue) }
+
     private var audienceSection: some View {
         Section {
             CathedralCard {
@@ -865,7 +868,19 @@ struct ProjectDetailView: View {
 
                     Picker("Content Rating", selection: $project.contentRating) {
                         ForEach(Self.contentRatings, id: \.value) { item in
-                            Text(item.label).tag(item.value)
+                            let age = StoryContentAgeRating.normalize(item.value)
+                            Text(item.label).tag(item.value).disabled(!StoryIntimacyRating.normalize(project.intimacyRating).isCompatible(with: age))
+                        }
+                    }
+                    .font(CathedralTheme.Typography.body())
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+
+                    Divider()
+
+                    Picker("Intimacy Level", selection: $project.intimacyRating) {
+                        ForEach(Self.intimacyRatings, id: \.value) { item in
+                            let intimacy = StoryIntimacyRating.normalize(item.value)
+                            Text(item.label).tag(item.value).disabled(!intimacy.isCompatible(with: StoryContentAgeRating.normalize(project.contentRating)))
                         }
                     }
                     .font(CathedralTheme.Typography.body())
@@ -889,6 +904,7 @@ struct ProjectDetailView: View {
             ))
             .onAppear {
                 project.contentRating = StoryContentAgeRating.storageValue(for: project.contentRating)
+                project.intimacyRating = StoryIntimacyRating.storageValue(for: project.intimacyRating)
             }
         } header: {
             CathedralSectionHeader("Audience")

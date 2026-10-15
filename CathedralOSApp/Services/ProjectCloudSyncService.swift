@@ -1238,6 +1238,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         score += nonEmptyScore(project.notes)
         score += nonEmptyScore(project.readingLevel)
         score += nonEmptyScore(project.contentRating)
+        score += nonEmptyScore(project.intimacyRating)
         score += nonEmptyScore(project.audienceNotes)
         score += project.characters.count * 10
         score += project.storySparks.count * 10
@@ -1282,6 +1283,10 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         if destination.contentRating.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !source.contentRating.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             destination.contentRating = source.contentRating
+        }
+        if destination.intimacyRating.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || destination.intimacyRating == StoryIntimacyRating.unspecified.rawValue,
+           !source.intimacyRating.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, source.intimacyRating != StoryIntimacyRating.unspecified.rawValue {
+            destination.intimacyRating = StoryIntimacyRating.storageValue(for: source.intimacyRating)
         }
         if destination.audienceNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !source.audienceNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1552,6 +1557,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
         project.notes = payload.project.notes
         project.readingLevel = payload.project.readingLevel
         project.contentRating = payload.project.contentRating
+        project.intimacyRating = StoryIntimacyRating.storageValue(for: payload.project.intimacyRating)
         project.audienceNotes = payload.project.audienceNotes
 
         reconcileSetting(payload.setting, for: project, in: context)

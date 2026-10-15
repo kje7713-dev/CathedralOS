@@ -12,6 +12,8 @@ class StoryProject {
     // Audience targeting metadata
     var readingLevel: String
     var contentRating: String
+    /// Canonical intimacy control; legacy stores decode as unspecified.
+    var intimacyRating: String
     var audienceNotes: String
     /// General-purpose notes field. Also used to store remix provenance when a project
     /// is imported from a public shared output.
@@ -48,6 +50,7 @@ class StoryProject {
         self.notes = ""
         self.readingLevel = ""
         self.contentRating = ""
+        self.intimacyRating = StoryIntimacyRating.unspecified.rawValue
         self.audienceNotes = ""
         self.projectSetting = nil
         self.characters = []

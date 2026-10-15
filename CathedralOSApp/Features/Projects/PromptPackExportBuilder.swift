@@ -214,6 +214,7 @@ enum PromptPackExportBuilder {
                 summary: project.summary,
                 readingLevel: project.readingLevel,
                 contentRating: project.contentRating,
+                intimacyRating: project.intimacyRating,
                 audienceNotes: project.audienceNotes
             ),
             setting:            settingPayload,

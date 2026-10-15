@@ -70,7 +70,15 @@ export function compactRecipe(recipe: any): Record<string, unknown> {
   return {
     schema: recipe?.schema,
     version: recipe?.version,
-    project: recipe?.project ? { id: recipe.project.id ?? null, name: compactText(recipe.project.name, 200), summary: compactText(recipe.project.summary, 1200) } : null,
+    project: recipe?.project ? {
+      id: recipe.project.id ?? null,
+      name: compactText(recipe.project.name, 200),
+      summary: compactText(recipe.project.summary, 1200),
+      readingLevel: compactText(recipe.project.readingLevel, 80),
+      contentRating: compactText(recipe.project.contentRating, 40),
+      intimacyRating: compactText(recipe.project.intimacyRating || "unspecified", 40),
+      audienceNotes: compactText(recipe.project.audienceNotes, 1200),
+    } : null,
     setting: recipe?.setting ? { included: recipe.setting.included ?? true, name: compactText(recipe.setting.name, 160), description: compactText(recipe.setting.description ?? recipe.setting.summary, 900) } : null,
     selectedCharacters: Array.isArray(recipe?.selectedCharacters) ? recipe.selectedCharacters.map(compactEntity) : [],
     selectedRelationships: Array.isArray(recipe?.selectedRelationships) ? recipe.selectedRelationships.map(compactEntity) : [],
@@ -116,7 +124,15 @@ export function buildCompactPlanningView(req: any, obligations: any[] = [], mate
   return {
     schema: "cathedralos.outline_planning_context",
     version: 1,
-    project: req?.recipe?.project ? { id: req.recipe.project.id ?? null, name: compactText(req.recipe.project.name, 200), summary: compactText(req.recipe.project.summary, 1200) } : null,
+    project: req?.recipe?.project ? {
+      id: req.recipe.project.id ?? null,
+      name: compactText(req.recipe.project.name, 200),
+      summary: compactText(req.recipe.project.summary, 1200),
+      readingLevel: compactText(req.recipe.project.readingLevel, 80),
+      contentRating: compactText(req.recipe.project.contentRating, 40),
+      intimacyRating: compactText(req.recipe.project.intimacyRating || "unspecified", 40),
+      audienceNotes: compactText(req.recipe.project.audienceNotes, 1200),
+    } : null,
     recipe: compactRecipe(req?.recipe),
     obligations: compactObligations(obligations),
     materialIndex: compactMaterial(material),

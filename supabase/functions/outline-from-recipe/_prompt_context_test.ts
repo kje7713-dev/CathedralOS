@@ -24,3 +24,12 @@ Deno.test("typed Story Spark and Aftertaste compaction preserves canonical seman
   for (const value of ["SITUATION_SENTINEL", "STAKES_SENTINEL", "TWIST_SENTINEL", "URGENCY_SENTINEL", "CLOCK_SENTINEL", "TRIGGER_SENTINEL", "REVERSAL_SENTINEL"]) assert(JSON.stringify(spark).includes(value));
   for (const value of ["RESIDUE_SENTINEL", "TEXTURE_SENTINEL", "AMBIGUITY_SENTINEL", "QUESTION_SENTINEL", "IMAGE_SENTINEL"]) assert(JSON.stringify(aftertaste).includes(value));
 });
+
+Deno.test("compact recipe preserves frozen audience and intimacy metadata exactly", () => {
+  const view = buildCompactPlanningView({ recipe: { project: { id: "p", name: "Frozen", summary: "Summary", readingLevel: "adult", contentRating: "18_plus", intimacyRating: "explicit", audienceNotes: "FROZEN_NOTES" } }, arcTemplate: { id: "a", name: "Arc", beats: [] }, existingSections: [] });
+  const project = view.recipe && (view.recipe as Record<string, unknown>).project as Record<string, unknown>;
+  assertEquals(project.readingLevel, "adult");
+  assertEquals(project.contentRating, "18_plus");
+  assertEquals(project.intimacyRating, "explicit");
+  assertEquals(project.audienceNotes, "FROZEN_NOTES");
+});

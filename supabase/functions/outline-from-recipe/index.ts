@@ -2,6 +2,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { BillableLLMError, runBillableLLM } from "../_shared/billable-llm.ts";
 import { SupabaseCreditStore } from "../generate-story/_credits.ts";
 import { availableCredits, type UserEntitlement } from "../generate-story/_credits.ts";
+import { normalizeIntimacyRating, validateAudienceCompatibility } from "../generate-story/_audience.ts";
 import {
   inputTokenLimitDetails,
   estimateTokensFromMessages,
@@ -527,9 +528,9 @@ const SECTION_SCHEMA = {
     resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
     terminalState: { type: "string", minLength: 1, maxLength: 1200 },
     dramaticFunction: { type: "string", enum: DRAMATIC_FUNCTIONS },
-    // Beat-specific evidence makes semantic responsibilities explicit in the
-    // provider response instead of relying on a generic role label.
-    arcObligationEvidence: { type: "object", additionalProperties: { type: "string", minLength: 20, maxLength: 1200 } },
+    // Optional grounded evidence. The server verifies every quote against the
+    // actual Section Contract field; this can never certify itself.
+    arcObligationEvidence: { type: "object", additionalProperties: { type: "array", items: { type: "object", properties: { field: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] }, quote: { type: "string", minLength: 1, maxLength: 1200 } }, required: ["field", "quote"], additionalProperties: false } } },
   },
   required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "dramaticFunction"],
   additionalProperties: false,
@@ -569,15 +570,12 @@ export function buildSuggestionResponseSchema(
         ...(contract.semanticObligations.length > 0 ? {
           arcObligationEvidence: {
             type: "object",
-            properties: Object.fromEntries(contract.semanticObligations.map((obligation) => [obligation.id, { type: "string", minLength: 20, maxLength: 1200 }])),
-            required: contract.semanticObligations.map((obligation) => obligation.id),
+            properties: Object.fromEntries(contract.semanticObligations.map((obligation) => [obligation.id, { type: "array", items: { type: "object", properties: { field: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] }, quote: { type: "string", minLength: 1, maxLength: 1200 } }, required: ["field", "quote"], additionalProperties: false } }])),
             additionalProperties: false,
           },
         } : {}),
       },
-      required: contract.semanticObligations.length > 0
-        ? [...sectionSchema.required, "arcObligationEvidence"]
-        : sectionSchema.required,
+      required: sectionSchema.required,
     };
     properties[beat.id] = {
       type: "array",
@@ -675,7 +673,7 @@ const CANONICAL_RECIPE_SCHEMA = "cathedralos.story_packet";
 interface CanonicalRecipeEnvelope {
   schema: string;
   version: number;
-  project: { id: string; summary?: string };
+  project: { id: string; summary?: string; readingLevel?: string; contentRating?: string; intimacyRating?: string; audienceNotes?: string };
   setting: { included: boolean };
   selectedCharacters: unknown[];
   selectedStorySpark: unknown | null;
@@ -1098,7 +1096,7 @@ interface Suggestion {
   plannedWordRange?: { minWords: number; maxWords: number };
   storyArcBeatID: string;
   recipeRequirementIDs?: string[];
-  arcObligationEvidence?: Record<string, string>;
+  arcObligationEvidence?: Record<string, Array<{ field: "dramaticEvent" | "resultingChange" | "terminalState"; quote: string }>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1892,7 +1890,7 @@ const EXPANSION_SCHEMA = {
           resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
           terminalState: { type: "string", minLength: 1, maxLength: 1200 },
           dramaticFunction: { type: "string", enum: DRAMATIC_FUNCTIONS },
-          arcObligationEvidence: { type: "object", additionalProperties: { type: "string", minLength: 20, maxLength: 1200 } },
+          arcObligationEvidence: { type: "object", additionalProperties: { type: "array", items: { type: "object", properties: { field: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] }, quote: { type: "string", minLength: 1, maxLength: 1200 } }, required: ["field", "quote"], additionalProperties: false } } },
           storyArcBeatID: { type: "string" },
           insertAfterTitle: { type: ["string", "null"] },
           recipeRequirementIDs: { type: "array", minItems: 0, maxItems: 50, items: { type: "string", minLength: 1 } },
@@ -1920,15 +1918,12 @@ export function buildExpansionResponseSchema(contract?: ArcRoleContract) {
             ...(contract?.semanticObligations.length ? {
               arcObligationEvidence: {
                 type: "object",
-                properties: Object.fromEntries(contract.semanticObligations.map((obligation) => [obligation.id, { type: "string", minLength: 20, maxLength: 1200 }])),
-                required: contract.semanticObligations.map((obligation) => obligation.id),
+                properties: Object.fromEntries(contract.semanticObligations.map((obligation) => [obligation.id, { type: "array", items: { type: "object", properties: { field: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] }, quote: { type: "string", minLength: 1, maxLength: 1200 } }, required: ["field", "quote"], additionalProperties: false } }])),
                 additionalProperties: false,
               },
             } : {}),
           },
-          required: contract?.semanticObligations.length
-            ? [...EXPANSION_SCHEMA.properties.suggestions.items.required, "arcObligationEvidence"]
-            : EXPANSION_SCHEMA.properties.suggestions.items.required,
+          required: EXPANSION_SCHEMA.properties.suggestions.items.required,
         },
       },
     },
@@ -2480,6 +2475,25 @@ export function calculateRepairAllocation(
 }
 
 
+function intimacyPlanningDirective(req: OutlineFromRecipeRequest): string {
+  const rating = normalizeIntimacyRating(req.recipe?.project?.intimacyRating);
+  if (rating === "unspecified") return "";
+  const relationshipRoles = new Set(["meet_attraction", "connection_deepens", "midpoint_intimacy", "chemistry_builds", "intimacy_under_pressure", "first_commitment", "hea_hfn"]);
+  const beats = req.arcTemplate.beats.filter((beat) => {
+    const text = `${beat.role ?? ""} ${beat.label ?? ""}`.toLowerCase();
+    return relationshipRoles.has(beat.role ?? "") || /romance|relationship|intimacy|chemistry|commitment|hea|hfn|attraction/.test(text);
+  });
+  if (beats.length === 0) return `## Intimacy level\nThe selected intimacy level is ${rating}, but this Story Arc has no relationship-centered/intimacy-bearing beat. Do not invent romance or sexual content solely because of this setting.`;
+  const target = rating === "romantic"
+    ? "reach an unmistakable romantic/physical threshold such as earned attraction, affection, or kissing; do not require sexual activity"
+    : rating === "fade_to_black"
+    ? "reach an earned consensual adult sexual-intimacy milestone whose treatment transitions away before explicit activity"
+    : rating === "open_door"
+    ? "reach an earned on-page consensual adult sexual-intimacy milestone with meaningful sensual detail"
+    : "reach an earned explicit on-page consensual adult sexual-intimacy milestone";
+  return `## Intimacy planning obligation\nThe frozen project selects intimacy level ${rating}. This is a permitted/desired level, not a command to add sex to unrelated stories. Never plan sexual content for a character established as under 18. In the relationship-centered beats below, build causally toward ${target}; place the milestone at an appropriate beat rather than dumping it into an unearned epilogue, and do not require every section in the beat to contain intimacy.\n${beats.map((beat) => `- ${beat.label} (${beat.role}): may carry the milestone when the surrounding Story Arc and Section Contract earn it`).join("\n")}`;
+}
+
 export function buildPrompt(
   req: OutlineFromRecipeRequest,
   allocation: Map<string, Allocation>,
@@ -2504,7 +2518,7 @@ export function buildPrompt(
   const semanticObligationLines = req.arcTemplate.beats.flatMap((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
     return contract.semanticObligations.map((obligation) =>
-      `- ${beat.label} / ${obligation.id}: ${obligation.instruction} Provide concrete evidence in arcObligationEvidence.${obligation.id} and make the required fields materially express it.`,
+      `- ${beat.label} / ${obligation.id}: ${obligation.instruction} If supplied, ground arcObligationEvidence.${obligation.id} with exact quotes from dramaticEvent, resultingChange, or terminalState; make the required fields materially express it.`,
     );
   }).join("\n");
 
@@ -2573,6 +2587,8 @@ ${allocationLines}
 
 ## Semantic Story Arc contracts
 ${contractLines}
+
+${intimacyPlanningDirective(req)}
 
 ## Beat-specific semantic obligations
 ${semanticObligationLines || "No beat-specific semantic obligations are defined for this template."}
@@ -3067,6 +3083,12 @@ export function validateSuggestions(
     if (obligations.length > 0 && validRequirementIDs.length !== requirementIDs.length) {
       throw new Error(`section ${String(s.title).slice(0, 120)} references an unknown recipe requirement`);
     }
+    const beatForEvidence = template?.beats.find((beat) => beat.id === s.storyArcBeatID);
+    const semanticObligations = beatForEvidence ? arcRoleContract(beatForEvidence, template?.name).semanticObligations : [];
+    const allowedObligationIDs = new Set(semanticObligations.map((obligation) => obligation.id));
+    const groundedEvidence = validateGroundedArcEvidence(s.arcObligationEvidence, s, allowedObligationIDs);
+    if (groundedEvidence.error) throw new Error(`section ${String(s.title).slice(0, 120)} has invalid arcObligationEvidence: ${groundedEvidence.error}`);
+
     valid.push({
       title: String(s.title).slice(0, 200),
       summary: String(s.summary).slice(0, 4000),
@@ -3080,9 +3102,7 @@ export function validateSuggestions(
       ...(typeof s.resultingChange === "string" ? { resultingChange: s.resultingChange.slice(0, 1200) } : {}),
       ...(typeof s.terminalState === "string" ? { terminalState: s.terminalState.slice(0, 1200) } : {}),
       ...(DRAMATIC_FUNCTIONS.includes(s.dramaticFunction) ? { dramaticFunction: s.dramaticFunction as DramaticFunction } : {}),
-      ...(s.arcObligationEvidence && typeof s.arcObligationEvidence === "object" && !Array.isArray(s.arcObligationEvidence)
-        ? { arcObligationEvidence: Object.fromEntries(Object.entries(s.arcObligationEvidence).filter(([_, value]) => typeof value === "string").map(([key, value]) => [key, String(value).slice(0, 1200)])) }
-        : {}),
+      ...(groundedEvidence.value ? { arcObligationEvidence: groundedEvidence.value } : {}),
       plannedWordRange: plannedWordRangeForContainer(s.container),
       storyArcBeatID: s.storyArcBeatID,
       ...(validRequirementIDs.length > 0 ? { recipeRequirementIDs: validRequirementIDs } : {}),
@@ -3201,6 +3221,39 @@ function semanticText(suggestion: Suggestion): string {
  * the provider, but the server still checks that the obligated state-change
  * fields are present rather than trusting a role label alone.
  */
+function normalizeEvidenceText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+export function validateGroundedArcEvidence(
+  raw: unknown,
+  section: Partial<Suggestion>,
+  allowedObligationIDs: Set<string>,
+): { value?: Record<string, Array<{ field: "dramaticEvent" | "resultingChange" | "terminalState"; quote: string }>>; error?: string } {
+  if (raw == null) return {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "evidence must be an object" };
+  const out: Record<string, Array<{ field: "dramaticEvent" | "resultingChange" | "terminalState"; quote: string }>> = {};
+  for (const [obligationID, entries] of Object.entries(raw as Record<string, unknown>)) {
+    if (!allowedObligationIDs.has(obligationID)) return { error: `unknown obligation ${obligationID}` };
+    if (!Array.isArray(entries) || entries.length === 0) return { error: `obligation ${obligationID} needs grounded references` };
+    out[obligationID] = [];
+    for (const entry of entries) {
+      if (!entry || typeof entry !== "object") return { error: `obligation ${obligationID} has malformed evidence` };
+      const field = (entry as any).field;
+      const quote = typeof (entry as any).quote === "string" ? normalizeEvidenceText((entry as any).quote) : "";
+      if (!["dramaticEvent", "resultingChange", "terminalState"].includes(field)) return { error: `obligation ${obligationID} references an invalid field` };
+      const actual = normalizeEvidenceText(String((section as any)[field] ?? ""));
+      if (!quote || !actual.includes(quote)) return { error: `obligation ${obligationID} quote is not an exact normalized substring of ${field}` };
+      out[obligationID].push({ field, quote });
+    }
+  }
+  return { value: out };
+}
+
+/** Authored obligations are beat-level. A single appropriate Section Contract
+ * may satisfy the obligation; neighboring plot/aftermath sections need not
+ * manufacture evidence. Grounded evidence is only a reference, never proof
+ * by itself. The independent verifier below is the semantic hard gate. */
 export function validateArcSemanticObligations(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats">,
@@ -3211,17 +3264,203 @@ export function validateArcSemanticObligations(
     if (obligations.length === 0) continue;
     const sections = suggestions.filter((section) => section.storyArcBeatID === beat.id);
     for (const obligation of obligations) {
-      const section = sections.find((candidate) => {
-        const evidence = candidate.arcObligationEvidence?.[obligation.id];
-        if (typeof evidence !== "string" || evidence.trim().length < 20) return false;
-        return obligation.requiredFields.every((field) => typeof candidate[field] === "string" && candidate[field]!.trim().length > 0);
+      const satisfied = sections.some((candidate) => {
+        const refs = candidate.arcObligationEvidence?.[obligation.id] ?? [];
+        return refs.length > 0 && obligation.requiredFields.every((field) => typeof candidate[field] === "string" && candidate[field]!.trim().length > 0);
       });
-      if (!section) {
-        issues.push(`beat ${beat.label} (${beat.id}) is missing semantic obligation ${obligation.id}: ${obligation.instruction}`);
-      }
+      if (!satisfied) issues.push(`beat ${beat.label} (${beat.id}) is missing semantic obligation ${obligation.id}: ${obligation.instruction}`);
     }
   }
   return issues;
+}
+
+
+export type SemanticVerificationObligation = {
+  obligationID: string;
+  satisfied: boolean;
+  sectionIndex: number;
+  field: "dramaticEvent" | "resultingChange" | "terminalState";
+  quote: string;
+  reason: string;
+};
+
+export type SemanticVerificationResult = {
+  beats: Array<{ beatID: string; obligations: SemanticVerificationObligation[] }>;
+  unsatisfied: Array<{ beatID: string; obligationID: string; reason: string }>;
+};
+
+const SEMANTIC_VERIFICATION_SCHEMA = {
+  type: "object",
+  properties: {
+    beats: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          beatID: { type: "string" },
+          obligations: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                obligationID: { type: "string" },
+                satisfied: { type: "boolean" },
+                sectionIndex: { type: "integer" },
+                field: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] },
+                quote: { type: "string", maxLength: 1200 },
+                reason: { type: "string", minLength: 1, maxLength: 1200 },
+              },
+              required: ["obligationID", "satisfied", "sectionIndex", "field", "quote", "reason"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["beatID", "obligations"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["beats"],
+  additionalProperties: false,
+} as const;
+
+function semanticVerificationInput(
+  suggestions: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+): Record<string, unknown> {
+  return {
+    storyArcName: template.name,
+    beats: template.beats.map((beat) => ({
+      beatID: beat.id,
+      role: beat.role,
+      label: beat.label,
+      authoredDescription: beat.description ?? "",
+      obligations: arcRoleContract(beat, template.name).semanticObligations.map((obligation) => ({
+        obligationID: obligation.id,
+        instruction: obligation.instruction,
+      })),
+      sections: suggestions.flatMap((section, sectionIndex) => section.storyArcBeatID === beat.id
+        ? [{ sectionIndex, dramaticEvent: section.dramaticEvent ?? "", resultingChange: section.resultingChange ?? "", terminalState: section.terminalState ?? "" }]
+        : []),
+    })).filter((beat) => (beat.obligations as unknown[]).length > 0),
+  };
+}
+
+export async function verifyStoryArcSemantics(
+  suggestions: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+  billableCall: SuggestionLLMCall,
+): Promise<SemanticVerificationResult> {
+  const input = semanticVerificationInput(suggestions, template);
+  const knownBeats = new Map(template.beats.map((beat) => [beat.id, beat]));
+  const knownObligations = new Map(template.beats.flatMap((beat) => arcRoleContract(beat, template.name).semanticObligations.map((obligation) => [`${beat.id}:${obligation.id}`, obligation])));
+  const raw = await billableCall(
+    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
+    JSON.stringify(input),
+    5000,
+    { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
+    "outline-semantic-verification",
+  );
+  const parsed = parseOutlineJSON<{ beats?: unknown }>(raw.content, raw.finishReason);
+  if (!parsed || !Array.isArray(parsed.beats)) throw new Error("story_arc_semantic_verification: response missing beats");
+  const seen = new Set<string>();
+  const beats: SemanticVerificationResult["beats"] = [];
+  const unsatisfied: SemanticVerificationResult["unsatisfied"] = [];
+  for (const rawBeat of parsed.beats as any[]) {
+    const beatID = String(rawBeat?.beatID ?? "");
+    if (!knownBeats.has(beatID) || seen.has(beatID)) throw new Error(`story_arc_semantic_verification: unknown or duplicate beat ${beatID}`);
+    seen.add(beatID);
+    const beat = knownBeats.get(beatID)!;
+    const sections = suggestions.map((section, sectionIndex) => ({ section, sectionIndex })).filter(({ section }) => section.storyArcBeatID === beatID);
+    const byObligation = new Map(arcRoleContract(beat, template.name).semanticObligations.map((obligation) => [obligation.id, obligation]));
+    if (!Array.isArray(rawBeat.obligations)) throw new Error(`story_arc_semantic_verification: missing obligations for ${beatID}`);
+    const obligations: SemanticVerificationObligation[] = [];
+    for (const rawObligation of rawBeat.obligations) {
+      const obligationID = String(rawObligation?.obligationID ?? "");
+      const obligation = byObligation.get(obligationID);
+      if (!obligation || !knownObligations.has(`${beatID}:${obligationID}`)) throw new Error(`story_arc_semantic_verification: unknown obligation ${obligationID}`);
+      const sectionIndex = Number(rawObligation.sectionIndex);
+      const field = rawObligation.field;
+      const quote = normalizeEvidenceText(String(rawObligation.quote ?? ""));
+      const section = sections.find((candidate) => candidate.sectionIndex === sectionIndex)?.section;
+      if (rawObligation.satisfied) {
+        if (!section || !["dramaticEvent", "resultingChange", "terminalState"].includes(field)) throw new Error(`story_arc_semantic_verification: invalid satisfied reference for ${obligationID}`);
+        const actual = normalizeEvidenceText(String((section as any)[field] ?? ""));
+        if (!quote || !actual.includes(quote)) throw new Error(`story_arc_semantic_verification: quote is not grounded for ${obligationID}`);
+      }
+      const verified = { obligationID, satisfied: Boolean(rawObligation.satisfied), sectionIndex, field, quote, reason: String(rawObligation.reason ?? "") };
+      obligations.push(verified);
+      if (!verified.satisfied) unsatisfied.push({ beatID, obligationID, reason: verified.reason });
+    }
+    for (const obligation of byObligation.values()) {
+      if (!obligations.some((candidate) => candidate.obligationID === obligation.id)) throw new Error(`story_arc_semantic_verification: missing obligation ${obligation.id}`);
+    }
+    beats.push({ beatID, obligations });
+  }
+  for (const beat of template.beats) if (arcRoleContract(beat, template.name).semanticObligations.length > 0 && !seen.has(beat.id)) throw new Error(`story_arc_semantic_verification: missing beat ${beat.id}`);
+  return { beats, unsatisfied };
+}
+
+
+const SEMANTIC_REPAIR_SCHEMA = {
+  type: "object",
+  properties: {
+    replacements: {
+      type: "array",
+      minItems: 1,
+      maxItems: 12,
+      items: {
+        type: "object",
+        properties: { sectionIndex: { type: "integer" }, beatID: { type: "string" }, section: SECTION_SCHEMA },
+        required: ["sectionIndex", "beatID", "section"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["replacements"],
+  additionalProperties: false,
+} as const;
+
+export async function repairStoryArcSemanticObligations(
+  suggestions: Suggestion[],
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+  failures: Array<{ beatID: string; obligationID: string; reason: string }>,
+  billableCall: SuggestionLLMCall,
+  recipeObligations: RecipeObligation[] = [],
+): Promise<Suggestion[]> {
+  const affected = new Set(failures.map((failure) => failure.beatID));
+  const input = template.beats.filter((beat) => affected.has(beat.id)).map((beat) => ({
+    beatID: beat.id,
+    role: beat.role,
+    label: beat.label,
+    description: beat.description ?? "",
+    failures: failures.filter((failure) => failure.beatID === beat.id),
+    sections: suggestions.flatMap((section, sectionIndex) => section.storyArcBeatID === beat.id ? [{ sectionIndex, section }] : []),
+  }));
+  const raw = await billableCall(
+    "Repair only the affected Section Contracts. Preserve beat identity, recipe requirement IDs, established causal state, and the primary conflict. Rewrite the minimum number of sections so their dramaticEvent, resultingChange, and terminalState materially satisfy the failed authored Story Arc obligations. Return only the required JSON.",
+    JSON.stringify(input),
+    7000,
+    { type: "json_schema", json_schema: { name: "story_arc_semantic_repair", strict: true, schema: SEMANTIC_REPAIR_SCHEMA } },
+    "outline-semantic-repair-batch",
+  );
+  const parsed = parseOutlineJSON<{ replacements?: unknown }>(raw.content, raw.finishReason);
+  if (!parsed || !Array.isArray(parsed.replacements)) throw new Error("story_arc_semantic_repair: response missing replacements");
+  const result = suggestions.map((section) => ({ ...section }));
+  const replaced = new Set<number>();
+  for (const operation of parsed.replacements as any[]) {
+    const index = Number(operation?.sectionIndex);
+    const beatID = String(operation?.beatID ?? "");
+    if (!Number.isInteger(index) || index < 0 || index >= result.length || replaced.has(index)) throw new Error("story_arc_semantic_repair: invalid section index");
+    if (!affected.has(beatID) || result[index].storyArcBeatID !== beatID) throw new Error("story_arc_semantic_repair: beat identity changed");
+    const candidate = { ...operation.section, storyArcBeatID: beatID, recipeRequirementIDs: result[index].recipeRequirementIDs ?? [] };
+    const validated = validateSuggestions({ suggestions: [candidate] }, new Set([beatID]), undefined, recipeObligations, { ...template, beats: template.beats.filter((beat) => beat.id === beatID) }).suggestions;
+    if (validated.length !== 1) throw new Error("story_arc_semantic_repair: replacement failed validation");
+    result[index] = validated[0];
+    replaced.add(index);
+  }
+  if (replaced.size === 0) throw new Error("story_arc_semantic_repair: no sections replaced");
+  return result;
 }
 
 const PRIMARY_CONFLICT_SIGNALS = /\b(launch(?:es|ed)?|mount(?:s|ed)?|wage(?:s|d)?|invade(?:s|d)?|attack(?:s|ed)?|assault(?:s|ed)?|conquer(?:s|ed)?|take over|seize(?:s|d)?|overthrow(?:s|n)?|decisive assault|citywide takeover)\b/;
@@ -4433,6 +4672,62 @@ export async function runSuggestionJob(
         ) as StoryMaterialEnrichment,
       };
     }
+    const persistedSemanticSuggestions = Array.isArray(claimedRun.suggestions)
+      ? claimedRun.suggestions as Suggestion[]
+      : [];
+    const continueAfterSemanticVerification = async (suggestions: Suggestion[]) => {
+      const semanticCoverage = obligationCoverage([...(body.existingSections ?? []), ...suggestions], recipeObligations);
+      if (semanticCoverage.missingRequired.length > 0) {
+        planningState = { ...planningState, phase: "obligation_repair_pending", nextAction: "obligation-repair" };
+        diagnostics = {
+          ...diagnostics,
+          stage: "obligation_repair_pending",
+          recipeObligationCoverage: semanticCoverage.covered,
+          missingRequiredRecipeObligations: semanticCoverage.missingRequired.map((obligation) => obligation.id),
+        };
+        await updateRun({ suggestions, planning_state: planningState, diagnostics });
+        throw new SuggestionWorkerYield();
+      }
+      await postValidatedOutline(suggestions, []);
+    };
+    if (planningState.nextAction === "semantic-verification") {
+      const verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall);
+      diagnostics = { ...diagnostics, stage: "semantic_verified", semanticVerification: verification };
+      if (verification.unsatisfied.length > 0) {
+        planningState = { ...planningState, phase: "semantic_repair_pending", nextAction: "semantic-repair", semanticRepairFailures: verification.unsatisfied };
+        diagnostics = { ...diagnostics, stage: "semantic_repair_pending", semanticRepairFailures: verification.unsatisfied };
+        await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
+        throw new SuggestionWorkerYield();
+      }
+      await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: { ...planningState, phase: "semantic_verified", nextAction: "semantic-completion" }, diagnostics });
+      await continueAfterSemanticVerification(persistedSemanticSuggestions);
+      return;
+    }
+    if (planningState.nextAction === "semantic-repair") {
+      const repaired = await repairStoryArcSemanticObligations(
+        persistedSemanticSuggestions,
+        body.arcTemplate,
+        Array.isArray(planningState.semanticRepairFailures) ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }> : [],
+        billableCall,
+        recipeObligations,
+      );
+      planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification" };
+      diagnostics = { ...diagnostics, stage: "semantic_reverification_pending" };
+      await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
+      throw new SuggestionWorkerYield();
+    }
+    if (planningState.nextAction === "semantic-reverification") {
+      const verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall);
+      diagnostics = { ...diagnostics, stage: "semantic_reverified", semanticVerification: verification };
+      await updateRun({ suggestions: persistedSemanticSuggestions, diagnostics });
+      if (verification.unsatisfied.length > 0) {
+        const unresolved = new Error("story_arc_semantic_unresolved");
+        (unresolved as Error & { errorCode?: string }).errorCode = "story_arc_semantic_unresolved";
+        throw unresolved;
+      }
+      await continueAfterSemanticVerification(persistedSemanticSuggestions);
+      return;
+    }
     if (planningState.nextAction === "obligation-repair") {
       diagnostics = { ...diagnostics, stage: "obligation_repair_generation" };
       const repairAllocation = Array.isArray(planningState.allocationEntries)
@@ -4812,6 +5107,17 @@ export async function runSuggestionJob(
         : {}),
     };
 
+    const authoredSemanticBeatCount = body.arcTemplate.beats.filter((beat) => arcRoleContract(beat, body.arcTemplate.name).semanticObligations.length > 0).length;
+    if (authoredSemanticBeatCount > 0) {
+      // Semantic verification is its own durable provider stage. Persist the
+      // validated outline before yielding so a one-dispatch worker slice never
+      // replays the paid outline call or loses the verifier checkpoint.
+      planningState = { ...planningState, phase: "semantic_verification_pending", nextAction: "semantic-verification" };
+      diagnostics = { ...diagnostics, stage: "semantic_verification_pending" };
+      await updateRun({ suggestions: result.suggestions, planning_state: planningState, diagnostics });
+      throw new SuggestionWorkerYield();
+    }
+
     const coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
     diagnostics = {
       ...diagnostics,
@@ -4874,6 +5180,8 @@ export async function runSuggestionJob(
       ? "provider_rate_limited"
       : providerOutage
       ? "provider_outage"
+      : providerErrorCode === "story_arc_semantic_unresolved"
+      ? "story_arc_semantic_unresolved"
       : providerErrorCode
       ? "provider_error"
       : err instanceof RecipeObligationValidationError
@@ -4899,6 +5207,8 @@ export async function runSuggestionJob(
       ? "The AI provider is rate-limiting outline planning. Wait a moment before trying again."
       : providerOutage
       ? "The AI provider is temporarily unavailable; try again later."
+      : providerErrorCode === "story_arc_semantic_unresolved"
+      ? "The outline could not satisfy an authored Story Arc semantic obligation after one bounded repair and re-verification."
       : providerErrorCode
       ? "The AI outline planner could not complete this request; review the run status before retrying."
       : message.slice(0, 2000);
@@ -5172,6 +5482,11 @@ Deno.serve(async (req: Request) => {
   if (validationError) {
     return errorResponse("invalid_request", validationError, 400);
   }
+  const intimacyCompatibilityError = validateAudienceCompatibility(body.recipe?.project?.contentRating, normalizeIntimacyRating(body.recipe?.project?.intimacyRating));
+  if (intimacyCompatibilityError) {
+    return errorResponse("invalid_audience_compatibility", intimacyCompatibilityError, 422);
+  }
+  body = { ...body, recipe: { ...body.recipe, project: { ...body.recipe.project, intimacyRating: normalizeIntimacyRating(body.recipe.project.intimacyRating) } } };
   const db = admin();
   // Current clients must identify the concrete Outline and canonical project
   // lineage. Validate against the real schema (local_project_id + lineage_id)

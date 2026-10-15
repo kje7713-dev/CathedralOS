@@ -30,6 +30,7 @@ struct GenerationRequest: Codable {
     // MARK: Audience controls
     let readingLevel: String
     let contentRating: String
+    let intimacyRating: String
     let audienceNotes: String
 
     // MARK: Output controls
@@ -114,6 +115,7 @@ struct GenerationRequest: Codable {
         case sourcePayload            = "sourcePayloadJSON"
         case readingLevel
         case contentRating
+        case intimacyRating
         case audienceNotes
         case requestedOutputType
         case generationLengthMode
@@ -147,6 +149,7 @@ struct GenerationRequest: Codable {
         sourcePayload: PromptPackExportPayload,
         readingLevel: String,
         contentRating: String,
+        intimacyRating: String = "unspecified",
         audienceNotes: String,
         requestedOutputType: String,
         generationLengthMode: String = GenerationLengthMode.defaultMode.rawValue,
@@ -188,6 +191,7 @@ struct GenerationRequest: Codable {
         self.sourcePayload = sourcePayload
         self.readingLevel = readingLevel
         self.contentRating = contentRating
+        self.intimacyRating = StoryIntimacyRating.storageValue(for: intimacyRating)
         self.audienceNotes = audienceNotes
         self.requestedOutputType = requestedOutputType
         self.generationLengthMode = generationLengthMode
