@@ -36,6 +36,9 @@ import {
   buildDetailResponseSchema,
   outlineDetailChunks,
   mergeDetailedSections,
+  assertSkeletonContinuity,
+  enforceOutlineSectionCap,
+  estimateOutlinePlanningCost,
   buildSuggestionResponseSchema,
   buildObligationRepairPrompt,
   mergeObligationRepairOperations,
@@ -1440,6 +1443,9 @@ Deno.test("staged outline passes preserve complete fields and server-owned conti
   assertEquals(merged[0].storyArcBeatID, "beat-1");
   assertEquals(merged[1].storyArcBeatID, "beat-2");
   assertEquals(merged[1].title, "Detailed Cost");
+  assertThrows(() => assertSkeletonContinuity(skeleton[1], { ...merged[1], resultingChange: "A different outcome" } as any));
+  assertEquals(enforceOutlineSectionCap(skeleton), skeleton);
+  assertThrows(() => enforceOutlineSectionCap(Array.from({ length: 201 }, () => skeleton[0]) as any));
 });
 
 Deno.test("staged prompts keep global structure while making detail requests granular", () => {
@@ -1460,15 +1466,39 @@ Deno.test("staged prompts keep global structure while making detail requests gra
 Deno.test("quality-gated expansion continues after the hard novel floor", async () => {
   const initial = Array.from({ length: 50 }, (_, index) => expansionSection(`Existing chapter ${index + 1}`, "episode"));
   let gateChecks = 0;
+  let expansionCalls = 0;
   const result = await progressivelyExpandOutline(
     initial as any,
     new Set(["beat-1"]),
-    async () => [expansionSection("Quality development", "scene")],
+    async () => { expansionCalls++; return [expansionSection("Quality development", "scene")]; },
     undefined,
-    { qualityGate: () => gateChecks++ === 0, beats: [{ id: "beat-1", label: "Opening" }] },
+    { qualityGate: () => { gateChecks++; return expansionCalls === 0; }, beats: [{ id: "beat-1", label: "Opening" }] },
   );
   assertEquals(gateChecks >= 1, true);
-  assertEquals(result.diagnostics.length, 1);
+  assertEquals(expansionCalls, 1);
+  assertEquals(result.suggestions.length, 51);
+});
+
+Deno.test("outline estimator models skeleton, four-section detail, and bounded expansion", () => {
+  const model = {
+    id: "fixture-model",
+    provider_input_usd_per_1m: 1,
+    provider_cached_input_usd_per_1m: 0,
+    provider_cache_write_usd_per_1m: null,
+    provider_output_usd_per_1m: 1,
+    billing_multiplier: 1,
+    minimum_charge_credits: 0,
+    pricing_effective_at: "2026-01-01T00:00:00.000Z",
+    cache_write_pricing_required: false,
+  } as any;
+  const request = {
+    ...sparseRequest,
+    arcTemplate: { ...sparseRequest.arcTemplate, beats: Array.from({ length: 9 }, (_, index) => ({ id: `beat-${index}`, role: "escalation", label: `Beat ${index}` })) },
+    existingSections: Array.from({ length: 9 }, () => ({ storyArcBeatID: "beat-0" })),
+  } as any;
+  const estimate = estimateOutlinePlanningCost(request, model, { monthly_credit_allowance: 1_000_000, purchased_credit_balance: 0 } as any);
+  assertEquals(estimate.expectedStages, 15); // enrichment + allocation + skeleton + 3 details + 9 bounded expansion calls
+  assertEquals(estimate.upperBoundCredits > estimate.lowerBoundCredits, true);
 });
 
 Deno.test("dynamic response contract removes model-owned beat IDs and target/max allocation semantics", async () => {
@@ -1478,6 +1508,7 @@ Deno.test("dynamic response contract removes model-owned beat IDs and target/max
   assertEquals(source.includes("targetSections"), true);
   assertEquals(source.includes("maxSections"), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
+  assertEquals(source.includes("enforceOutlineSectionCap(skeleton)"), true);
   assertEquals(source.includes("diagnostics:"), true);
   assertEquals(source.includes("generateEnrichment"), true);
   assertEquals(source.includes("planSectionAllocation"), true);
@@ -4146,8 +4177,61 @@ Deno.test("multi-beat expansion checkpoints beat one before the one-dispatch yie
   assertEquals(db.row.suggestions.some((section: any) => section.title.includes("beat-1-0")), true);
   await run();
   assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-beat-1", "outline-expansion-1-beat-2"]);
-  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.status, "pending");
   assertEquals(db.row.attempt_count, 0);
+});
+
+Deno.test("final detail checkpoint resumes postprocessing without replaying paid generation", async () => {
+  const fullBody = await executableWorkerBody();
+  const body = {
+    ...fullBody,
+    arcTemplate: {
+      ...fullBody.arcTemplate,
+      beats: fullBody.arcTemplate.beats.map(({ description: _description, ...beat }: any) => beat),
+    },
+  } as any;
+  const obligations = deriveRecipeObligations(body.recipe as any);
+  const requirementIDs = obligations.map((obligation) => obligation.id);
+  const persistedSuggestions = body.arcTemplate.beats.map((beat: any) => ({
+    title: `${beat.label} persisted`,
+    summary: "Persisted detail summary",
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: "The state hands forward.",
+    entryState: "The prior state holds.",
+    dramaticEvent: "The persisted event occurs.",
+    resultingChange: "The pressure changes.",
+    terminalState: "The next state is ready.",
+    dramaticFunction: beat.id === "beat-1" ? "setup" : "resolution",
+    storyArcBeatID: beat.id,
+    recipeRequirementIDs: requirementIDs,
+  }));
+  const row: any = {
+    ...checkpointedWorkerRow(body),
+    suggestions: persistedSuggestions,
+    planning_state: {
+      version: 2,
+      phase: "outline_detail_complete",
+      nextAction: "outline-postprocess",
+      detailChunkIndex: 1,
+      allocationEntries: checkpointedWorkerRow(body).planning_state.allocationEntries,
+    },
+    request_json: body,
+  };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const billable = async (request: any) => {
+    actions.push(request.action);
+    throw new Error(`unexpected paid replay: ${request.action}`);
+  };
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any,
+    scheduleContinuation: async () => {},
+  });
+  assertEquals(actions, []);
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.planning_state.nextAction, "completed");
 });
 
 Deno.test("fresh worker sequence is enrichment, allocation, skeleton, and detail", async () => {

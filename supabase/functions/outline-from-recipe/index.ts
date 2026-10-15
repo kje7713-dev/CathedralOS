@@ -667,6 +667,27 @@ export function outlineDetailChunks(
   return chunks;
 }
 
+export function enforceOutlineSectionCap(suggestions: Suggestion[]): Suggestion[] {
+  if (suggestions.length > MAX_PLANNED_SECTIONS) {
+    throw new Error(`outline skeleton exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
+  }
+  return suggestions;
+}
+
+export function assertSkeletonContinuity(base: Suggestion, detailed: Suggestion): void {
+  if (detailed.storyArcBeatID !== base.storyArcBeatID) {
+    throw new Error(`detail section ${base.title} changed Story Arc beat`);
+  }
+  if (detailed.dramaticFunction !== base.dramaticFunction) {
+    throw new Error(`detail section ${base.title} changed dramatic purpose`);
+  }
+  for (const field of ["resultingChange", "terminalState"] as const) {
+    if (detailed[field] !== base[field]) {
+      throw new Error(`detail section ${base.title} changed skeleton ${field}`);
+    }
+  }
+}
+
 export function mergeDetailedSections(
   raw: unknown,
   skeleton: Suggestion[],
@@ -697,6 +718,7 @@ export function mergeDetailedSections(
       suggestions: [{ ...detail, storyArcBeatID: base.storyArcBeatID }],
     }, beatIds, undefined, obligations, template).suggestions[0];
     if (!validated) throw new Error(`detail response produced no valid section for index ${index}`);
+    assertSkeletonContinuity(base, validated);
     replacements.set(index, validated);
   }
   if (seen.size !== expected.size) throw new Error("detail response did not cover every requested skeleton section");
@@ -851,14 +873,20 @@ export function estimateOutlinePlanningCost(
     toolCostUsd: 0,
   }, pricing);
   const beatCount = Math.max(1, request.arcTemplate.beats.length);
-  const expansionCalls = Math.max(1, Math.ceil(beatCount / 4));
+  // Before allocation runs, the safest bounded estimate is one skeleton
+  // section per beat plus any already accepted sections. Detail is then
+  // charged as four-section calls, matching the durable worker.
+  const estimatedSectionCount = Math.max(1, beatCount, request.existingSections?.length ?? 0);
+  const detailCalls = Math.max(1, Math.ceil(estimatedSectionCount / OUTLINE_DETAIL_CHUNK_SIZE));
+  const expansionCalls = Math.max(1, Math.ceil(beatCount / OUTLINE_DETAIL_CHUNK_SIZE) * MAX_EXPANSION_ROUNDS);
   const baseStages = [
     stage(inputTokens, 12_000), // story-material enrichment
     stage(inputTokens, 2_048), // allocation
-    stage(inputTokens, OUTLINE_OUTPUT_TOKEN_BUDGET), // first-pass suggestions
+    stage(inputTokens, OUTLINE_SKELETON_OUTPUT_TOKEN_BUDGET), // global skeleton
   ];
-  const lowerBoundCredits = baseStages.reduce((sum, value) => sum + value, 0);
-  const upperBoundCredits = lowerBoundCredits + expansionCalls * stage(inputTokens, OUTLINE_OUTPUT_TOKEN_BUDGET);
+  const detailCost = detailCalls * stage(inputTokens, OUTLINE_DETAIL_OUTPUT_TOKEN_BUDGET);
+  const lowerBoundCredits = baseStages.reduce((sum, value) => sum + value, 0) + detailCost;
+  const upperBoundCredits = lowerBoundCredits + expansionCalls * stage(inputTokens, OUTLINE_EXPANSION_OUTPUT_TOKEN_BUDGET);
   const available = availableCredits(entitlement);
   return {
     estimatedCredits: upperBoundCredits,
@@ -868,7 +896,7 @@ export function estimateOutlinePlanningCost(
     projectedBalance: available - upperBoundCredits,
     allowed: available >= upperBoundCredits,
     model: model.id,
-    expectedStages: 3 + expansionCalls,
+    expectedStages: 3 + detailCalls + expansionCalls,
   };
 }
 
@@ -2311,9 +2339,11 @@ export async function progressivelyExpandOutline(
       let additionsReturned = 0;
       let hitCap = false;
       const firstBeatIndex = round === startRound ? Math.max(0, options.startBeatIndex ?? 0) : 0;
+      const shouldContinueDevelopment = (current: Suggestion[]) =>
+        needsNovelExpansion(current, existingSections) || options.qualityGate?.(current) === true;
       for (let beatIndex = firstBeatIndex; beatIndex < targetBeats.length; beatIndex++) {
         const beat = targetBeats[beatIndex];
-        if (!needsNovelExpansion(roundSuggestions, existingSections)) break;
+        if (!shouldContinueDevelopment(roundSuggestions)) break;
         const beatContext = beat
           ? {
             beatID: beat.id,
@@ -2777,7 +2807,7 @@ export function buildDetailPrompt(
   return {
     system: `You are the detail editor for a field-complete ${requestedStoryMaterialFormat(req)} outline. Enrich exactly the requested skeleton sections; return exactly one section for each supplied sectionIndex. Do not add, delete, reorder, or move sections. Do not change their Story Arc beat, dramatic function, causal order, or terminal handoff.
 
-Improve every field with granular, generation-ready information: concrete participating characters, location, objective, opposition, action, discovery or decision, relationship movement, consequences, setup/payoff hooks, motif use when causal, and precise entry/result/terminal states. Ground recipeRequirementIDs and semantic evidence only where the section actually advances them. Preserve authored facts and audience/intimacy constraints.
+Improve titles, summaries, dramaticEvent, entryState, character/location anchors, objectives, opposition, relationship movement, consequences, setup/payoff hooks, and motif use when causal. Preserve the skeleton dramaticFunction, resultingChange, and terminalState exactly; these are the server-owned continuity outcomes. Ground recipeRequirementIDs and semantic evidence only where the section actually advances them. Preserve authored facts and audience/intimacy constraints.
 
 Check local lengths while enriching. Keep each container's plannedWordRange appropriate to its literary scale; do not make every section a small scene. Upgrade a container when the skeleton's dramatic scope, recipe, or arc requires it, but never inflate a container merely to game the novel length. The complete outline should develop toward the broad ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} word range, not stop at the minimum when unused recipe/arc material supports deeper development. Return only JSON matching the detail schema.` ,
     user: JSON.stringify({
@@ -5350,7 +5380,8 @@ export async function runSuggestionJob(
       );
       const flattened = flattenSuggestionResponse(parseOutlineJSON(raw.content, raw.finishReason), body.arcTemplate.beats);
       const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
-      return mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []);
+      const skeleton = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []);
+      return enforceOutlineSectionCap(skeleton);
     };
 
     const detailPass = async (skeleton: Suggestion[], chunkIndex: number): Promise<Suggestion[]> => {
@@ -5390,6 +5421,12 @@ export async function runSuggestionJob(
       if (chunks.length > 0) throw new SuggestionWorkerYield();
       await processInitialSuggestions(skeleton, []);
     };
+
+    if (planningState.nextAction === "outline-postprocess") {
+      const persisted = Array.isArray(claimedRun.suggestions) ? claimedRun.suggestions as Suggestion[] : [];
+      await processInitialSuggestions(persisted, []);
+      return;
+    }
 
     if (planningState.nextAction === "outline-detail") {
       const skeleton = Array.isArray(claimedRun.suggestions) ? claimedRun.suggestions as Suggestion[] : [];
