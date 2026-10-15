@@ -3103,7 +3103,7 @@ export function validateSuggestions(
   beatIds: Set<string>,
   allocation?: Map<string, Allocation>,
   obligations: RecipeObligation[] = [],
-  template?: Pick<ArcTemplateBlob, "name" | "beats">,
+  template?: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
 ): { suggestions: Suggestion[]; warnings: string[] } {
   const warnings: string[] = [];
   if (!parsed || !Array.isArray(parsed.suggestions)) {
@@ -3158,7 +3158,16 @@ export function validateSuggestions(
     }
     const beatForEvidence = template?.beats.find((beat) => beat.id === s.storyArcBeatID);
     const semanticObligations = beatForEvidence ? arcRoleContract(beatForEvidence, template?.name).semanticObligations : [];
-    const allowedObligationIDs = new Set(semanticObligations.map((obligation) => obligation.id));
+    const isEligibleWholeArcIntimacyBeat = Boolean(
+      beatForEvidence &&
+      template?.relationshipFocus === "primary" &&
+      Array.isArray(template?.intimacyMilestoneRoles) &&
+      template.intimacyMilestoneRoles.includes(beatForEvidence.role),
+    );
+    const allowedObligationIDs = new Set([
+      ...semanticObligations.map((obligation) => obligation.id),
+      ...(isEligibleWholeArcIntimacyBeat ? [SELECTED_INTIMACY_LEVEL_OBLIGATION] : []),
+    ]);
     const groundedEvidence = validateGroundedArcEvidence(s.arcObligationEvidence, s, allowedObligationIDs);
     if (groundedEvidence.error) throw new Error(`section ${String(s.title).slice(0, 120)} has invalid arcObligationEvidence: ${groundedEvidence.error}`);
 

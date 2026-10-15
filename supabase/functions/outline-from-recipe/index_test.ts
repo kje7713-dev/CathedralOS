@@ -5486,6 +5486,32 @@ Deno.test("ungrounded intimacy verifier evidence enters semantic repair instead 
   assertStringIncludes(result.unsatisfied[0].reason, "not grounded");
 });
 
+Deno.test("whole-arc intimacy evidence is accepted on eligible beat sections", () => {
+  const template = {
+    name: "Dark Romance",
+    relationshipFocus: "primary",
+    intimacyMilestoneRoles: ["entanglement"],
+    beats: [{ id: "e", role: "entanglement", label: "Entanglement", description: "" }],
+  } as any;
+  const result = validateSuggestions({ suggestions: [{
+    title: "The Staff Corridor Kiss",
+    summary: "Mira and Julian cross the selected intimacy threshold.",
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: "They leave changed.",
+    storyArcBeatID: "e",
+    dramaticFunction: arcRoleContract(template.beats[0], template.name).allowedFunctions[0],
+    dramaticEvent: "Mira and Julian kiss in the staff corridor.",
+    resultingChange: "Their intimacy becomes chosen rather than engineered.",
+    terminalState: "They leave more vulnerable to each other.",
+    arcObligationEvidence: {
+      selected_intimacy_level: [{ field: "resultingChange", quote: "Their intimacy becomes chosen rather than engineered." }],
+    },
+  }] }, new Set(["e"]), undefined, [], template);
+  assertEquals(result.suggestions.length, 1);
+  assertEquals(result.suggestions[0].arcObligationEvidence?.selected_intimacy_level?.length, 1);
+});
+
 Deno.test("novel scale uses the preferred 80,000-word floor and rejects tiny new leaves", () => {
   assertEquals(NOVEL_LEAF_CONTAINERS, ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"]);
   assertThrows(() => validateNovelLeafContainers([{ container: "moment" }]));
