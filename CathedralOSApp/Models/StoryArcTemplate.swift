@@ -14,6 +14,24 @@ struct StoryArcTemplate: Identifiable, Hashable {
     let name: String
     let description: String
     let beats: [StoryArcBeatTemplate]
+    let relationshipFocus: StoryArcRelationshipFocus
+    let intimacyMilestoneRoles: [String]
+
+    init(
+        id: UUID,
+        name: String,
+        description: String,
+        beats: [StoryArcBeatTemplate],
+        relationshipFocus: StoryArcRelationshipFocus = .none,
+        intimacyMilestoneRoles: [String] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.beats = beats
+        self.relationshipFocus = relationshipFocus
+        self.intimacyMilestoneRoles = intimacyMilestoneRoles
+    }
 
     /// Deterministic UUIDs match the seed data in the initial novel-building
     /// migration. Do not edit without also updating the migration's INSERT.
@@ -149,7 +167,9 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "realization", label: "Realization", description: "Force the central emotional truth into view and make avoidance impossible."),
             .init(role: "grand_choice", label: "Grand Choice", description: "Make a costly, active choice that proves what the relationship now means."),
             .init(role: "hea_hfn", label: "HEA / HFN", description: "Resolve the core romantic conflict with an earned committed future together.")
-        ]
+        ],
+        relationshipFocus: .primary,
+        intimacyMilestoneRoles: ["connection_deepens", "midpoint_intimacy", "grand_choice", "hea_hfn"],
     )
 
     static let psychologicalThriller = StoryArcTemplate(
@@ -186,7 +206,9 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "united_choice", label: "United Choice", description: "Have the leads choose what they will stand for together despite the cost."),
             .init(role: "final_battle_and_choice", label: "Final Battle and Choice", description: "Resolve the primary external conflict through a climax inseparable from the central emotional choice."),
             .init(role: "new_order_together", label: "New Order Together", description: "Establish the changed world and the earned state of the relationship.")
-        ]
+        ],
+        relationshipFocus: .primary,
+        intimacyMilestoneRoles: ["dangerous_attraction", "quest_and_bond", "united_choice", "new_order_together"],
     )
 
     static let suspenseCountdown = StoryArcTemplate(
@@ -258,7 +280,9 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "reckoning", label: "Reckoning", description: "Force accountability, self-recognition, and confrontation with the relationship's central harm or fear."),
             .init(role: "chosen_terms", label: "Chosen Terms", description: "Make a decisive choice that establishes what the relationship can and cannot become."),
             .init(role: "earned_resolution", label: "Earned Resolution", description: "Resolve the central romantic conflict with agency, consequences, and a stable chosen future.")
-        ]
+        ],
+        relationshipFocus: .primary,
+        intimacyMilestoneRoles: ["entanglement", "vulnerability_revealed", "chosen_terms", "earned_resolution"],
     )
 
     static let epicFantasyQuest = StoryArcTemplate(
@@ -327,7 +351,9 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "relationship_rupture", label: "Relationship Rupture", description: "Break the couple's apparent future at the moment both sport and relationship stakes peak."),
             .init(role: "game_day_choice", label: "Game-Day Choice", description: "Resolve the defining athletic challenge alongside the central emotional choice."),
             .init(role: "hea_hfn", label: "HEA / HFN", description: "Deliver the earned relationship future and show how it fits with the characters' athletic lives.")
-        ]
+        ],
+        relationshipFocus: .primary,
+        intimacyMilestoneRoles: ["chemistry_builds", "first_commitment", "game_day_choice", "hea_hfn"],
     )
 
     static let romanticSuspense = StoryArcTemplate(
@@ -345,7 +371,9 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "trust_choice", label: "Trust Choice", description: "Make an active, risky decision to trust based on earned knowledge rather than convenience."),
             .init(role: "joint_showdown", label: "Joint Showdown", description: "Resolve the central danger through coordinated action and emotional commitment."),
             .init(role: "safety_and_commitment", label: "Safety and Commitment", description: "Resolve the threat and establish the earned romantic future.")
-        ]
+        ],
+        relationshipFocus: .primary,
+        intimacyMilestoneRoles: ["intimacy_under_pressure", "trust_choice", "joint_showdown", "safety_and_commitment"],
     )
 
     static let conspiracyArtifactThriller = StoryArcTemplate(
@@ -504,6 +532,12 @@ struct StoryArcTemplate: Identifiable, Hashable {
         .progressionFantasy, .historicalWarSurvival, .comingOfAge, .revenge,
         .heist, .redemption, .familySaga
     ]
+}
+
+enum StoryArcRelationshipFocus: String, Codable, Hashable {
+    case none
+    case supporting
+    case primary
 }
 
 /// A single beat definition inside a `StoryArcTemplate`.

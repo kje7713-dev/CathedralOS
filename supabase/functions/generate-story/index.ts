@@ -380,6 +380,9 @@ interface BulkEstimateSection {
   container?: string;
   pov?: string;
   terminalBeat?: string;
+  plannedTargetWords?: number;
+  plannedTargetWordsMin?: number;
+  plannedTargetWordsMax?: number;
   futureOutlineContext?: string;
 }
 
@@ -452,6 +455,10 @@ interface GenerateStoryRequest {
   sectionDramaticEvent?: string;
   sectionResultingChange?: string;
   sectionTerminalState?: string;
+  // Planning intent only; server-owned container hard caps remain authoritative.
+  plannedTargetWords?: number;
+  plannedTargetWordsMin?: number;
+  plannedTargetWordsMax?: number;
   // Bounded future trajectory context used only by durable Run All.
   futureOutlineContext?: string;
   // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): the 5 Story Arc
@@ -1608,6 +1615,9 @@ export function buildPrompt(req: {
   sectionDramaticEvent?: string;
   sectionResultingChange?: string;
   sectionTerminalState?: string;
+  plannedTargetWords?: number;
+  plannedTargetWordsMin?: number;
+  plannedTargetWordsMax?: number;
   futureOutlineContext?: string;
   // PR-360-Z cleanup pass: Story Arc Context (Kevin 2026-08-21 17:02 EDT).
   // Optional — when any field is set, the buildPrompt renders a
@@ -1848,6 +1858,28 @@ export function buildPrompt(req: {
   //  - structural limits so it doesn't sprawl
   //  - the POV so it knows who is narrating
   // The hard cap is emergency headroom, NOT a budget the model should fill.
+  const sanePlannedWordValue = (value: unknown): number | undefined => {
+    const number = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(number) && number > 0 && number <= 100_000 ? Math.round(number) : undefined;
+  };
+  const plannedTargetWords = sanePlannedWordValue(req.plannedTargetWords);
+  const plannedTargetWordsMin = sanePlannedWordValue(req.plannedTargetWordsMin);
+  const plannedTargetWordsMax = sanePlannedWordValue(req.plannedTargetWordsMax);
+  const plannedLengthGuidance = plannedTargetWords || plannedTargetWordsMin || plannedTargetWordsMax
+    ? [
+      "## Planned Development Length",
+      "",
+      plannedTargetWords ? `Planned target: approximately ${plannedTargetWords.toLocaleString()} words` : "Planned target: not supplied",
+      plannedTargetWordsMin || plannedTargetWordsMax
+        ? `Preferred range: ${plannedTargetWordsMin?.toLocaleString() ?? "not supplied"}–${plannedTargetWordsMax?.toLocaleString() ?? "not supplied"} words`
+        : "Preferred range: not supplied",
+      "Fully develop the Section Contract toward this planning target through scene-relevant action, resistance, tactics, reactions, emotional processing, decision, and immediate consequence.",
+      "Do not pad. Do not invent unrelated subplots. Do not continue beyond the Section Contract's natural stopping point. Do not summarize a major event merely to finish early.",
+      "The target is a development target, not a command to hit an exact word count; the container hard cap and Section Contract remain authoritative.",
+      "",
+    ].join("\n")
+    : "";
+
   const containerInstructions = (
     containerName: string,
     whatItContains: string,
@@ -1898,6 +1930,7 @@ Structural limits:
       cfg.expectedRange,
       cfg.stoppingRule,
     ),
+    ...(plannedLengthGuidance ? ["", plannedLengthGuidance] : []),
     "",
     "## Narrative POV",
     "",
@@ -3016,6 +3049,9 @@ async function handler(
         intimacyRating: resolvedAudience.intimacyRating,
         audienceNotes: resolvedAudience.audienceNotes,
         terminalBeat: section.terminalBeat,
+        plannedTargetWords: section.plannedTargetWords,
+        plannedTargetWordsMin: section.plannedTargetWordsMin,
+        plannedTargetWordsMax: section.plannedTargetWordsMax,
         projectName,
         promptPackName,
         sectionTitle: section.title,
@@ -3093,6 +3129,9 @@ async function handler(
       sectionDramaticEvent: body.sectionDramaticEvent,
       sectionResultingChange: body.sectionResultingChange,
       sectionTerminalState: body.sectionTerminalState,
+      plannedTargetWords: body.plannedTargetWords,
+      plannedTargetWordsMin: body.plannedTargetWordsMin,
+      plannedTargetWordsMax: body.plannedTargetWordsMax,
       futureOutlineContext: body.futureOutlineContext,
     });
     // PR-372: concat blocks for token estimation. Hash not computed in the
@@ -3302,6 +3341,9 @@ async function handler(
     sectionDramaticEvent: body.sectionDramaticEvent,
     sectionResultingChange: body.sectionResultingChange,
     sectionTerminalState: body.sectionTerminalState,
+    plannedTargetWords: body.plannedTargetWords,
+    plannedTargetWordsMin: body.plannedTargetWordsMin,
+    plannedTargetWordsMax: body.plannedTargetWordsMax,
     futureOutlineContext: body.futureOutlineContext,
     // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): Story Arc Context
     // resolved SERVER-SIDE from outlineSectionCtx (fetched via

@@ -444,7 +444,9 @@ struct OutlineSuggestionService {
             id: template.id.uuidString,
             name: template.name,
             description: template.description,
-            beats: beats
+            beats: beats,
+            relationshipFocus: template.relationshipFocus,
+            intimacyMilestoneRoles: template.intimacyMilestoneRoles
         )
     }
 
