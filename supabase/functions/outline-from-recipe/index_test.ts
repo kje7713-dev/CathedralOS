@@ -95,6 +95,7 @@ import {
   intimacyRequirement,
   intimacyPlanningDirective,
   semanticVerificationInput,
+  verifyStoryArcSemantics,
   SELECTED_INTIMACY_LEVEL_OBLIGATION,
   planSectionAllocation,
   checkRateLimit,
@@ -5446,6 +5447,43 @@ Deno.test("explicit intimacy is a whole-arc verifier obligation and generic arcs
   assertEquals((input.arcWideObligations as any[])[0].sections.length, 1);
   const generic = { name: "Mystery", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "m", role: "the_crime", label: "The Crime", description: "" }] } as any;
   assertEquals((semanticVerificationInput(suggestions as any, generic, recipe).arcWideObligations as any[]).length, 0);
+});
+
+Deno.test("ungrounded intimacy verifier evidence enters semantic repair instead of throwing", async () => {
+  const template = {
+    name: "Dark Romance",
+    relationshipFocus: "primary",
+    intimacyMilestoneRoles: ["entanglement"],
+    beats: [{ id: "e", role: "entanglement", label: "Entanglement", description: "" }],
+  } as any;
+  const recipe = { project: { intimacyRating: "explicit" } } as any;
+  const suggestions = [{
+    storyArcBeatID: "e",
+    dramaticEvent: "Mira reaches for Julian's hand and closes the distance.",
+    resultingChange: "Their intimacy becomes chosen rather than engineered.",
+    terminalState: "They remain together.",
+  }];
+  const result = await verifyStoryArcSemantics(
+    suggestions as any,
+    template,
+    async () => ({
+      content: JSON.stringify({
+        arcWideObligations: [{
+          obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION,
+          satisfied: true,
+          sectionIndex: 0,
+          field: "resultingChange",
+          quote: "This quote is not in the section.",
+          reason: "claimed milestone",
+        }],
+        beats: [],
+      }),
+    }) as any,
+    recipe,
+  );
+  assertEquals(result.arcWideObligations[0].satisfied, false);
+  assertEquals(result.unsatisfied[0].obligationID, SELECTED_INTIMACY_LEVEL_OBLIGATION);
+  assertStringIncludes(result.unsatisfied[0].reason, "not grounded");
 });
 
 Deno.test("novel scale uses the preferred 80,000-word floor and rejects tiny new leaves", () => {
