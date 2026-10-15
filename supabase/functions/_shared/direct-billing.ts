@@ -34,6 +34,23 @@ export class DirectBillingInsufficientCreditsError extends Error {
   }
 }
 
+function pricingForDirectStage(
+  pricing: ReturnType<typeof snapshotPricing>,
+  modelName: string,
+  modelKind: "text_generation" | "embedding",
+  stage?: string,
+): ReturnType<typeof snapshotPricing> {
+  // Scene-memory embeddings are inexpensive enough that the product floor would
+  // dominate actual usage. Keep the override narrow to this exact provider
+  // model and stage; extraction and all other billable operations retain their
+  // catalog minimums.
+  return modelKind === "embedding" &&
+      modelName === "text-embedding-3-small" &&
+      stage === "scene-memory-embedding"
+    ? { ...pricing, minimumChargeCredits: 0 }
+    : pricing;
+}
+
 function isInsufficientCreditsSettlementError(error: unknown): boolean {
   const record = error as Record<string, unknown> | null;
   const text = [
@@ -52,6 +69,7 @@ export async function preflightDirectUsage(
   inputTokens: number,
   outputBudget: number,
   modelKind: "text_generation" | "embedding" = "text_generation",
+  stage?: string,
 ): Promise<void> {
   const inputLimit = inputTokenLimitDetails(inputTokens);
   if (inputLimit) {
@@ -66,7 +84,12 @@ export async function preflightDirectUsage(
     modelKind,
   );
   if (!model) throw new Error(`billing model unavailable: ${modelName}`);
-  const pricing = snapshotPricing(model);
+  const pricing = pricingForDirectStage(
+    snapshotPricing(model),
+    modelName,
+    modelKind,
+    stage,
+  );
   const estimate: GenerationUsage = {
     uncachedInputTokens: Math.max(0, inputTokens),
     cachedInputTokens: 0,
@@ -151,7 +174,12 @@ export async function settleDirectUsage(
     modelKind,
   );
   if (!model) throw new Error(`billing model unavailable: ${modelName}`);
-  const pricing = snapshotPricing(model);
+  const pricing = pricingForDirectStage(
+    snapshotPricing(model),
+    modelName,
+    modelKind,
+    stage,
+  );
   const usage: GenerationUsage = {
     uncachedInputTokens: Math.max(0, inputTokens),
     cachedInputTokens: 0,
