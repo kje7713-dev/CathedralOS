@@ -126,7 +126,7 @@ struct ProjectImportExportPayload: Codable {
             tags         = try c.decode([String].self, forKey: .tags)
             readingLevel = try c.decodeIfPresent(String.self, forKey: .readingLevel) ?? ""
             contentRating = try c.decodeIfPresent(String.self, forKey: .contentRating) ?? ""
-            intimacyRating = StoryIntimacyRating.storageValue(for: c.decodeIfPresent(String.self, forKey: .intimacyRating))
+            intimacyRating = StoryIntimacyRating.storageValue(for: try c.decodeIfPresent(String.self, forKey: .intimacyRating))
             audienceNotes = try c.decodeIfPresent(String.self, forKey: .audienceNotes) ?? ""
         }
     }
