@@ -2657,6 +2657,53 @@ const romanticSuspenseFixture = {
   ],
 };
 
+function assertOpenAIStrictSchema(schema: any, path = "schema"): void {
+  if (!schema || typeof schema !== "object") return;
+  if (schema.type === "object") {
+    assertEquals(schema.additionalProperties, false, `${path} must close additional properties`);
+    const propertyNames = Object.keys(schema.properties ?? {}).sort();
+    const requiredNames = [...(schema.required ?? [])].sort();
+    assertEquals(requiredNames, propertyNames, `${path} must require every defined property`);
+  }
+  for (const [key, value] of Object.entries(schema.properties ?? {})) {
+    assertOpenAIStrictSchema(value, `${path}.${key}`);
+  }
+  if (schema.items) assertOpenAIStrictSchema(schema.items, `${path}.items`);
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    assertOpenAIStrictSchema(schema.additionalProperties, `${path}.additionalProperties`);
+  }
+}
+
+Deno.test("semantic evidence schemas satisfy strict Structured Outputs for the 10-beat Romance / HEA arc", () => {
+  const roles = [
+    "ordinary_life", "meet_attraction", "resistance", "connection_deepens", "midpoint_intimacy",
+    "pressure_test", "rupture", "realization", "grand_choice", "hea_hfn",
+  ];
+  const beats = roles.map((role, index) => ({
+    id: `romance-beat-${index + 1}`,
+    role,
+    label: role,
+    description: `Authored Romance / HEA requirement for ${role}.`,
+  }));
+  const allocation = new Map(beats.map((beat) => [beat.id, { minSections: 1, rationale: "schema regression" }]));
+  const schema: any = buildSuggestionResponseSchema(beats, allocation, [], "Romance / HEA");
+  assertOpenAIStrictSchema(schema);
+
+  for (const beat of beats) {
+    const item = schema.properties.beats.properties[beat.id].items;
+    assertEquals(item.required.includes("arcObligationEvidence"), true);
+    const evidence = item.properties.arcObligationEvidence;
+    assertEquals(evidence.required, Object.keys(evidence.properties));
+    for (const obligationSchema of Object.values(evidence.properties) as any[]) {
+      assertEquals(obligationSchema.items.required, ["field", "quote"]);
+    }
+  }
+
+  const expansion: any = buildExpansionResponseSchema(arcRoleContract(beats[9], "Romance / HEA"));
+  assertOpenAIStrictSchema(expansion);
+  assertEquals(expansion.properties.suggestions.items.required.includes("arcObligationEvidence"), true);
+});
+
 Deno.test("semantic beat obligations reject generic Romantic Suspense completion", () => {
   const generic = [
     semanticSection("intimacy", "The Danger", "The danger escalates.", "escalation"),
@@ -2704,7 +2751,7 @@ Deno.test("semantic beat obligations require concrete evidence for Romantic Susp
     romanticSuspenseFixture.name,
   );
   const intimacySchema = schema.properties.beats.properties.intimacy.items;
-  assertEquals(intimacySchema.required.includes("arcObligationEvidence"), false);
+  assertEquals(intimacySchema.required.includes("arcObligationEvidence"), true);
   assertEquals(intimacySchema.properties.arcObligationEvidence.properties.relationship_deepens_under_pressure.type, "array");
 });
 
@@ -2742,7 +2789,7 @@ Deno.test("authored Story Arc beat requirements survive context compaction for e
     [],
     template.name,
   );
-  assertEquals(schema.properties.beats.properties["custom-beat"].items.required.includes("arcObligationEvidence"), false);
+  assertEquals(schema.properties.beats.properties["custom-beat"].items.required.includes("arcObligationEvidence"), true);
   const prompt = buildPrompt({ ...sparseRequest, arcTemplate: template } as any, new Map([["custom-beat", { minSections: 1, rationale: "semantic test" }]]));
   assertEquals(prompt.system.includes(authoredRequirement), true);
   assertEquals(prompt.user.includes(authoredRequirement), true);

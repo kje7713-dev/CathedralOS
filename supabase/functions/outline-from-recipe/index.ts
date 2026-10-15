@@ -570,11 +570,14 @@ export function buildSuggestionResponseSchema(
           arcObligationEvidence: {
             type: "object",
             properties: Object.fromEntries(contract.semanticObligations.map((obligation) => [obligation.id, { type: "array", items: { type: "object", properties: { field: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] }, quote: { type: "string", minLength: 1, maxLength: 1200 } }, required: ["field", "quote"], additionalProperties: false } }])),
+            required: contract.semanticObligations.map((obligation) => obligation.id),
             additionalProperties: false,
           },
         } : {}),
       },
-      required: sectionSchema.required,
+      required: contract.semanticObligations.length > 0
+        ? [...sectionSchema.required, "arcObligationEvidence"]
+        : sectionSchema.required,
     };
     properties[beat.id] = {
       type: "array",
@@ -1918,11 +1921,14 @@ export function buildExpansionResponseSchema(contract?: ArcRoleContract) {
               arcObligationEvidence: {
                 type: "object",
                 properties: Object.fromEntries(contract.semanticObligations.map((obligation) => [obligation.id, { type: "array", items: { type: "object", properties: { field: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] }, quote: { type: "string", minLength: 1, maxLength: 1200 } }, required: ["field", "quote"], additionalProperties: false } }])),
+                required: contract.semanticObligations.map((obligation) => obligation.id),
                 additionalProperties: false,
               },
             } : {}),
           },
-          required: EXPANSION_SCHEMA.properties.suggestions.items.required,
+          required: contract?.semanticObligations.length
+            ? [...EXPANSION_SCHEMA.properties.suggestions.items.required, "arcObligationEvidence"]
+            : EXPANSION_SCHEMA.properties.suggestions.items.required,
         },
       },
     },
