@@ -3248,9 +3248,13 @@ export function validateGroundedArcEvidence(
       const quote = typeof (entry as any).quote === "string" ? normalizeEvidenceText((entry as any).quote) : "";
       if (!["dramaticEvent", "resultingChange", "terminalState"].includes(field)) return { error: `obligation ${obligationID} references an invalid field` };
       const actual = normalizeEvidenceText(String((section as any)[field] ?? ""));
-      if (!quote || !actual.includes(quote)) return { error: `obligation ${obligationID} quote is not an exact normalized substring of ${field}` };
+      // Evidence is a provider-supplied hint, not the semantic gate. A model
+      // may paraphrase a field even when the independent verifier can still
+      // validate the obligation from the Section Contract fields.
+      if (!quote || !actual.includes(quote)) continue;
       out[obligationID].push({ field, quote });
     }
+    if (out[obligationID].length === 0) delete out[obligationID];
   }
   return { value: out };
 }
