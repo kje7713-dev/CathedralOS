@@ -3492,16 +3492,20 @@ export async function verifyStoryArcSemantics(
     const actual = section && ["dramaticEvent", "resultingChange", "terminalState"].includes(field)
       ? normalizeEvidenceText(String((section as any)[field] ?? ""))
       : "";
-    if (rawObligation?.satisfied && (!section || !quote || !actual.includes(quote))) {
-      throw new Error(`story_arc_semantic_verification: quote is not grounded for ${SELECTED_INTIMACY_LEVEL_OBLIGATION}`);
-    }
+    const quoteGrounded = Boolean(section) && Boolean(quote) && actual.includes(quote);
+    const providerClaimedSatisfied = Boolean(rawObligation?.satisfied);
     const verified = {
       obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION,
-      satisfied: Boolean(rawObligation?.satisfied),
+      // A provider-supplied quote is evidence, not authority. If the quote
+      // cannot be found in the referenced Section Contract field, fail closed
+      // into the existing semantic-repair path instead of returning a 500.
+      satisfied: providerClaimedSatisfied && quoteGrounded,
       sectionIndex: Number.isInteger(sectionIndex) ? sectionIndex : -1,
       field: ["dramaticEvent", "resultingChange", "terminalState"].includes(field) ? field : "dramaticEvent",
       quote,
-      reason: String(rawObligation?.reason ?? "missing whole-arc intimacy milestone"),
+      reason: providerClaimedSatisfied && !quoteGrounded
+        ? "provider evidence quote was not grounded in the referenced Section Contract field; semantic repair required"
+        : String(rawObligation?.reason ?? "missing whole-arc intimacy milestone"),
     } as SemanticVerificationObligation;
     arcWideObligations.push(verified);
     if (!verified.satisfied) {
@@ -3526,12 +3530,22 @@ export async function verifyStoryArcSemantics(
       const field = rawObligation.field;
       const quote = normalizeEvidenceText(String(rawObligation.quote ?? ""));
       const section = sections.find((candidate) => candidate.sectionIndex === sectionIndex)?.section;
-      if (rawObligation.satisfied) {
-        if (!section || !["dramaticEvent", "resultingChange", "terminalState"].includes(field)) throw new Error(`story_arc_semantic_verification: invalid satisfied reference for ${obligationID}`);
-        const actual = normalizeEvidenceText(String((section as any)[field] ?? ""));
-        if (!quote || !actual.includes(quote)) throw new Error(`story_arc_semantic_verification: quote is not grounded for ${obligationID}`);
-      }
-      const verified = { obligationID, satisfied: Boolean(rawObligation.satisfied), sectionIndex, field, quote, reason: String(rawObligation.reason ?? "") };
+      const validField = ["dramaticEvent", "resultingChange", "terminalState"].includes(field);
+      const actual = section && validField ? normalizeEvidenceText(String((section as any)[field] ?? "")) : "";
+      const quoteGrounded = Boolean(section) && validField && Boolean(quote) && actual.includes(quote);
+      const providerClaimedSatisfied = Boolean(rawObligation.satisfied);
+      const verified = {
+        obligationID,
+        // Treat unverifiable provider evidence as unsatisfied so the bounded
+        // repair flow can correct the section rather than failing the request.
+        satisfied: providerClaimedSatisfied && quoteGrounded,
+        sectionIndex,
+        field: validField ? field : "dramaticEvent",
+        quote,
+        reason: providerClaimedSatisfied && !quoteGrounded
+          ? "provider evidence quote was not grounded in the referenced Section Contract field; semantic repair required"
+          : String(rawObligation.reason ?? ""),
+      };
       obligations.push(verified);
       if (!verified.satisfied) unsatisfied.push({ beatID, obligationID, reason: verified.reason });
     }
