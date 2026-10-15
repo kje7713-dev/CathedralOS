@@ -1,0 +1,13 @@
+{
+  "images" : [
+    {
+      "filename" : "StoryDonkeySplash.jpg",
+      "idiom" : "universal",
+      "scale" : "1x"
+    }
+  ],
+  "info" : {
+    "author" : "openclaw",
+    "version" : 1
+  }
+}

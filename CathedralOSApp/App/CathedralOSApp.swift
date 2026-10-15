@@ -42,6 +42,7 @@ struct CathedralOSApp: App {
 
 private struct AppRootView: View {
     @Environment(\.modelContext) private var modelContext
+    @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator = .shared
 
     let firstLaunchAfterUpdate: Bool
     let recoveryContext: PersistenceRecoveryContext?
@@ -49,31 +50,49 @@ private struct AppRootView: View {
     @State private var hasRunLaunchTasks = false
 
     var body: some View {
-        TabView {
-            HomeView()
-                .tabItem {
-                    Label("Home", systemImage: "house")
-                }
-            ProjectsListView()
-                .tabItem {
-                    Label("Projects", systemImage: "books.vertical")
-                }
-            if PublicSharingServiceConfiguration.isEnabled {
-                SharedOutputsView()
+        ZStack {
+            TabView {
+                HomeView()
                     .tabItem {
-                        Label("Shared", systemImage: "globe")
+                        Label("Home", systemImage: "house")
+                    }
+                ProjectsListView()
+                    .tabItem {
+                        Label("Projects", systemImage: "books.vertical")
+                    }
+                if PublicSharingServiceConfiguration.isEnabled {
+                    SharedOutputsView()
+                        .tabItem {
+                            Label("Shared", systemImage: "globe")
+                        }
+                }
+                AccountView(recoveryContext: recoveryContext)
+                    .tabItem {
+                        Label("Account", systemImage: "person.circle")
                     }
             }
-            AccountView(recoveryContext: recoveryContext)
-                .tabItem {
-                    Label("Account", systemImage: "person.circle")
-                }
+            .tint(CathedralTheme.Colors.accent)
+
+            if showsLaunchSyncSplash {
+                SyncSplashView()
+                    .transition(.opacity)
+                    .zIndex(1)
+            }
         }
-        .tint(CathedralTheme.Colors.accent)
+        .animation(.easeInOut(duration: 0.45), value: showsLaunchSyncSplash)
         .task {
             guard !hasRunLaunchTasks else { return }
             hasRunLaunchTasks = true
             await performLaunchRecoveryTasks()
+        }
+    }
+
+    private var showsLaunchSyncSplash: Bool {
+        switch durabilityCoordinator.operationState {
+        case .running(.appLaunch), .running(.signIn), .running(.restoreAll):
+            return true
+        default:
+            return false
         }
     }
 
@@ -628,6 +647,37 @@ private struct RecoveryModeView: View {
         }
         authState = authService.authState
         return authState.isSignedIn
+    }
+}
+
+private struct SyncSplashView: View {
+    var body: some View {
+        ZStack {
+            Image("StoryDonkeySplash")
+                .resizable()
+                .scaledToFill()
+                .ignoresSafeArea()
+
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.62)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: CathedralTheme.Spacing.sm) {
+                Spacer()
+                ProgressView()
+                    .tint(.white)
+                Text("Syncing your stories…")
+                    .font(CathedralTheme.Typography.body(16, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .padding(.bottom, CathedralTheme.Spacing.xl)
+        }
+        .background(Color.black)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Syncing your stories")
     }
 }
 
