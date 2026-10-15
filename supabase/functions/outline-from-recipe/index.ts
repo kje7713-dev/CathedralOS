@@ -52,7 +52,7 @@ import {
 //
 // Secrets required (set via `supabase secrets set`):
 //   OPENAI_API_KEY            — OpenAI secret key
-//   OPENAI_MODEL_DEFAULT      — model used (default: gpt-5.6-luna, must support structured output)
+//   OPENAI_MODEL_DEFAULT      — legacy override; Suggest Sections defaults to GPT-5.4 Mini
 //   SUPABASE_URL              — Supabase project URL (auto-injected)
 //   SUPABASE_ANON_KEY         — Supabase anon key (auto-injected)
 //
@@ -80,10 +80,9 @@ import {
 // =============================================================================
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
-// Requests created before PR #699 commonly omitted modelID. Their historical
-// default was GPT-5.6 Luna; never reinterpret such a persisted request as the
-// new Sol default. New iOS requests always send an explicit approved ID.
-export const LEGACY_PLANNING_MODEL_ID = "gpt-5.6-luna";
+// Requests that omit modelID use the fixed Suggest Sections default.
+// Persisted runs with an explicit modelID retain that identity during recovery.
+export const LEGACY_PLANNING_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_MODEL = LEGACY_PLANNING_MODEL_ID;
 
 /** Maps every physical outline action to one logical billing/cache stage. */
@@ -5467,9 +5466,8 @@ Deno.serve(async (req: Request) => {
   } catch {
     return errorResponse("invalid_request", "Body must be JSON", 400);
   }
-  // Do not apply the new Sol default until after legacy idempotent recovery
-  // has had a chance to match the original request fingerprint. Legacy
-  // callers without modelID retain their historical GPT-5.6 Luna default.
+  // Resolve existing idempotent runs before applying the fixed default so
+  // recovery preserves the model identity recorded on that run.
   if (body.storyMaterialEnrichment) {
     body = {
       ...body,

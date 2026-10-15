@@ -10,7 +10,7 @@ private func formatRunCredits(_ value: Double) -> String {
 /// the general generation picker. Availability is resolved from the server's
 /// eligible catalog response; a missing model is shown, not substituted.
 enum OutlineSectionsModelCatalog {
-    static let defaultID = "gpt-6.1-sol"
+    static let defaultID = "gpt-5.4-mini"
     static let preferenceKey = "cathedralos.outline.selectedModelID"
     static let reasoningPreferenceKey = "cathedralos.outline.selectedReasoningEffort"
     static let reasoningEfforts = ["low", "medium", "high"]
@@ -254,8 +254,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestionsError: String?
     @State private var suggestionsNotice: String?
     @State private var suggestionsFeedback: String?
-    @State private var showingOutlineModelSheet = false
-    @State private var outlinePlanningRequest: OutlineSuggestionRequest?
     @AppStorage(OutlineSectionsModelCatalog.preferenceKey) private var preferredOutlineModelID = OutlineSectionsModelCatalog.defaultID
     @AppStorage(OutlineSectionsModelCatalog.reasoningPreferenceKey) private var preferredOutlineReasoningEffort = "low"
     @State private var acceptingSectionID: UUID?
@@ -453,17 +451,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             .onAppear {
                 // Clear any stale "Outline not found." from the previous attempt.
                 runOutlineError = nil
-            }
-        }
-        .sheet(isPresented: $showingOutlineModelSheet) {
-            if let request = outlinePlanningRequest {
-                OutlinePlanningModelSheet(
-                    initialModelID: preferredOutlineModelID,
-                    initialReasoningEffort: preferredOutlineReasoningEffort,
-                    request: request,
-                    onConfirm: confirmOutlinePlanningModel,
-                    onCancel: cancelOutlinePlanningModel
-                )
             }
         }
         .alert("Suggestions Ready", isPresented: suggestionsFeedbackPresented) {
@@ -771,8 +758,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             existingSections: currentOutline?.sections ?? [],
             material: material,
             requestGenerationID: currentSuggestionGenerationID(),
-            modelID: usePreferredModel ? (modelID ?? preferredOutlineModelID) : modelID,
-            reasoningEffort: reasoningEffort ?? (usePreferredModel && OutlineSectionsModelCatalog.supportsReasoning(for: modelID ?? preferredOutlineModelID) ? preferredOutlineReasoningEffort : nil)
+            modelID: usePreferredModel ? (modelID ?? OutlineSectionsModelCatalog.defaultID) : modelID,
+            reasoningEffort: reasoningEffort
         ).idempotencyKey
     }
 
@@ -865,47 +852,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private func prepareOutlinePlanning() {
-        do {
-            outlinePlanningRequest = try makePlanningRequest(
-                modelID: preferredOutlineModelID,
-                reasoningEffort: OutlineSectionsModelCatalog.supportsReasoning(for: preferredOutlineModelID) ? preferredOutlineReasoningEffort : nil
-            )
-            showingOutlineModelSheet = true
-        } catch {
-            suggestionsError = error.localizedDescription
-        }
-    }
-
-    private func confirmOutlinePlanningModel(_ modelID: String, _ reasoningEffort: String?) {
-        preferredOutlineModelID = modelID
-        if OutlineSectionsModelCatalog.supportsReasoning(for: modelID), let reasoningEffort,
-           OutlineSectionsModelCatalog.reasoningEfforts.contains(reasoningEffort) {
-            preferredOutlineReasoningEffort = reasoningEffort
-        }
-        showingOutlineModelSheet = false
-        outlinePlanningRequest = nil
-        Task { await loadSuggestions(modelID: modelID, reasoningEffort: OutlineSectionsModelCatalog.supportsReasoning(for: modelID) ? reasoningEffort : nil) }
-    }
-
-    private func cancelOutlinePlanningModel() {
-        showingOutlineModelSheet = false
-        outlinePlanningRequest = nil
-    }
-
-    @MainActor
-    private func makePlanningRequest(modelID: String, reasoningEffort: String? = nil) throws -> OutlineSuggestionRequest {
-        guard let recipe = recipeSelection?.selectedRecipe,
-              let arc = project.storyArcs.first,
-              let templateID = arc.templateID,
-              let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID }) else {
-            throw OutlineSuggestionError.invalidResponse("Need a Recipe and a Story Arc template first.")
-        }
-        let material = try AuthoritativeProjectMaterial.resolve(project: project, in: modelContext)
-        return try OutlineSuggestionService().makeRequest(
-            recipe: recipe, arc: arc, arcTemplate: template, outline: currentOutline,
-            requestedFormat: "novel", existingSections: currentOutline?.sections ?? [],
-            material: material, requestGenerationID: currentSuggestionGenerationID(), modelID: modelID, reasoningEffort: reasoningEffort
-        )
+        Task { await loadSuggestions(modelID: OutlineSectionsModelCatalog.defaultID) }
     }
 
     private func loadSuggestions(modelID: String, reasoningEffort: String? = nil) async {
@@ -1430,211 +1377,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             embedError = "Section accepted; scene memory extract failed: \(error.localizedDescription)"
         }
     }
-    /// Native selection sheet used before every new outline-planning run.
-/// It always renders the exact three MVP models and never falls back when the
-/// server says a selected model is not currently eligible.
-struct OutlinePlanningModelSheet: View {
-    let initialModelID: String
-    let initialReasoningEffort: String
-    let request: OutlineSuggestionRequest
-    let onConfirm: (String, String?) -> Void
-    let onCancel: () -> Void
-
-    private let generationModelService: any GenerationModelServiceProtocol = BackendGenerationModelService()
-    @State private var catalogModels: [GenerationModelOption] = []
-    @State private var selectedModelID: String
-    @State private var selectedReasoningEffort: String
-    @State private var isLoading = true
-    @State private var loadError: String?
-    @State private var estimate: OutlinePlanningEstimate?
-    @State private var estimateError: String?
-    @State private var isEstimating = false
-
-    private var options: [OutlineSectionsModelCatalog.Option] {
-        OutlineSectionsModelCatalog.options(catalogModels: catalogModels)
-    }
-
-    private var selectedOption: OutlineSectionsModelCatalog.Option? {
-        options.first(where: { $0.id == selectedModelID })
-    }
-
-    init(
-        initialModelID: String,
-        initialReasoningEffort: String,
-        request: OutlineSuggestionRequest,
-        onConfirm: @escaping (String, String?) -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.initialModelID = initialModelID
-        self.initialReasoningEffort = initialReasoningEffort
-        self.request = request
-        self.onConfirm = onConfirm
-        self.onCancel = onCancel
-        self._selectedModelID = State(initialValue: initialModelID)
-        self._selectedReasoningEffort = State(initialValue: OutlineSectionsModelCatalog.reasoningEfforts.contains(initialReasoningEffort) ? initialReasoningEffort : "low")
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Text("Choose the model for this outline plan. The selection is saved for the next run, but this sheet will appear every time.")
-                        .font(CathedralTheme.Typography.body(14))
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    Text("The server calculates the outline estimate below from the selected recipe, Story Arc, and planning stages. Actual charges can vary.")
-                        .font(CathedralTheme.Typography.caption(11))
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                }
-                Section("Outline planning model") {
-                    ForEach(options) { option in
-                        Button {
-                            selectedModelID = option.id
-                        } label: {
-                            HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
-                                Image(systemName: selectedModelID == option.id ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(selectedModelID == option.id ? CathedralTheme.Colors.accent : CathedralTheme.Colors.tertiaryText)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    HStack {
-                                        Text(option.displayName)
-                                            .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                                        Spacer()
-                                        Text(option.tier)
-                                            .font(CathedralTheme.Typography.caption(11, weight: .semibold))
-                                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                                    }
-                                    Text(option.description)
-                                        .font(CathedralTheme.Typography.caption(12))
-                                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                                    Text(option.costDescription)
-                                        .font(CathedralTheme.Typography.caption(12, weight: .medium))
-                                        .foregroundStyle(option.isAvailable ? CathedralTheme.Colors.primaryText : CathedralTheme.Colors.destructive)
-                                    if !option.isAvailable {
-                                        Text("This model cannot be used right now. Choose an available model; no fallback will be applied.")
-                                            .font(CathedralTheme.Typography.caption(11))
-                                            .foregroundStyle(CathedralTheme.Colors.destructive)
-                                    }
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                if OutlineSectionsModelCatalog.supportsReasoning(for: selectedModelID) {
-                    Section("Reasoning level") {
-                        Picker("Reasoning", selection: $selectedReasoningEffort) {
-                            ForEach(OutlineSectionsModelCatalog.reasoningEfforts, id: \.self) { effort in
-                                Text(effort.capitalized).tag(effort)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        Text("Higher reasoning can improve complex plans but may take longer.")
-                            .font(CathedralTheme.Typography.caption(11))
-                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    }
-                }
-                estimateSection
-                if isLoading {
-                    HStack(spacing: CathedralTheme.Spacing.sm) {
-                        ProgressView()
-                        Text("Verifying model availability…")
-                            .font(CathedralTheme.Typography.caption())
-                    }
-                } else if let loadError {
-                    Text(loadError)
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                }
-            }
-            .navigationTitle("Choose Planning Model")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Confirm") {
-                        guard selectedOption?.isAvailable == true else { return }
-                        onConfirm(selectedModelID, OutlineSectionsModelCatalog.supportsReasoning(for: selectedModelID) ? selectedReasoningEffort : nil)
-                    }
-                    .fontWeight(.semibold)
-                    .disabled(isLoading || selectedOption?.isAvailable != true)
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-        .task { await loadSheetData() }
-        .onChange(of: selectedModelID) { _, _ in
-            selectionChanged()
-        }
-    }
-
-    @ViewBuilder
-    private var estimateSection: some View {
-        Section("Outline estimate") {
-            if isEstimating {
-                HStack {
-                    ProgressView()
-                    Text("Estimating outline generation…")
-                }
-            } else if let estimate {
-                Text("Estimated outline generation: \(formatRunCredits(estimate.estimatedCredits)) credits")
-                Text("Your available credits: \(formatRunCredits(estimate.availableCredits)) credits")
-                Text("Estimated balance afterward: \(formatRunCredits(estimate.projectedBalance)) credits")
-                Text("This is a projection across variable-length planning stages; actual charges can vary.")
-                    .font(CathedralTheme.Typography.caption(11))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                if !estimate.allowed {
-                    Text("Insufficient credits for this estimate.")
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                }
-            } else if let estimateError {
-                Text(estimateError)
-                    .foregroundStyle(CathedralTheme.Colors.destructive)
-            }
-        }
-    }
-
-    private func loadSheetData() async {
-        await loadModels()
-        await refreshEstimate()
-    }
-
-    private func selectionChanged() {
-        Task { await refreshEstimate() }
-    }
-
-    @MainActor
-    private func refreshEstimate() async {
-        guard selectedOption?.isAvailable == true else {
-            estimate = nil
-            estimateError = "Pricing could not be estimated until this model is available."
-            return
-        }
-        isEstimating = true
-        estimateError = nil
-        defer { isEstimating = false }
-        do {
-            let selectedRequest = request
-                .withModelID(selectedModelID)
-                .withReasoningEffort(OutlineSectionsModelCatalog.supportsReasoning(for: selectedModelID) ? selectedReasoningEffort : nil)
-            estimate = try await OutlineSuggestionService().estimate(request: selectedRequest, modelID: selectedModelID)
-        } catch {
-            estimate = nil
-            estimateError = "Pricing could not be estimated. No credits were consumed."
-        }
-    }
-
-    @MainActor
-    private func loadModels() async {
-        defer { isLoading = false }
-        do {
-            catalogModels = try await generationModelService.fetchEnabledModels()
-        } catch {
-            loadError = "Could not verify model availability: \(error.localizedDescription)"
-        }
-    }
-}
-
 // MARK: - Day 4 generation wiring
 
     /// Queue a server-side generation run for the given target and start
