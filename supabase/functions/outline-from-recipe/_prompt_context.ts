@@ -117,7 +117,20 @@ export function compactObligations(obligations: any[]): unknown[] {
 }
 
 export function compactExistingSections(sections: any[]): unknown[] {
-  return (sections ?? []).map((s) => ({ id: s.id ?? null, title: compactText(s.title, 160), summary: compactText(s.summary, 500), storyArcBeatID: s.storyArcBeatID ?? null, container: s.container ?? null, terminalBeat: compactText(s.terminalBeat, 180), recipeRequirementIDs: s.recipeRequirementIDs ?? [] }));
+  return (sections ?? []).map((s) => ({
+    id: s.id ?? null,
+    title: compactText(s.title, 200),
+    summary: compactText(s.summary, 2000),
+    storyArcBeatID: s.storyArcBeatID ?? null,
+    container: s.container ?? null,
+    terminalBeat: compactText(s.terminalBeat, 500),
+    dramaticFunction: s.dramaticFunction ?? null,
+    entryState: compactText(s.entryState, 1200),
+    dramaticEvent: compactText(s.dramaticEvent, 2000),
+    resultingChange: compactText(s.resultingChange, 1200),
+    terminalState: compactText(s.terminalState, 1200),
+    recipeRequirementIDs: s.recipeRequirementIDs ?? [],
+  }));
 }
 
 export function buildCompactPlanningView(req: any, obligations: any[] = [], material = req?.storyMaterialEnrichment): Record<string, unknown> {

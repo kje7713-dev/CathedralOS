@@ -626,6 +626,7 @@ const CONTAINER_EXPECTED_RANGES: Record<string, [number, number]> = {
   chapter: [3000, 8000], episode: [5000, 15000],
 };
 const NOVEL_TARGET_WORDS: [number, number] = [70000, 90000];
+export const NOVEL_PREFERRED_MIN_WORDS = 80000;
 const TOKENS_PER_WORD = 1.3;
 const NOVEL_MIN_PROJECTED_TOKENS = NOVEL_TARGET_WORDS[0] * TOKENS_PER_WORD;
 const MAX_PLANNED_SECTIONS = 200;
@@ -759,7 +760,7 @@ export function estimateOutlinePlanningCost(
     toolCostUsd: 0,
   }, pricing);
   const beatCount = Math.max(1, request.arcTemplate.beats.length);
-  const expansionCalls = Math.max(1, Math.ceil(beatCount / 4));
+  const expansionCalls = Math.max(1, Math.ceil(beatCount / 4) * MAX_EXPANSION_ROUNDS);
   const baseStages = [
     stage(inputTokens, 12_000), // story-material enrichment
     stage(inputTokens, 2_048), // allocation
@@ -1841,8 +1842,10 @@ export interface NovelScaleEvaluation {
   projectedTokens: number;
   projectedWords: number;
   minimumWords: number;
+  preferredMinimumWords: number;
   deficitTokens: number;
   meetsMinimum: boolean;
+  meetsPreferredMinimum: boolean;
 }
 
 /**
@@ -1861,8 +1864,10 @@ export function evaluateNovelScale(
     projectedTokens,
     projectedWords: projectedTokens / TOKENS_PER_WORD,
     minimumWords: NOVEL_TARGET_WORDS[0],
+    preferredMinimumWords: NOVEL_PREFERRED_MIN_WORDS,
     deficitTokens,
     meetsMinimum: deficitTokens === 0,
+    meetsPreferredMinimum: projectedTokens / TOKENS_PER_WORD >= NOVEL_PREFERRED_MIN_WORDS,
   };
 }
 
@@ -2113,6 +2118,7 @@ export interface ProgressiveExpansionOptions {
   startRound?: number;
   startBeatIndex?: number;
   priorDiagnostics?: ExpansionRoundDiagnostic[];
+  qualityGate?: (suggestions: Suggestion[]) => boolean;
   beats?: Array<{ id: string; label?: string; description?: string }>;
   onBeat?: (
     round: number,
@@ -2198,7 +2204,9 @@ export async function progressivelyExpandOutline(
   const diagnostics: ExpansionRoundDiagnostic[] = [...(options.priorDiagnostics ?? [])];
   const warnings: string[] = [];
   const startRound = Math.max(1, options.startRound ?? 1);
-  for (let round = startRound; round <= MAX_EXPANSION_ROUNDS && needsNovelExpansion(suggestions, existingSections); round++) {
+  const shouldContinueDevelopment = (current: Suggestion[]) =>
+    needsNovelExpansion(current, existingSections) || options.qualityGate?.(current) === true;
+  for (let round = startRound; round <= MAX_EXPANSION_ROUNDS && shouldContinueDevelopment(suggestions); round++) {
     const projectedTokensBefore = evaluateNovelScale(suggestions, existingSections).projectedTokens;
     const before: ExpansionPromptContext = {
       round,
@@ -2217,7 +2225,7 @@ export async function progressivelyExpandOutline(
       const firstBeatIndex = round === startRound ? Math.max(0, options.startBeatIndex ?? 0) : 0;
       for (let beatIndex = firstBeatIndex; beatIndex < targetBeats.length; beatIndex++) {
         const beat = targetBeats[beatIndex];
-        if (!needsNovelExpansion(roundSuggestions, existingSections)) break;
+        if (!shouldContinueDevelopment(roundSuggestions)) break;
         const beatContext = beat
           ? {
             beatID: beat.id,
@@ -2634,7 +2642,7 @@ const ALLOCATION_SCHEMA = {
         type: "object",
         properties: {
           beatIndex: { type: "integer", minimum: 0 },
-          minSections: { type: "integer", minimum: 0, maximum: 10 },
+          minSections: { type: "integer", minimum: 0, maximum: 20 },
           rationale: { type: "string", minLength: 1, maxLength: 500 },
         },
         required: ["beatIndex", "minSections", "rationale"],
@@ -2753,7 +2761,7 @@ export function parseAndValidateAllocation(
     if (seen.has(beatID)) {
       throw new Error(`allocation contains duplicate beatIndex: ${String(beatIndex)}`);
     }
-    if (!Number.isInteger(minSections) || Number(minSections) < 0 || Number(minSections) > 10) {
+    if (!Number.isInteger(minSections) || Number(minSections) < 0 || Number(minSections) > 20) {
       throw new Error(`allocation has invalid minSections for beat ${beatID}`);
     }
     if (typeof rationale !== "string" || rationale.trim() === "") {
@@ -2781,7 +2789,7 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections. Use the supplied premise, characters, and arc to decide where density belongs.
+This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections.
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
@@ -3784,12 +3792,8 @@ export function validateOutlinePlanningQuality(
   const distinctnessIssues = findDramaticDistinctnessIssues(suggestions);
   const causalScaleIssues = findCausalScaleIssues(suggestions, storyMaterial, format);
   const semanticArcIssues = template ? validateStoryArcSemantics(suggestions, template, allocation) : [];
-  const usedText = suggestions.map(contractText).join(" ");
   const supportingEntities = storyMaterial
-    ? STORY_MATERIAL_CATEGORIES.flatMap((category) => storyMaterial[category])
-      .filter((item) => !usedText.includes(`${item.label} ${item.description}`.toLowerCase().split(/\s+/)[0]))
-      .map((item) => item.id)
-      .slice(0, 50)
+    ? findUnusedStoryMaterial(suggestions, storyMaterial).map((item) => item.id).slice(0, 50)
     : [];
   return {
     distinctnessIssues,
@@ -4569,6 +4573,19 @@ export async function runSuggestionJob(
           startBeatIndex,
           priorDiagnostics,
           beats: body.arcTemplate.beats,
+          qualityGate: (current) => {
+            if (requestedStoryMaterialFormat(body) !== "novel") return false;
+            const scale = evaluateNovelScale(current, body.existingSections ?? []);
+            const quality = collectAdvisoryOutlineQuality(
+              current,
+              body.storyMaterialEnrichment,
+              requestedStoryMaterialFormat(body),
+              body.arcTemplate,
+            );
+            return !scale.meetsPreferredMinimum ||
+              quality.causalScaleIssues.length > 0 ||
+              quality.unusedStoryMaterialItems > 0;
+          },
           onBeat: async (round, nextBeatIndex, current, allDiagnostics) => {
             const expansionCheckpoint = buildExpansionCheckpoint(
               current,
@@ -4628,6 +4645,9 @@ export async function runSuggestionJob(
           stage: "completed",
           finalSectionCounts: countSuggestionsByBeat(completedSuggestions),
           novelScale: finalScale,
+          ...(requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsPreferredMinimum
+            ? { preferredScaleWarning: `Novel plan is below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word development target.` }
+            : {}),
         },
         lease_owner: null,
         lease_expires_at: null,
@@ -4640,8 +4660,18 @@ export async function runSuggestionJob(
     ) => {
       let completedSuggestions = initialSuggestions;
       let completionWarnings = initialWarnings;
+      const initialScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
+      const initialQuality = collectAdvisoryOutlineQuality(
+        completedSuggestions,
+        body.storyMaterialEnrichment,
+        requestedStoryMaterialFormat(body),
+        body.arcTemplate,
+      );
       const outlineNeedsExpansion = requestedStoryMaterialFormat(body) === "novel" &&
-        needsNovelExpansion(completedSuggestions, body.existingSections ?? []);
+        (needsNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
+          !initialScale.meetsPreferredMinimum ||
+          initialQuality.causalScaleIssues.length > 0 ||
+          initialQuality.unusedStoryMaterialItems > 0);
       planningState = {
         ...planningState,
         phase: outlineNeedsExpansion ? "expansion" : "outline_complete",
