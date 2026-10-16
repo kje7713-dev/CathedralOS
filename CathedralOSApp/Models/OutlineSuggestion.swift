@@ -181,6 +181,7 @@ struct OutlineSuggestionJob: Codable {
     /// recovery/checkpoint state instead of treating every non-terminal run as
     /// an indeterminate spinner.
     let diagnostics: [String: JSONValue]?
+    let planningState: [String: JSONValue]?
     let attemptCount: Int?
     let updatedAt: String?
     let leaseExpiresAt: String?
@@ -188,7 +189,7 @@ struct OutlineSuggestionJob: Codable {
     enum CodingKeys: String, CodingKey {
         case runID = "run_id"
         case status, suggestions, warnings, error, sourceRecipe, creditCostCharged, remainingCredits
-        case errorCode, diagnostics, attemptCount, updatedAt, leaseExpiresAt
+        case errorCode, diagnostics, planningState, attemptCount, updatedAt, leaseExpiresAt
     }
 }
 

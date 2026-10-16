@@ -105,6 +105,7 @@ import {
   logRequest,
   isRetryableStoryMaterialFailure,
   isRetryableSemanticRepairFailure,
+  isSettledSemanticRepairCheckpoint,
   StoryMaterialSufficiencyError,
   StoryMaterialValidationError,
   RecipeObligationValidationError,
@@ -2856,6 +2857,40 @@ Deno.test("semantic repair canonicalizes a stale whole-arc target to the affecte
   );
   assertEquals(repaired[0].storyArcBeatID, "b");
   assertEquals(repaired[0].title, "Repaired");
+});
+
+Deno.test("semantic checkpoint replay requires a settled provider attempt", async () => {
+  const db = {
+    from: (_table: string) => ({
+      select: (_columns: string) => ({
+        eq: (_column: string, value: string) => ({
+          maybeSingle: async () => ({
+            data: value === "settled-attempt"
+              ? { status: "settled", usage_event_id: "usage-1", settled_charge_credits: 1 }
+              : { status: "provider_succeeded", usage_event_id: null, settled_charge_credits: 0 },
+            error: null,
+          }),
+        }),
+      }),
+    }),
+  };
+  assertEquals(await isSettledSemanticRepairCheckpoint(db, { attemptKey: "settled-attempt" }), true);
+  assertEquals(await isSettledSemanticRepairCheckpoint(db, { attemptKey: "unsettled-attempt" }), false);
+  assertEquals(await isSettledSemanticRepairCheckpoint(db, { content: "{}" }), false);
+});
+
+Deno.test("semantic recovery eligibility matches the server-owned failure contract", () => {
+  const eligible = {
+    status: "failed",
+    error_code: "server_error",
+    error: "story_arc_semantic_repair: repair target is not affected",
+    credit_cost_charged: 12,
+    planning_state: { nextAction: "semantic-repair" },
+    diagnostics: {},
+  };
+  assertEquals(isRetryableSemanticRepairFailure(eligible), true);
+  assertEquals(isRetryableSemanticRepairFailure({ ...eligible, error_code: "provider_timeout" }), false);
+  assertEquals(isRetryableSemanticRepairFailure({ ...eligible, planning_state: { nextAction: "semantic-reverification" } }), false);
 });
 
 Deno.test("malformed semantic repair targets preserve the checkpoint instead of throwing", async () => {

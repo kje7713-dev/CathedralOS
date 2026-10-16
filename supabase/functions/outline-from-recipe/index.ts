@@ -4170,6 +4170,26 @@ export function isRetryableStoryMaterialFailure(run: {
       run.error === "story material enrichment contains a duplicate or missing item id");
 }
 
+export async function isSettledSemanticRepairCheckpoint(
+  db: any,
+  checkpoint: Record<string, unknown>,
+): Promise<boolean> {
+  const attemptKey = typeof checkpoint.attemptKey === "string" ? checkpoint.attemptKey : null;
+  if (!attemptKey || !db?.from) return false;
+  try {
+    const result = await db.from("generation_provider_attempts")
+      .select("status, usage_event_id, settled_charge_credits")
+      .eq("attempt_key", attemptKey)
+      .maybeSingle();
+    if (result.error || !result.data) return false;
+    return result.data.status === "settled" ||
+      typeof result.data.usage_event_id === "string" ||
+      Number(result.data.settled_charge_credits ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function isRetryableSemanticRepairFailure(run: {
   status?: unknown;
   error?: unknown;
@@ -4378,6 +4398,7 @@ export function suggestionRunResponse(run: any): Record<string, unknown> {
     errorCode: run.error_code,
     error: run.error,
     diagnostics: run.diagnostics,
+    planningState: run.planning_state,
     storyMaterialEnrichment: run.story_material,
     created_at: run.created_at,
     updated_at: run.updated_at,
@@ -4796,7 +4817,9 @@ export async function runSuggestionJob(
         typeof diagnostics.semanticRepairProviderCheckpoint === "object"
         ? diagnostics.semanticRepairProviderCheckpoint as Record<string, unknown>
         : null;
-      if (semanticRepairCheckpoint && typeof semanticRepairCheckpoint.content === "string") {
+      if (semanticRepairCheckpoint &&
+        typeof semanticRepairCheckpoint.content === "string" &&
+        await isSettledSemanticRepairCheckpoint(db, semanticRepairCheckpoint)) {
         diagnostics = { ...diagnostics, stage: "semantic_repair_checkpoint_replay" };
         return {
           content: semanticRepairCheckpoint.content,
@@ -4838,7 +4861,14 @@ export async function runSuggestionJob(
           return providerResult.content;
         },
         beforeSettlement: action === "outline-semantic-repair-batch"
-          ? async (content, providerResult) => {
+          ? async (content, providerResult, context) => {
+            // The checkpoint must be parseable before settlement. Replacement
+            // quality is intentionally validated after replay; malformed JSON
+            // is not a usable paid checkpoint and therefore must not settle.
+            const parsed = parseOutlineJSON<{ replacements?: unknown }>(content, providerResult.finishReason);
+            if (!parsed || !Array.isArray(parsed.replacements)) {
+              throw new Error("story_arc_semantic_repair: response missing replacements");
+            }
             await updateRun({
               diagnostics: {
                 ...diagnostics,
@@ -4848,6 +4878,7 @@ export async function runSuggestionJob(
                   content,
                   finishReason: providerResult.finishReason ?? null,
                   remainingCredits: null,
+                  attemptKey: context.attemptKey,
                   checkpointedAt: new Date().toISOString(),
                 },
               },

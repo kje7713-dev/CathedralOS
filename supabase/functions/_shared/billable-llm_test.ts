@@ -1661,3 +1661,39 @@ Deno.test("outline settlement waits for the durable feature checkpoint", async (
   assertEquals(events, ["checkpoint", "settlement"]);
   assertEquals(attempt.metadata.checkpointed, true);
 });
+
+Deno.test("outline checkpoint validation failure does not settle", async () => {
+  let settlements = 0;
+  const attempt: Record<string, unknown> = {};
+  const admin = {
+    from: (table: string) => table === "generation_provider_attempts"
+      ? {
+        insert: (_row: unknown) => ({
+          select: (_columns: string) => ({ single: () => Promise.resolve({ data: { id: "validation-attempt" }, error: null }) }),
+        }),
+        update: (patch: Record<string, unknown>) => ({ eq: (_column: string, _value: unknown) => { Object.assign(attempt, patch); return Promise.resolve({ data: null, error: null }); } }),
+      }
+      : { insert: (_row: unknown) => Promise.resolve({ data: null, error: null }) },
+    rpc: (name: string) => {
+      if (name === "get_outline_stage_totals") return Promise.resolve({ data: [{ raw_charge_credits: 0, settled_charge_credits: 0 }], error: null });
+      if (name === "begin_outline_provider_attempt") return Promise.resolve({ data: [{ attempt_id: "validation-attempt", attempt_key: "validation:attempt:1", attempt_ordinal: 1 }], error: null });
+      if (name === "reconcile_outline_provider_attempts") return Promise.resolve({ data: null, error: null });
+      if (name === "settle_outline_provider_attempt") { settlements += 1; return Promise.resolve({ data: [{ settlement_status: "settled", usage_event_id: "usage", ledger_id: "ledger", remaining_credits: 10 }], error: null }); }
+      throw new Error(`unexpected RPC ${name}`);
+    },
+  };
+  const error = await assertRejects(
+    () => runBillableLLM(
+      makeRequest({
+        purpose: "outline-suggestion",
+        usageContext: { ...makeRequest().usageContext, featureRunID: "00000000-0000-0000-0000-0000000000dd", logicalStageKey: "validation" },
+        beforeSettlement: async () => { throw new Error("story_arc_semantic_repair: response missing replacements"); },
+      }),
+      { adminClient: admin, provider: { complete: () => Promise.resolve(makeLLMResponse()) }, creditStore: makeCreditStore() },
+    ),
+    BillableLLMError,
+  );
+  assertEquals(error.code, "feature_persistence_failed");
+  assertEquals(settlements, 0);
+  assertEquals(attempt.status, "feature_persistence_failed");
+});

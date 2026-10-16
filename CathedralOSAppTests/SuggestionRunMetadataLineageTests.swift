@@ -90,12 +90,13 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             status: "failed",
             suggestions: [suggestion],
             warnings: nil,
-            error: "semantic repair failed",
+            error: "story_arc_semantic_repair: repair target is not affected",
             errorCode: "server_error",
             sourceRecipe: nil,
             creditCostCharged: 12.29,
             remainingCredits: 38.37,
             diagnostics: nil,
+            planningState: ["nextAction": .string("semantic-repair")],
             attemptCount: 1,
             updatedAt: nil,
             leaseExpiresAt: nil
@@ -113,6 +114,7 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             creditCostCharged: failed.creditCostCharged,
             remainingCredits: failed.remainingCredits,
             diagnostics: ["semanticRecoveryAttempts": .number(1)],
+            planningState: ["nextAction": .string("semantic-repair")],
             attemptCount: failed.attemptCount,
             updatedAt: failed.updatedAt,
             leaseExpiresAt: failed.leaseExpiresAt
@@ -130,11 +132,30 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             creditCostCharged: 0,
             remainingCredits: failed.remainingCredits,
             diagnostics: nil,
+            planningState: ["nextAction": .string("semantic-repair")],
             attemptCount: failed.attemptCount,
             updatedAt: failed.updatedAt,
             leaseExpiresAt: failed.leaseExpiresAt
         )
         XCTAssertFalse(DataDurabilityCoordinator.shouldRecoverPaidSuggestionCheckpoint(unpaid))
+
+        let unrelatedPaidFailure = OutlineSuggestionJob(
+            runID: failed.runID,
+            status: failed.status,
+            suggestions: failed.suggestions,
+            warnings: failed.warnings,
+            error: "provider timeout",
+            errorCode: "provider_timeout",
+            sourceRecipe: failed.sourceRecipe,
+            creditCostCharged: failed.creditCostCharged,
+            remainingCredits: failed.remainingCredits,
+            diagnostics: nil,
+            planningState: ["nextAction": .string("semantic-repair")],
+            attemptCount: failed.attemptCount,
+            updatedAt: failed.updatedAt,
+            leaseExpiresAt: failed.leaseExpiresAt
+        )
+        XCTAssertFalse(DataDurabilityCoordinator.shouldRecoverPaidSuggestionCheckpoint(unrelatedPaidFailure))
     }
 
     func testSuggestionStatusPollingHasARealSuccessInterval() {

@@ -118,7 +118,11 @@ export interface BillableLLMRequest<T> {
    * failures (e.g., empty provider content, invalid JSON). */
   onProviderSuccess: (result: BillableProviderResult) => Promise<T>;
   /** Durable feature checkpoint required before customer settlement. */
-  beforeSettlement?: (featureResult: any, providerResult: BillableProviderResult) => Promise<void>;
+  beforeSettlement?: (
+    featureResult: any,
+    providerResult: BillableProviderResult,
+    context: { attemptKey: string; attemptID: string | null },
+  ) => Promise<void>;
   preflightUsageOverride?: GenerationUsage;
   /** Generate-story historically omits failed usage rows for provider timeout
    * and provider-account quota failures. Feature callers can disable the
@@ -535,7 +539,7 @@ export async function runBillableLLM<T>(
   // persist the semantic-repair response and replay it idempotently.
   if (req.beforeSettlement) {
     try {
-      await req.beforeSettlement(featureResult, providerResult);
+      await req.beforeSettlement(featureResult, providerResult, { attemptKey, attemptID });
     } catch (error) {
       await updateProviderAttempt(deps.adminClient, attemptID, {
         status: "feature_persistence_failed",

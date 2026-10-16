@@ -879,6 +879,11 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// POST loop if the recovery itself fails.
     static func shouldRecoverPaidSuggestionCheckpoint(_ job: OutlineSuggestionJob) -> Bool {
         guard job.status == "failed",
+              job.errorCode == "server_error",
+              let error = job.error,
+              error.hasPrefix("story_arc_semantic_repair:"),
+              case let .string(nextAction)? = job.planningState?["nextAction"],
+              nextAction == "semantic-repair",
               let charged = job.creditCostCharged,
               charged > 0,
               let suggestions = job.suggestions,
