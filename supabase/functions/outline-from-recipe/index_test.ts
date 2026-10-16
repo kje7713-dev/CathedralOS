@@ -35,6 +35,7 @@ Deno.test("outline suggestion polling contract preserves structured failures and
 import {
   buildAllocationPrompt,
   buildExpansionPrompt,
+  buildStateChangeLedger,
   outlineLogicalStageFamily,
   buildPrompt,
   buildSuggestionResponseSchema,
@@ -1336,6 +1337,26 @@ Deno.test("beat-local expansion rejects additions assigned to another beat", asy
   }
   assertEquals((failure as NovelScalePlanningError).code, "failed_expansion");
   assertEquals((failure as Error).message.includes("validation"), true);
+});
+
+Deno.test("expansion receives a whole-outline state-change ledger", () => {
+  const current: any[] = [{
+    title: "The First Cost", storyArcBeatID: "beat-1", dramaticFunction: "consequence",
+    resultingChange: "The alliance loses its safe route.", terminalState: "The survivors must cross the flooded district.",
+    summary: "The route is lost.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "They move on",
+  }];
+  const ledger = buildStateChangeLedger(current as any, [{
+    storyArcBeatID: "beat-0", dramaticFunction: "setup", resultingChange: "The threat is identified.",
+    terminalState: "The alliance prepares to move.", summary: "The threat is known.", container: "scene",
+  }] as any);
+  assertEquals(ledger.map((entry) => [entry.beatID, entry.dramaticFunction]), [["beat-0", "setup"], ["beat-1", "consequence"]]);
+  const prompt = buildExpansionPrompt({ ...sparseRequest, existingSections: [{
+    storyArcBeatID: "beat-0", resultingChange: "The threat is identified.", terminalState: "The alliance prepares to move.", container: "scene",
+  }] } as any, current as any);
+  assertEquals(prompt.system.includes("whole-outline state-change ledger"), true);
+  assertEquals(prompt.system.includes("causal predecessor/successor compatibility"), true);
+  assertEquals(prompt.user.includes("stateChangeLedger"), true);
+  assertEquals(prompt.user.includes("The alliance loses its safe route."), true);
 });
 
 Deno.test("beat-local expansion prompt carries the target beat contract", () => {

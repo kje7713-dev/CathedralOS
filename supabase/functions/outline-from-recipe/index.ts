@@ -2342,6 +2342,36 @@ export interface ExpansionPromptContext {
   beat?: ExpansionBeatContext;
 }
 
+/**
+ * Give expansion the whole-outline semantic ledger without sending prose or
+ * adding another planning stage. The ledger is intentionally limited to the
+ * server-owned state-change fields that determine whether an addition earns
+ * a distinct dramatic function.
+ */
+export function buildStateChangeLedger(
+  current: Suggestion[],
+  existingSections: Array<Partial<Suggestion> & PlannedSectionLike> = [],
+): Array<{ index: number; beatID: string; dramaticFunction?: DramaticFunction; resultingChange: string; terminalState: string }> {
+  const sections = [...existingSections, ...current];
+  const groups = new Map<string, { index: number; beatID: string; dramaticFunction?: DramaticFunction; resultingChanges: string[]; terminalStates: string[] }>();
+  for (const [index, section] of sections.entries()) {
+    const beatID = String(section.storyArcBeatID ?? "");
+    const dramaticFunction = DRAMATIC_FUNCTIONS.includes(section.dramaticFunction as DramaticFunction)
+      ? section.dramaticFunction as DramaticFunction
+      : undefined;
+    const key = `${beatID}|${dramaticFunction ?? "undeclared"}`;
+    const group = groups.get(key) ?? { index, beatID, ...(dramaticFunction ? { dramaticFunction } : {}), resultingChanges: [], terminalStates: [] };
+    group.resultingChanges.push(compactText(String(section.resultingChange ?? section.summary ?? ""), 180));
+    group.terminalStates.push(compactText(String(section.terminalState ?? section.terminalBeat ?? ""), 180));
+    groups.set(key, group);
+  }
+  return Array.from(groups.values()).map(({ resultingChanges, terminalStates, ...group }) => ({
+    ...group,
+    resultingChange: compactText(resultingChanges.join(" | "), 1200),
+    terminalState: compactText(terminalStates.join(" | "), 1200),
+  }));
+}
+
 
 export function plannedWordRangeForContainer(container: string): { minWords: number; maxWords: number } {
   const [minTokens, maxTokens] = CONTAINER_EXPECTED_RANGES[container] ?? [800, 1800];
@@ -2395,8 +2425,9 @@ export function buildExpansionPrompt(
   const beatDirective = beatContext
     ? `This is beat-local expansion for Story Arc beat ${beatContext.beatID}${beatContext.beatLabel ? ` (${beatContext.beatLabel})` : ""}. Develop only this beat; every returned section must use storyArcBeatID ${beatContext.beatID}. The beat currently contains approximately ${Math.round(beatContext.projectedWords).toLocaleString()} projected words. Its description is: ${beatContext.beatDescription ?? "(not supplied)"}. ${semanticContract}`
     : "Expand across the supplied outline while preserving each section's Story Arc beat.";
+  const stateChangeLedger = buildStateChangeLedger(current, req.existingSections ?? []);
   return {
-    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
+    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} The whole-outline state-change ledger in the request is authoritative context: compare each addition's dramaticFunction, resultingChange, and terminalState against the ledger across every beat, not only the target beat. Preserve causal predecessor/successor compatibility: an addition's entryState must follow the prior terminalState, and its terminalState must hand a changed condition to the next section. Do not repeat a prior function merely with new characters, location, imagery, or spectacle; if the same function is necessary, make its resultingChange materially different. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.`,
@@ -2415,6 +2446,7 @@ The JSON request contains the authoritative obligations exactly once.`,
         },
       },
       targetBeat: beatContext ? { ...beatContext, currentSections: compactExistingSections(beatContext.currentSections ?? []), unmetObligations: compactObligations(obligations.filter((o) => o.required && !beatContext.currentSections?.some((s) => (s.recipeRequirementIDs ?? []).includes(o.id)))) } : null,
+      stateChangeLedger,
       unusedStoryMaterial: compactMaterial({ relevant: unusedStoryMaterial }),
       neighbors: { previous: [], next: [] },
       expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens },
