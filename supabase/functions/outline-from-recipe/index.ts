@@ -3330,6 +3330,17 @@ function normalizeEvidenceText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function findGroundedSemanticField(
+  section: Partial<Suggestion> | undefined,
+  quote: string,
+  allowedFields: ArcSemanticField[],
+): ArcSemanticField | undefined {
+  if (!section || !quote) return undefined;
+  return allowedFields.find((candidate) =>
+    normalizeEvidenceText(String((section as any)[candidate] ?? "")).includes(quote)
+  );
+}
+
 export function validateGroundedArcEvidence(
   raw: unknown,
   section: Partial<Suggestion>,
@@ -3582,22 +3593,25 @@ export async function verifyStoryArcSemantics(
     const field = rawObligation?.field;
     const quote = normalizeEvidenceText(String(rawObligation?.quote ?? ""));
     const section = eligibleSections.find((candidate) => candidate.sectionIndex === sectionIndex)?.section;
-    const actual = section && ["dramaticEvent", "resultingChange", "terminalState"].includes(field)
-      ? normalizeEvidenceText(String((section as any)[field] ?? ""))
-      : "";
-    const quoteGrounded = Boolean(section) && Boolean(quote) && actual.includes(quote);
+    // The model occasionally labels an exact quote with the wrong field. The
+    // server still requires an exact quote, but canonicalizes the field to the
+    // Section Contract field that actually contains it instead of creating a
+    // false semantic failure.
+    const groundedField = findGroundedSemanticField(
+      section,
+      quote,
+      ["dramaticEvent", "resultingChange", "terminalState"],
+    );
+    const quoteGrounded = Boolean(groundedField);
     const providerClaimedSatisfied = Boolean(rawObligation?.satisfied);
     const verified = {
       obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION,
-      // A provider-supplied quote is evidence, not authority. If the quote
-      // cannot be found in the referenced Section Contract field, fail closed
-      // into the existing semantic-repair path instead of returning a 500.
       satisfied: providerClaimedSatisfied && quoteGrounded,
       sectionIndex: Number.isInteger(sectionIndex) ? sectionIndex : -1,
-      field: ["dramaticEvent", "resultingChange", "terminalState"].includes(field) ? field : "dramaticEvent",
+      field: groundedField ?? ("dramaticEvent" as const),
       quote,
       reason: providerClaimedSatisfied && !quoteGrounded
-        ? "provider evidence quote was not grounded in the referenced Section Contract field; semantic repair required"
+        ? "provider evidence quote was not grounded in any Section Contract field; semantic repair required"
         : String(rawObligation?.reason ?? "missing whole-arc intimacy milestone"),
     } as SemanticVerificationObligation;
     arcWideObligations.push(verified);
@@ -3623,20 +3637,24 @@ export async function verifyStoryArcSemantics(
       const field = rawObligation.field;
       const quote = normalizeEvidenceText(String(rawObligation.quote ?? ""));
       const section = sections.find((candidate) => candidate.sectionIndex === sectionIndex)?.section;
-      const validField = ["dramaticEvent", "resultingChange", "terminalState"].includes(field);
-      const actual = section && validField ? normalizeEvidenceText(String((section as any)[field] ?? "")) : "";
-      const quoteGrounded = Boolean(section) && validField && Boolean(quote) && actual.includes(quote);
+      // Require an exact quote from one of the fields allowed by the
+      // obligation. Correct a provider's mislabeled field rather than turning
+      // an otherwise grounded obligation into a false terminal failure.
+      const groundedField = findGroundedSemanticField(
+        section,
+        quote,
+        obligation.requiredFields,
+      );
+      const quoteGrounded = Boolean(groundedField);
       const providerClaimedSatisfied = Boolean(rawObligation.satisfied);
       const verified = {
         obligationID,
-        // Treat unverifiable provider evidence as unsatisfied so the bounded
-        // repair flow can correct the section rather than failing the request.
         satisfied: providerClaimedSatisfied && quoteGrounded,
         sectionIndex,
-        field: validField ? field : "dramaticEvent",
+        field: groundedField ?? obligation.requiredFields[0] ?? "dramaticEvent",
         quote,
         reason: providerClaimedSatisfied && !quoteGrounded
-          ? "provider evidence quote was not grounded in the referenced Section Contract field; semantic repair required"
+          ? "provider evidence quote was not grounded in any allowed Section Contract field; semantic repair required"
           : String(rawObligation.reason ?? ""),
       };
       obligations.push(verified);
