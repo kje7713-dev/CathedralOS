@@ -3556,7 +3556,7 @@ export async function verifyStoryArcSemantics(
 ): Promise<SemanticVerificationResult> {
   const input = semanticVerificationInput(suggestions, template, recipe);
   const raw = await billableCall(
-    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and any whole-arc intimacy obligation. Also identify only substantial editorial redundancies in the per-section scene-function ledger: later sections that perform essentially the same dramatic or emotional job as an earlier section. Return grounded dramaticRedundancies with exact quotes from one field in each compared section. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
+    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and any whole-arc intimacy obligation. Also identify only substantial editorial redundancies in the per-section scene-function ledger: later sections that perform essentially the same dramatic or emotional job as an earlier section. Do not flag sections merely because they revisit the same relationship, conflict, character, theme, antagonist, or location. A later section is distinct when it introduces a new consequence, cost, reversal, decision, information change, power shift, agency transfer, tactical change, escalation, or transformed meaning. Ask whether the later section still earns its place if the reader fully remembers the earlier state change; if yes, do not flag it. Return grounded dramaticRedundancies with exact quotes from one field in each compared section. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
@@ -3691,7 +3691,11 @@ export async function repairStoryArcSemanticObligations(
     ? template.beats.find((beat) => intimacy.roles.includes(beat.role) && suggestions.some((section) => section.storyArcBeatID === beat.id))?.id
     : undefined;
   const hardBeatIDs = new Set(failures.map((failure) => failure.beatID));
-  const redundancyIndexes = new Set(dramaticRedundancies.map((redundancy) => redundancy.laterSectionIndex));
+  // The repair schema caps replacements at 12. Reserve capacity for hard
+  // Story Arc/intimacy failures first; excess editorial findings remain
+  // diagnostic and can be observed again during the single reverification.
+  const repairableRedundancies = dramaticRedundancies.slice(0, Math.max(0, 12 - failures.length));
+  const redundancyIndexes = new Set(repairableRedundancies.map((redundancy) => redundancy.laterSectionIndex));
   const affected = new Set(hardBeatIDs);
   for (const redundancy of dramaticRedundancies) {
     const later = suggestions[redundancy.laterSectionIndex];
@@ -3707,7 +3711,7 @@ export async function repairStoryArcSemanticObligations(
       allowedReplacementIndexes.add(index);
     }
   }
-  const hardRepairInput = template.beats.filter((beat) => affected.has(beat.id) && hardBeatIDs.has(beat.id)).map((beat) => ({
+  const hardRepairInput = template.beats.filter((beat) => affected.has(beat.id) && (hardBeatIDs.has(beat.id) || beat.id === intimacyRepairBeat)).map((beat) => ({
     beatID: beat.id,
     role: beat.role,
     label: beat.label,
@@ -3715,7 +3719,7 @@ export async function repairStoryArcSemanticObligations(
     failures: failures.filter((failure) => failure.beatID === beat.id),
     sections: suggestions.flatMap((section, sectionIndex) => section.storyArcBeatID === beat.id ? [{ sectionIndex, section }] : []),
   }));
-  const redundancyInput = dramaticRedundancies.map((redundancy) => ({
+  const redundancyInput = repairableRedundancies.map((redundancy) => ({
     ...redundancy,
     laterSection: suggestions[redundancy.laterSectionIndex],
     comparisonSection: suggestions[redundancy.comparisonSectionIndex],
@@ -3723,7 +3727,7 @@ export async function repairStoryArcSemanticObligations(
     immediateSuccessor: suggestions[redundancy.laterSectionIndex + 1] ?? null,
   }));
   const raw = await billableCall(
-    `Repair only the affected Section Contracts. Preserve beat identity, recipe requirement IDs, established causal state, and the primary conflict. Rewrite the minimum number of sections so their dramaticEvent, resultingChange, and terminalState materially satisfy the failed obligations. For each dramatic redundancy, target ONLY the later section; use the comparison section and its immediate predecessor and successor to redesign the later section's dramatic job while preserving causal predecessor/successor compatibility. Do not rewrite the comparison, predecessor, or successor. ${intimacyFailure && intimacy ? `The whole-arc obligation ${SELECTED_INTIMACY_LEVEL_OBLIGATION} requires this selected ${intimacy.level} milestone to occur in the current eligible section; do not use implication, kissing, rumpled sheets, or a relationship label as a substitute.` : ""} Return only the required JSON.`,
+    `Repair only the affected Section Contracts. Preserve beat identity, recipe requirement IDs, established causal state, and the primary conflict. Rewrite the minimum number of sections so their dramaticEvent, resultingChange, and terminalState materially satisfy the failed obligations. Hard Story Arc/intimacy failures take priority over editorial redundancy if the bounded repair cannot address every finding. For each dramatic redundancy, target ONLY the later section; use the comparison section and its immediate predecessor and successor to redesign the later section's dramatic job while preserving causal predecessor/successor compatibility. Do not rewrite the comparison, predecessor, or successor. ${intimacyFailure && intimacy ? `The whole-arc obligation ${SELECTED_INTIMACY_LEVEL_OBLIGATION} requires this selected ${intimacy.level} milestone to occur in the current eligible section; do not use implication, kissing, rumpled sheets, or a relationship label as a substitute.` : ""} Return only the required JSON.`,
     JSON.stringify({ hardRepairInput, dramaticRedundancies: redundancyInput }),
     7000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_repair", strict: true, schema: SEMANTIC_REPAIR_SCHEMA } },

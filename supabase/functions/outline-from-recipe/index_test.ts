@@ -2767,6 +2767,20 @@ Deno.test("semantic verification schema and input expose one per-section scene-f
   assertEquals(input.sceneFunctionLedger, [{ sectionIndex: 0, beatID: "b", title: "The Gate", dramaticEvent: "A gate closes.", resultingChange: "The route is lost.", terminalState: "The survivors reroute." }]);
 });
 
+Deno.test("semantic verifier prompt protects legitimate progression and hard-failure priority", async () => {
+  const template: any = { name: "Custom", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  let verifierInstruction = "";
+  const verifierCall = (async (system: string) => {
+    verifierInstruction = system;
+    return { content: JSON.stringify({ arcWideObligations: [], beats: [], dramaticRedundancies: [] }), creditCostCharged: 0, remainingCredits: 1 };
+  }) as any;
+  await verifyStoryArcSemantics([{ ...semanticSection("b", "A Boundary", "Mira sets a boundary.", "setup") }] as any, template, verifierCall);
+  assertStringIncludes(verifierInstruction, "Do not flag sections merely because they revisit the same relationship");
+  assertStringIncludes(verifierInstruction, "new consequence, cost, reversal, decision, information change");
+  assertStringIncludes(verifierInstruction, "if the reader fully remembers the earlier state change");
+  assertStringIncludes((await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts")), "Hard Story Arc/intimacy failures take priority");
+});
+
 Deno.test("semantic verifier returns only server-grounded dramatic redundancies", async () => {
   const template: any = { name: "Custom", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "b", role: "setup", label: "Setup" }] };
   const suggestions: any[] = [
