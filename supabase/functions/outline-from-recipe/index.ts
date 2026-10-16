@@ -2342,27 +2342,6 @@ export interface ExpansionPromptContext {
   beat?: ExpansionBeatContext;
 }
 
-/**
- * Give expansion the whole-outline semantic ledger without sending prose or
- * adding another planning stage. The ledger is intentionally limited to the
- * server-owned state-change fields that determine whether an addition earns
- * a distinct dramatic function.
- */
-export function buildStateChangeLedger(
-  current: Suggestion[],
-  existingSections: Array<Partial<Suggestion> & PlannedSectionLike> = [],
-): Array<{ sectionIndex: number; beatID: string; title: string; dramaticEvent: string; resultingChange: string; terminalState: string }> {
-  const sections = [...existingSections, ...current];
-  return sections.map((section, sectionIndex) => ({
-    sectionIndex,
-    beatID: String(section.storyArcBeatID ?? ""),
-    title: compactText(String(section.title ?? ""), 180),
-    dramaticEvent: compactText(String(section.dramaticEvent ?? section.summary ?? ""), 400),
-    resultingChange: compactText(String(section.resultingChange ?? section.summary ?? ""), 400),
-    terminalState: compactText(String(section.terminalState ?? section.terminalBeat ?? ""), 400),
-  }));
-}
-
 
 export function plannedWordRangeForContainer(container: string): { minWords: number; maxWords: number } {
   const [minTokens, maxTokens] = CONTAINER_EXPECTED_RANGES[container] ?? [800, 1800];
@@ -2416,9 +2395,8 @@ export function buildExpansionPrompt(
   const beatDirective = beatContext
     ? `This is beat-local expansion for Story Arc beat ${beatContext.beatID}${beatContext.beatLabel ? ` (${beatContext.beatLabel})` : ""}. Develop only this beat; every returned section must use storyArcBeatID ${beatContext.beatID}. The beat currently contains approximately ${Math.round(beatContext.projectedWords).toLocaleString()} projected words. Its description is: ${beatContext.beatDescription ?? "(not supplied)"}. ${semanticContract}`
     : "Expand across the supplied outline while preserving each section's Story Arc beat.";
-  const stateChangeLedger = buildStateChangeLedger(current, req.existingSections ?? []);
   return {
-    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} The whole-outline state-change ledger in the request is authoritative context: compare each addition's dramaticEvent, resultingChange, and terminalState against the ledger across every beat, not only the target beat. Preserve causal predecessor/successor compatibility: an addition's entryState must follow the prior terminalState, and its terminalState must hand a changed condition to the next section. Do not repeat a prior function merely with new characters, location, imagery, or spectacle; if the same function is necessary, make its resultingChange materially different. Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
+    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.`,
@@ -2437,7 +2415,6 @@ The JSON request contains the authoritative obligations exactly once.`,
         },
       },
       targetBeat: beatContext ? { ...beatContext, currentSections: compactExistingSections(beatContext.currentSections ?? []), unmetObligations: compactObligations(obligations.filter((o) => o.required && !beatContext.currentSections?.some((s) => (s.recipeRequirementIDs ?? []).includes(o.id)))) } : null,
-      stateChangeLedger,
       unusedStoryMaterial: compactMaterial({ relevant: unusedStoryMaterial }),
       neighbors: { previous: [], next: [] },
       expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens },
@@ -3404,21 +3381,10 @@ export type SemanticVerificationObligation = {
   reason: string;
 };
 
-export type DramaticRedundancy = {
-  laterSectionIndex: number;
-  comparisonSectionIndex: number;
-  laterField: ArcSemanticField;
-  laterQuote: string;
-  comparisonField: ArcSemanticField;
-  comparisonQuote: string;
-  reason: string;
-};
-
 export type SemanticVerificationResult = {
   arcWideObligations: SemanticVerificationObligation[];
   beats: Array<{ beatID: string; obligations: SemanticVerificationObligation[] }>;
   unsatisfied: Array<{ beatID: string; obligationID: string; reason: string }>;
-  dramaticRedundancies: DramaticRedundancy[];
 };
 
 const SEMANTIC_VERIFICATION_SCHEMA = {
@@ -3437,24 +3403,6 @@ const SEMANTIC_VERIFICATION_SCHEMA = {
           reason: { type: "string", minLength: 1, maxLength: 1200 },
         },
         required: ["obligationID", "satisfied", "sectionIndex", "field", "quote", "reason"],
-        additionalProperties: false,
-      },
-    },
-    dramaticRedundancies: {
-      type: "array",
-      maxItems: 12,
-      items: {
-        type: "object",
-        properties: {
-          laterSectionIndex: { type: "integer" },
-          comparisonSectionIndex: { type: "integer" },
-          laterField: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] },
-          laterQuote: { type: "string", minLength: 1, maxLength: 1200 },
-          comparisonField: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] },
-          comparisonQuote: { type: "string", minLength: 1, maxLength: 1200 },
-          reason: { type: "string", minLength: 1, maxLength: 1200 },
-        },
-        required: ["laterSectionIndex", "comparisonSectionIndex", "laterField", "laterQuote", "comparisonField", "comparisonQuote", "reason"],
         additionalProperties: false,
       },
     },
@@ -3486,7 +3434,7 @@ const SEMANTIC_VERIFICATION_SCHEMA = {
       },
     },
   },
-  required: ["arcWideObligations", "beats", "dramaticRedundancies"],
+  required: ["arcWideObligations", "beats"],
   additionalProperties: false,
 } as const;
 
@@ -3502,7 +3450,6 @@ export function semanticVerificationInput(
     relationshipFocus: template.relationshipFocus ?? "none",
     intimacyMilestoneRoles: template.intimacyMilestoneRoles ?? [],
     selectedIntimacyLevel: requirement?.level ?? "unspecified",
-    sceneFunctionLedger: buildStateChangeLedger(suggestions),
     arcWideObligations: requirement ? [{
       obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION,
       instruction: requirement.instruction,
@@ -3528,37 +3475,6 @@ export function semanticVerificationInput(
   };
 }
 
-export function validateGroundedDramaticRedundancies(
-  raw: unknown,
-  suggestions: Suggestion[],
-): DramaticRedundancy[] {
-  if (!Array.isArray(raw)) return [];
-  const fields: ArcSemanticField[] = ["dramaticEvent", "resultingChange", "terminalState"];
-  const valid: DramaticRedundancy[] = [];
-  const seen = new Set<string>();
-  for (const candidate of raw) {
-    const laterSectionIndex = Number(candidate?.laterSectionIndex);
-    const comparisonSectionIndex = Number(candidate?.comparisonSectionIndex);
-    const laterField = candidate?.laterField;
-    const comparisonField = candidate?.comparisonField;
-    const laterQuote = normalizeEvidenceText(String(candidate?.laterQuote ?? ""));
-    const comparisonQuote = normalizeEvidenceText(String(candidate?.comparisonQuote ?? ""));
-    const reason = normalizeEvidenceText(String(candidate?.reason ?? ""));
-    if (!Number.isInteger(laterSectionIndex) || !Number.isInteger(comparisonSectionIndex) ||
-      comparisonSectionIndex < 0 || laterSectionIndex <= comparisonSectionIndex ||
-      laterSectionIndex >= suggestions.length || !fields.includes(laterField) ||
-      !fields.includes(comparisonField) || !laterQuote || !comparisonQuote || !reason) continue;
-    const laterActual = normalizeEvidenceText(String((suggestions[laterSectionIndex] as any)[laterField] ?? ""));
-    const comparisonActual = normalizeEvidenceText(String((suggestions[comparisonSectionIndex] as any)[comparisonField] ?? ""));
-    if (!laterActual.includes(laterQuote) || !comparisonActual.includes(comparisonQuote)) continue;
-    const key = `${laterSectionIndex}:${comparisonSectionIndex}:${laterField}:${comparisonField}:${laterQuote}:${comparisonQuote}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    valid.push({ laterSectionIndex, comparisonSectionIndex, laterField, laterQuote, comparisonField, comparisonQuote, reason });
-  }
-  return valid;
-}
-
 export async function verifyStoryArcSemantics(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
@@ -3567,14 +3483,14 @@ export async function verifyStoryArcSemantics(
 ): Promise<SemanticVerificationResult> {
   const input = semanticVerificationInput(suggestions, template, recipe);
   const raw = await billableCall(
-    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and any whole-arc intimacy obligation. Also identify only substantial editorial redundancies in the per-section scene-function ledger: later sections that perform essentially the same dramatic or emotional job as an earlier section. Do not flag sections merely because they revisit the same relationship, conflict, character, theme, antagonist, or location. A later section is distinct when it introduces a new consequence, cost, reversal, decision, information change, power shift, agency transfer, tactical change, escalation, or transformed meaning. Ask whether the later section still earns its place if the reader fully remembers the earlier state change; if yes, do not flag it. Return grounded dramaticRedundancies with exact quotes from one field in each compared section. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
+    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and any whole-arc intimacy obligation. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
     "outline-semantic-verification",
   );
-  const parsed = parseOutlineJSON<{ beats?: unknown; arcWideObligations?: unknown; dramaticRedundancies?: unknown }>(raw.content, raw.finishReason);
-  if (!parsed || !Array.isArray(parsed.beats) || !Array.isArray(parsed.dramaticRedundancies)) throw new Error("story_arc_semantic_verification: response missing beats or dramaticRedundancies");
+  const parsed = parseOutlineJSON<{ beats?: unknown; arcWideObligations?: unknown }>(raw.content, raw.finishReason);
+  if (!parsed || !Array.isArray(parsed.beats)) throw new Error("story_arc_semantic_verification: response missing beats");
   const requirement = intimacyRequirement({ arcTemplate: template as ArcTemplateBlob, recipe: recipe as CanonicalRecipeEnvelope });
   const rawArcWide = Array.isArray(parsed.arcWideObligations) ? parsed.arcWideObligations : [];
   const arcWideObligations: SemanticVerificationObligation[] = [];
@@ -3666,12 +3582,7 @@ export async function verifyStoryArcSemantics(
     beats.push({ beatID, obligations });
   }
   for (const beat of template.beats) if (arcRoleContract(beat, template.name).semanticObligations.length > 0 && !seen.has(beat.id)) throw new Error(`story_arc_semantic_verification: missing beat ${beat.id}`);
-  return {
-    arcWideObligations,
-    beats,
-    unsatisfied,
-    dramaticRedundancies: validateGroundedDramaticRedundancies(parsed.dramaticRedundancies, suggestions),
-  };
+  return { arcWideObligations, beats, unsatisfied };
 }
 
 
@@ -3701,35 +3612,22 @@ export async function repairStoryArcSemanticObligations(
   billableCall: SuggestionLLMCall,
   recipeObligations: RecipeObligation[] = [],
   recipe?: Pick<CanonicalRecipeEnvelope, "project">,
-  dramaticRedundancies: DramaticRedundancy[] = [],
 ): Promise<Suggestion[]> {
   const intimacyFailure = failures.some((failure) => failure.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION);
   const intimacy = intimacyRequirement({ arcTemplate: template as ArcTemplateBlob, recipe: recipe as CanonicalRecipeEnvelope });
   const intimacyRepairBeat = intimacyFailure && intimacy
     ? template.beats.find((beat) => intimacy.roles.includes(beat.role) && suggestions.some((section) => section.storyArcBeatID === beat.id))?.id
     : undefined;
-  const hardBeatIDs = new Set(failures.map((failure) => failure.beatID));
-  // The repair schema caps replacements at 12. Reserve capacity for hard
-  // Story Arc/intimacy failures first; excess editorial findings remain
-  // diagnostic and can be observed again during the single reverification.
-  const repairableRedundancies = dramaticRedundancies.slice(0, Math.max(0, 12 - failures.length));
-  const redundancyIndexes = new Set(repairableRedundancies.map((redundancy) => redundancy.laterSectionIndex));
-  const affected = new Set(hardBeatIDs);
-  for (const redundancy of dramaticRedundancies) {
-    const later = suggestions[redundancy.laterSectionIndex];
-    if (later) affected.add(later.storyArcBeatID);
-  }
+  const affected = new Set(failures.map((failure) => failure.beatID));
   if (intimacyRepairBeat) {
     affected.delete("__story_arc__");
     affected.add(intimacyRepairBeat);
   }
-  const allowedReplacementIndexes = new Set<number>(redundancyIndexes);
-  for (const [index, section] of suggestions.entries()) {
-    if (hardBeatIDs.has(section.storyArcBeatID) || (intimacyRepairBeat && section.storyArcBeatID === intimacyRepairBeat)) {
-      allowedReplacementIndexes.add(index);
-    }
-  }
-  const hardRepairInput = template.beats.filter((beat) => affected.has(beat.id) && (hardBeatIDs.has(beat.id) || beat.id === intimacyRepairBeat)).map((beat) => ({
+  const allowedReplacementIndexes = new Set(
+    suggestions.flatMap((section, sectionIndex) =>
+      affected.has(section.storyArcBeatID) ? [sectionIndex] : []),
+  );
+  const input = template.beats.filter((beat) => affected.has(beat.id)).map((beat) => ({
     beatID: beat.id,
     role: beat.role,
     label: beat.label,
@@ -3737,16 +3635,9 @@ export async function repairStoryArcSemanticObligations(
     failures: failures.filter((failure) => failure.beatID === beat.id),
     sections: suggestions.flatMap((section, sectionIndex) => section.storyArcBeatID === beat.id ? [{ sectionIndex, section }] : []),
   }));
-  const redundancyInput = repairableRedundancies.map((redundancy) => ({
-    ...redundancy,
-    laterSection: suggestions[redundancy.laterSectionIndex],
-    comparisonSection: suggestions[redundancy.comparisonSectionIndex],
-    immediatePredecessor: suggestions[redundancy.laterSectionIndex - 1] ?? null,
-    immediateSuccessor: suggestions[redundancy.laterSectionIndex + 1] ?? null,
-  }));
   const raw = await billableCall(
-    `Repair only the affected Section Contracts. Preserve beat identity, recipe requirement IDs, established causal state, and the primary conflict. Rewrite the minimum number of sections so their dramaticEvent, resultingChange, and terminalState materially satisfy the failed obligations. Hard Story Arc/intimacy failures take priority over editorial redundancy if the bounded repair cannot address every finding. For each dramatic redundancy, target ONLY the later section; use the comparison section and its immediate predecessor and successor to redesign the later section's dramatic job while preserving causal predecessor/successor compatibility. Do not rewrite the comparison, predecessor, or successor. ${intimacyFailure && intimacy ? `The whole-arc obligation ${SELECTED_INTIMACY_LEVEL_OBLIGATION} requires this selected ${intimacy.level} milestone to occur in the current eligible section; do not use implication, kissing, rumpled sheets, or a relationship label as a substitute.` : ""} Return only the required JSON.`,
-    JSON.stringify({ hardRepairInput, dramaticRedundancies: redundancyInput }),
+    `Repair only the affected Section Contracts. Preserve beat identity, recipe requirement IDs, established causal state, and the primary conflict. Rewrite the minimum number of sections so their dramaticEvent, resultingChange, and terminalState materially satisfy the failed obligations. ${intimacyFailure && intimacy ? `The whole-arc obligation ${SELECTED_INTIMACY_LEVEL_OBLIGATION} requires this selected ${intimacy.level} milestone to occur in the current eligible section; do not use implication, kissing, rumpled sheets, or a relationship label as a substitute.` : ""} Return only the required JSON.`,
+    JSON.stringify(input),
     7000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_repair", strict: true, schema: SEMANTIC_REPAIR_SCHEMA } },
     "outline-semantic-repair-batch",
@@ -5128,20 +5019,9 @@ export async function runSuggestionJob(
     if (planningState.nextAction === "semantic-verification") {
       const verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
       diagnostics = { ...diagnostics, stage: "semantic_verified", semanticVerification: verification };
-      if (verification.unsatisfied.length > 0 || verification.dramaticRedundancies.length > 0) {
-        planningState = {
-          ...planningState,
-          phase: "semantic_repair_pending",
-          nextAction: "semantic-repair",
-          semanticRepairFailures: verification.unsatisfied,
-          semanticRepairRedundancies: verification.dramaticRedundancies,
-        };
-        diagnostics = {
-          ...diagnostics,
-          stage: "semantic_repair_pending",
-          semanticRepairFailures: verification.unsatisfied,
-          dramaticRedundancies: verification.dramaticRedundancies,
-        };
+      if (verification.unsatisfied.length > 0) {
+        planningState = { ...planningState, phase: "semantic_repair_pending", nextAction: "semantic-repair", semanticRepairFailures: verification.unsatisfied };
+        diagnostics = { ...diagnostics, stage: "semantic_repair_pending", semanticRepairFailures: verification.unsatisfied };
         await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
         throw new SuggestionWorkerYield();
       }
@@ -5157,7 +5037,6 @@ export async function runSuggestionJob(
         billableCall,
         recipeObligations,
         body.recipe,
-        Array.isArray(planningState.semanticRepairRedundancies) ? planningState.semanticRepairRedundancies as DramaticRedundancy[] : [],
       );
       planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification" };
       const { semanticRepairProviderCheckpoint: _semanticRepairProviderCheckpoint, ...diagnosticsAfterRepair } = diagnostics;
@@ -5174,9 +5053,6 @@ export async function runSuggestionJob(
         (unresolved as Error & { errorCode?: string }).errorCode = "story_arc_semantic_unresolved";
         throw unresolved;
       }
-      // Editorial redundancy is diagnostic/non-terminal after the one bounded
-      // repair and reverification; authored Story Arc/intimacy failures above
-      // remain the terminal semantic gate.
       await continueAfterSemanticVerification(persistedSemanticSuggestions);
       return;
     }
