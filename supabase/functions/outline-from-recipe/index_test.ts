@@ -30,6 +30,7 @@ Deno.test("outline suggestion polling contract preserves structured failures and
   assertEquals(source.includes('status: "failed"'), true);
   assertEquals(source.includes('status: "running"'), true);
   assertEquals(source.includes("suggestions: run.suggestions"), true);
+  assertEquals(source.includes("diagnostics, planning_state, story_material"), true);
 });
 
 import {
@@ -104,6 +105,8 @@ import {
   checkRateLimit,
   logRequest,
   isRetryableStoryMaterialFailure,
+  isRetryableSemanticRepairFailure,
+  isSettledSemanticRepairCheckpoint,
   StoryMaterialSufficiencyError,
   StoryMaterialValidationError,
   RecipeObligationValidationError,
@@ -2840,6 +2843,103 @@ Deno.test("redundancy repair input targets only the later section and includes i
   assertEquals(repaired[3].title, "After");
 });
 
+Deno.test("semantic repair canonicalizes a stale whole-arc target to the affected section beat", async () => {
+  const template: any = { name: "Custom", beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  const source = semanticSection("b", "Original", "The original event.", "setup");
+  const repaired = await repairStoryArcSemanticObligations(
+    [source] as any,
+    template,
+    [{ beatID: "b", obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION, reason: "repair needed" }],
+    async () => ({ content: JSON.stringify({ replacements: [{
+      sectionIndex: 0,
+      beatID: "__story_arc__",
+      section: { ...source, title: "Repaired", dramaticEvent: "The repaired event." },
+    }] }), creditCostCharged: 0, remainingCredits: 1 }) as any,
+  );
+  assertEquals(repaired[0].storyArcBeatID, "b");
+  assertEquals(repaired[0].title, "Repaired");
+});
+
+Deno.test("semantic checkpoint updates local diagnostics before persistence", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertStringIncludes(source, "diagnostics = checkpointDiagnostics;");
+  assertStringIncludes(source, "await updateRun({ diagnostics: checkpointDiagnostics });");
+});
+
+Deno.test("semantic checkpoint replay starts no lease heartbeat", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  const replay = source.indexOf("await isSettledSemanticRepairCheckpoint");
+  const heartbeat = source.indexOf("const leaseHeartbeat = setInterval");
+  assertEquals(replay >= 0, true);
+  assertEquals(heartbeat > replay, true);
+});
+
+Deno.test("semantic checkpoint replay requires a settled provider attempt", async () => {
+  const db = {
+    from: (_table: string) => ({
+      select: (_columns: string) => ({
+        eq: (_column: string, value: string) => ({
+          maybeSingle: async () => ({
+            data: value === "settled-attempt"
+              ? { status: "settled", usage_event_id: "usage-1", settled_charge_credits: 1 }
+              : { status: "provider_succeeded", usage_event_id: null, settled_charge_credits: 0 },
+            error: null,
+          }),
+        }),
+      }),
+    }),
+  };
+  assertEquals(await isSettledSemanticRepairCheckpoint(db, { attemptKey: "settled-attempt" }), true);
+  assertEquals(await isSettledSemanticRepairCheckpoint(db, { attemptKey: "unsettled-attempt" }), false);
+  assertEquals(await isSettledSemanticRepairCheckpoint(db, { content: "{}" }), false);
+});
+
+Deno.test("semantic recovery eligibility matches the server-owned failure contract", () => {
+  const eligible = {
+    status: "failed",
+    error_code: "server_error",
+    error: "story_arc_semantic_repair: repair target is not affected",
+    credit_cost_charged: 12,
+    planning_state: { nextAction: "semantic-repair" },
+    diagnostics: {},
+  };
+  assertEquals(isRetryableSemanticRepairFailure(eligible), true);
+  assertEquals(isRetryableSemanticRepairFailure({ ...eligible, error_code: "provider_timeout" }), false);
+  assertEquals(isRetryableSemanticRepairFailure({ ...eligible, planning_state: { nextAction: "semantic-reverification" } }), false);
+});
+
+Deno.test("malformed semantic repair targets preserve the checkpoint instead of throwing", async () => {
+  const template: any = { name: "Custom", beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  const source = semanticSection("b", "Original", "The original event.", "setup");
+  const repaired = await repairStoryArcSemanticObligations(
+    [source] as any,
+    template,
+    [{ beatID: "b", obligationID: "authored_beat_requirement", reason: "repair needed" }],
+    async () => ({ content: JSON.stringify({ replacements: [{
+      sectionIndex: 99,
+      beatID: "not-a-real-beat",
+      section: source,
+    }] }), creditCostCharged: 0, remainingCredits: 1 }) as any,
+  );
+  assertEquals(repaired, [source]);
+});
+
+Deno.test("semantic repair skips replacement validation exceptions and reverifies the checkpoint", async () => {
+  const template: any = { name: "Custom", beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  const source = semanticSection("b", "Original", "The original event.", "setup");
+  const repaired = await repairStoryArcSemanticObligations(
+    [source] as any,
+    template,
+    [{ beatID: "b", obligationID: "authored_beat_requirement", reason: "repair needed" }],
+    async () => ({ content: JSON.stringify({ replacements: [{
+      sectionIndex: 0,
+      beatID: "b",
+      section: { ...source, title: "Malformed", dramaticFunction: "not-a-contract-function" },
+    }] }), creditCostCharged: 0, remainingCredits: 1 }) as any,
+  );
+  assertEquals(repaired, [source]);
+});
+
 Deno.test("semantic evidence schemas satisfy strict Structured Outputs for the 10-beat Romance / HEA arc", () => {
   const roles = [
     "ordinary_life", "meet_attraction", "resistance", "connection_deepens", "midpoint_intimacy",
@@ -3101,6 +3201,19 @@ Deno.test("PR3 all seven built-in template families use explicit canonical role 
 
 
 // MARK: - PR 7: idempotency-safe planning rate limits
+
+Deno.test("paid semantic repair target failures are recoverable once from their checkpoint", () => {
+  const base = {
+    status: "failed",
+    error_code: "server_error",
+    error: "story_arc_semantic_repair: repair target is not affected 12.29 credits were already settled",
+    credit_cost_charged: 12.29,
+    planning_state: { nextAction: "semantic-repair" },
+  };
+  assertEquals(isRetryableSemanticRepairFailure(base), true);
+  assertEquals(isRetryableSemanticRepairFailure({ ...base, diagnostics: { semanticRecoveryAttempts: 1 } }), false);
+  assertEquals(isRetryableSemanticRepairFailure({ ...base, planning_state: { nextAction: "semantic-reverification" } }), false);
+});
 
 Deno.test("zero-charge story-material structural failures are retryable, paid and unrelated failures are terminal", () => {
   assertEquals(isRetryableStoryMaterialFailure({

@@ -71,6 +71,93 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         )
     }
 
+    func testPaidFailedSuggestionKeepsOriginalCheckpointRecoverable() {
+        let suggestion = OutlineSuggestion(
+            title: "Persisted section",
+            summary: "Already generated",
+            container: "scene",
+            pov: "thirdPersonLimited",
+            terminalBeat: "beat-1",
+            entryState: nil,
+            dramaticEvent: "The event occurs.",
+            resultingChange: "The state changes.",
+            terminalState: "The section ends.",
+            storyArcBeatID: "beat-1",
+            recipeRequirementIDs: nil
+        )
+        let failed = OutlineSuggestionJob(
+            runID: "paid-run",
+            status: "failed",
+            suggestions: [suggestion],
+            warnings: nil,
+            error: "story_arc_semantic_repair: repair target is not affected",
+            errorCode: "server_error",
+            sourceRecipe: nil,
+            creditCostCharged: 12.29,
+            remainingCredits: 38.37,
+            diagnostics: nil,
+            planningState: ["nextAction": .string("semantic-repair")],
+            attemptCount: 1,
+            updatedAt: nil,
+            leaseExpiresAt: nil
+        )
+        XCTAssertTrue(DataDurabilityCoordinator.shouldRecoverPaidSuggestionCheckpoint(failed))
+
+        let recoveredOnce = OutlineSuggestionJob(
+            runID: failed.runID,
+            status: failed.status,
+            suggestions: failed.suggestions,
+            warnings: failed.warnings,
+            error: failed.error,
+            errorCode: failed.errorCode,
+            sourceRecipe: failed.sourceRecipe,
+            creditCostCharged: failed.creditCostCharged,
+            remainingCredits: failed.remainingCredits,
+            diagnostics: ["semanticRecoveryAttempts": .number(1)],
+            planningState: ["nextAction": .string("semantic-repair")],
+            attemptCount: failed.attemptCount,
+            updatedAt: failed.updatedAt,
+            leaseExpiresAt: failed.leaseExpiresAt
+        )
+        XCTAssertFalse(DataDurabilityCoordinator.shouldRecoverPaidSuggestionCheckpoint(recoveredOnce))
+
+        let unpaid = OutlineSuggestionJob(
+            runID: failed.runID,
+            status: failed.status,
+            suggestions: failed.suggestions,
+            warnings: failed.warnings,
+            error: failed.error,
+            errorCode: failed.errorCode,
+            sourceRecipe: failed.sourceRecipe,
+            creditCostCharged: 0,
+            remainingCredits: failed.remainingCredits,
+            diagnostics: nil,
+            planningState: ["nextAction": .string("semantic-repair")],
+            attemptCount: failed.attemptCount,
+            updatedAt: failed.updatedAt,
+            leaseExpiresAt: failed.leaseExpiresAt
+        )
+        XCTAssertFalse(DataDurabilityCoordinator.shouldRecoverPaidSuggestionCheckpoint(unpaid))
+
+        let unrelatedPaidFailure = OutlineSuggestionJob(
+            runID: failed.runID,
+            status: failed.status,
+            suggestions: failed.suggestions,
+            warnings: failed.warnings,
+            error: "provider timeout",
+            errorCode: "provider_timeout",
+            sourceRecipe: failed.sourceRecipe,
+            creditCostCharged: failed.creditCostCharged,
+            remainingCredits: failed.remainingCredits,
+            diagnostics: nil,
+            planningState: ["nextAction": .string("semantic-repair")],
+            attemptCount: failed.attemptCount,
+            updatedAt: failed.updatedAt,
+            leaseExpiresAt: failed.leaseExpiresAt
+        )
+        XCTAssertFalse(DataDurabilityCoordinator.shouldRecoverPaidSuggestionCheckpoint(unrelatedPaidFailure))
+    }
+
     func testSuggestionStatusPollingHasARealSuccessInterval() {
         // Protect the normal successful pending/running path from a hot loop
         // that previously generated roughly two requests per second.

@@ -117,6 +117,12 @@ export interface BillableLLMRequest<T> {
    * throwing — that is the supported pattern for feature-validation
    * failures (e.g., empty provider content, invalid JSON). */
   onProviderSuccess: (result: BillableProviderResult) => Promise<T>;
+  /** Durable feature checkpoint required before customer settlement. */
+  beforeSettlement?: (
+    featureResult: any,
+    providerResult: BillableProviderResult,
+    context: { attemptKey: string; attemptID: string | null },
+  ) => Promise<void>;
   preflightUsageOverride?: GenerationUsage;
   /** Generate-story historically omits failed usage rows for provider timeout
    * and provider-account quota failures. Feature callers can disable the
@@ -163,6 +169,7 @@ export type BillableLLMErrorCode =
   | "credit_charge_failed"
   | "idempotency_unique_violation"
   | "provider_attempt_allocation_failed"
+  | "feature_persistence_failed"
   | "outline_stage_state_failed"
   | "input_token_limit_exceeded";
 
@@ -212,7 +219,7 @@ async function reconcileOutlineRun(adminClient: unknown, runID: string | null | 
 
 async function loadOutlineStageTotals(
   adminClient: unknown,
-  req: BillableLLMRequest<unknown>,
+  req: BillableLLMRequest<any>,
 ): Promise<{ rawChargeCredits: number; settledChargeCredits: number }> {
   const featureRunID = req.usageContext.featureRunID;
   const logicalStageKey = req.usageContext.logicalStageKey;
@@ -241,7 +248,7 @@ async function loadOutlineStageTotals(
 
 async function beginOutlineProviderAttempt(
   adminClient: unknown,
-  req: BillableLLMRequest<unknown>,
+  req: BillableLLMRequest<any>,
 ): Promise<{ id: string; key: string; ordinal: number }> {
   if (!adminClient) throw new BillableLLMError("provider_attempt_allocation_failed", "outline provider attempt allocation requires an admin database client");
   const logicalStageKey = req.usageContext.logicalStageKey ?? req.usageContext.idempotencyKey;
@@ -267,7 +274,7 @@ async function beginOutlineProviderAttempt(
   return { id: String(row.attempt_id), key: String(row.attempt_key), ordinal: Number(row.attempt_ordinal) };
 }
 
-async function startProviderAttempt(adminClient: unknown, req: BillableLLMRequest<unknown>, billingAttemptKey: string): Promise<string | null> {
+async function startProviderAttempt(adminClient: unknown, req: BillableLLMRequest<any>, billingAttemptKey: string): Promise<string | null> {
   if (!adminClient) return null;
   try {
     const table = (adminClient as any).from("generation_provider_attempts");
@@ -524,6 +531,28 @@ export async function runBillableLLM<T>(
       await updateProviderAttempt(deps.adminClient, attemptID, { status: "feature_validation_failed", completed_at: new Date().toISOString(), feature_error_code: error instanceof Error ? error.name : "feature_error" });
     }
     throw error;
+  }
+
+  // A successful provider response is not customer-settleable until the
+  // feature has durably checkpointed the validated result. This callback is
+  // intentionally before the settlement RPC; outline recovery uses it to
+  // persist the semantic-repair response and replay it idempotently.
+  if (req.beforeSettlement) {
+    try {
+      await req.beforeSettlement(featureResult, providerResult, { attemptKey, attemptID });
+    } catch (error) {
+      await updateProviderAttempt(deps.adminClient, attemptID, {
+        status: "feature_persistence_failed",
+        completed_at: new Date().toISOString(),
+        feature_error_code: error instanceof Error ? error.name : "feature_persistence_failed",
+      });
+      if (req.purpose === "outline-suggestion") await reconcileOutlineRun(deps.adminClient, req.usageContext.featureRunID);
+      throw new BillableLLMError(
+        "feature_persistence_failed",
+        error instanceof Error ? error.message : String(error),
+        error,
+      );
+    }
   }
 
   // 4. PR-372 corrected token accounting + provider COGS math.

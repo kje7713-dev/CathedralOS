@@ -73,7 +73,7 @@ struct SuggestionRunMetadata: Codable {
     var isActive: Bool {
         status == "starting" || status == "pending" || status == "running" ||
             status == "generating" || status == "reconnecting" ||
-            status == "connection_unavailable"
+            status == "connection_unavailable" || status == "recovery_pending"
     }
 }
 
@@ -873,6 +873,27 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     // MARK: - Durable Suggest Sections polling
 
+    /// A paid failed run with persisted output must re-submit the original
+    /// idempotency identity once so the backend can resume its checkpoint.
+    /// The backend records semanticRecoveryAttempts, preventing an endless
+    /// POST loop if the recovery itself fails.
+    static func shouldRecoverPaidSuggestionCheckpoint(_ job: OutlineSuggestionJob) -> Bool {
+        guard job.status == "failed",
+              job.errorCode == "server_error",
+              let error = job.error,
+              error.hasPrefix("story_arc_semantic_repair:"),
+              case let .string(nextAction)? = job.planningState?["nextAction"],
+              nextAction == "semantic-repair",
+              let charged = job.creditCostCharged,
+              charged > 0,
+              let suggestions = job.suggestions,
+              !suggestions.isEmpty else { return false }
+        if case let .number(attempts)? = job.diagnostics?["semanticRecoveryAttempts"], attempts >= 1 {
+            return false
+        }
+        return true
+    }
+
     func activeSuggestionRun(for projectID: UUID) -> SuggestionRunMetadata? {
         activeSuggestionRuns[projectID]
     }
@@ -1209,6 +1230,15 @@ final class DataDurabilityCoordinator: ObservableObject {
                     suggestionPollingTasks[metadata.projectID] = nil
                     return
                 case "failed":
+                    if Self.shouldRecoverPaidSuggestionCheckpoint(job) {
+                        metadata.status = "recovery_pending"
+                        metadata.runID = nil
+                        metadata.serverRecoveryState = "paid_checkpoint_recovery_pending"
+                        metadata.updatedAt = Date()
+                        activeSuggestionRuns[metadata.projectID] = metadata
+                        persistSuggestionRun(metadata)
+                        continue
+                    }
                     let failure = OutlineSuggestionService.errorForFailedJob(errorCode: job.errorCode, message: job.error)
                     failSuggestionRun(metadata.projectID, message: failure.localizedDescription)
                     suggestionPollingTasks[metadata.projectID] = nil

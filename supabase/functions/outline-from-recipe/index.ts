@@ -3757,16 +3757,37 @@ export async function repairStoryArcSemanticObligations(
   const replaced = new Set<number>();
   for (const operation of parsed.replacements as any[]) {
     const index = Number(operation?.sectionIndex);
-    const beatID = String(operation?.beatID ?? "");
-    if (!Number.isInteger(index) || index < 0 || index >= result.length || replaced.has(index)) throw new Error("story_arc_semantic_repair: invalid section index");
-    if (!allowedReplacementIndexes.has(index) || !affected.has(beatID) || result[index].storyArcBeatID !== beatID) throw new Error("story_arc_semantic_repair: repair target is not affected");
-    const candidate = { ...operation.section, storyArcBeatID: beatID, recipeRequirementIDs: result[index].recipeRequirementIDs ?? [] };
-    const validated = validateSuggestions({ suggestions: [candidate] }, new Set([beatID]), undefined, recipeObligations, { ...template, beats: template.beats.filter((beat) => beat.id === beatID) }).suggestions;
-    if (validated.length !== 1) throw new Error("story_arc_semantic_repair: replacement failed validation");
+    if (!Number.isInteger(index) || index < 0 || index >= result.length || replaced.has(index)) continue;
+    // The provider may return a stale/whole-arc beat ID or mislabel the
+    // target. The section index is server-owned; if that index is an allowed
+    // repair target, canonicalize to the section's actual affected beat.
+    if (!allowedReplacementIndexes.has(index)) continue;
+    const canonicalBeatID = result[index].storyArcBeatID;
+    if (!affected.has(canonicalBeatID)) continue;
+    const candidate = { ...operation.section, storyArcBeatID: canonicalBeatID, recipeRequirementIDs: result[index].recipeRequirementIDs ?? [] };
+    let validated: Suggestion[];
+    try {
+      validated = validateSuggestions(
+        { suggestions: [candidate] },
+        new Set([canonicalBeatID]),
+        undefined,
+        recipeObligations,
+        { ...template, beats: template.beats.filter((beat) => beat.id === canonicalBeatID) },
+      ).suggestions;
+    } catch {
+      // Replacement-local schema/contract failures are treated like any other
+      // rejected operation: preserve the checkpoint and let reverification
+      // decide whether the unchanged outline remains acceptable. Errors from
+      // the surrounding repair lifecycle are intentionally not caught here.
+      continue;
+    }
+    if (validated.length !== 1) continue;
     result[index] = validated[0];
     replaced.add(index);
   }
-  if (replaced.size === 0) throw new Error("story_arc_semantic_repair: no sections replaced");
+  // A malformed repair response must never strand a paid run with a generic
+  // HTTP 500. Returning the checkpoint unchanged lets reverification produce
+  // the typed semantic result and leaves the persisted run recoverable.
   return result;
 }
 
@@ -4149,6 +4170,43 @@ export function isRetryableStoryMaterialFailure(run: {
       run.error === "story material enrichment contains a duplicate or missing item id");
 }
 
+export async function isSettledSemanticRepairCheckpoint(
+  db: any,
+  checkpoint: Record<string, unknown>,
+): Promise<boolean> {
+  const attemptKey = typeof checkpoint.attemptKey === "string" ? checkpoint.attemptKey : null;
+  if (!attemptKey || !db?.from) return false;
+  try {
+    const result = await db.from("generation_provider_attempts")
+      .select("status, usage_event_id, settled_charge_credits")
+      .eq("attempt_key", attemptKey)
+      .maybeSingle();
+    if (result.error || !result.data) return false;
+    return result.data.status === "settled" ||
+      typeof result.data.usage_event_id === "string" ||
+      Number(result.data.settled_charge_credits ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function isRetryableSemanticRepairFailure(run: {
+  status?: unknown;
+  error?: unknown;
+  error_code?: unknown;
+  credit_cost_charged?: unknown;
+  planning_state?: any;
+  diagnostics?: any;
+}): boolean {
+  const recoveryAttempts = Number(run.diagnostics?.semanticRecoveryAttempts ?? 0);
+  return run.status === "failed" &&
+    run.error_code === "server_error" &&
+    typeof run.error === "string" &&
+    run.error.startsWith("story_arc_semantic_repair:") &&
+    run.planning_state?.nextAction === "semantic-repair" &&
+    recoveryAttempts < 1;
+}
+
 // Supabase Free-plan Edge Functions have a 150s wall-clock limit. Leave
 // margin for request setup, billing settlement, and the durable checkpoint;
 // a 150s provider deadline can be killed by the platform before it throws.
@@ -4308,7 +4366,7 @@ function exhaustedSuggestionBillingMessage(settledCredits: number | null): strin
 }
 
 export const SUGGESTION_RUN_RECOVERY_COLUMNS =
-  "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
+  "id, status, suggestions, warnings, error_code, error, diagnostics, planning_state, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
 
 /** Read the persisted row after reclaim/reconciliation has completed. */
 export async function loadAuthoritativeSuggestionRun(db: any, runID: string): Promise<any | null> {
@@ -4340,6 +4398,7 @@ export function suggestionRunResponse(run: any): Record<string, unknown> {
     errorCode: run.error_code,
     error: run.error,
     diagnostics: run.diagnostics,
+    planningState: run.planning_state,
     storyMaterialEnrichment: run.story_material,
     created_at: run.created_at,
     updated_at: run.updated_at,
@@ -4747,9 +4806,25 @@ export async function runSuggestionJob(
       const promptCacheKey = `cath:outline:${projectIdentity}:${provenance.sourceRecipeHash}:${stageFamily}:pcv2:promptv4`;
       const promptCacheKeyHash = await sha256Hex(promptCacheKey);
       await touchLease();
+      const semanticRepairCheckpoint = action === "outline-semantic-repair-batch" &&
+        diagnostics.semanticRepairProviderCheckpoint &&
+        typeof diagnostics.semanticRepairProviderCheckpoint === "object"
+        ? diagnostics.semanticRepairProviderCheckpoint as Record<string, unknown>
+        : null;
+      if (semanticRepairCheckpoint &&
+        typeof semanticRepairCheckpoint.content === "string" &&
+        await isSettledSemanticRepairCheckpoint(db, semanticRepairCheckpoint)) {
+        diagnostics = { ...diagnostics, stage: "semantic_repair_checkpoint_replay" };
+        return {
+          content: semanticRepairCheckpoint.content,
+          creditCostCharged: 0,
+          remainingCredits: Number(semanticRepairCheckpoint.remainingCredits ?? 0),
+          finishReason: typeof semanticRepairCheckpoint.finishReason === "string" ? semanticRepairCheckpoint.finishReason : undefined,
+        };
+      }
       // Provider calls can exceed the three-minute worker lease, especially
-      // for worksheet enrichment. Renew while the call is in flight so the
-      // lease cannot expire and reclaim a healthy provider attempt.
+      // for worksheet enrichment. Start the heartbeat only for a live provider
+      // dispatch; checkpoint replay returns above and needs no heartbeat.
       const leaseHeartbeat = setInterval(() => {
         void touchLease();
       }, 30_000);
@@ -4785,6 +4860,34 @@ export async function runSuggestionJob(
           if (validateResponse) await validateResponse(providerResult.content, providerResult.finishReason);
           return providerResult.content;
         },
+        beforeSettlement: action === "outline-semantic-repair-batch"
+          ? async (content, providerResult, context) => {
+            // The checkpoint must be parseable before settlement. Replacement
+            // quality is intentionally validated after replay; malformed JSON
+            // is not a usable paid checkpoint and therefore must not settle.
+            const parsed = parseOutlineJSON<{ replacements?: unknown }>(content, providerResult.finishReason);
+            if (!parsed || !Array.isArray(parsed.replacements)) {
+              throw new Error("story_arc_semantic_repair: response missing replacements");
+            }
+            const checkpointDiagnostics = {
+              ...diagnostics,
+              stage: "semantic_repair_checkpointed",
+              semanticRepairProviderCheckpoint: {
+                action,
+                content,
+                finishReason: providerResult.finishReason ?? null,
+                remainingCredits: null,
+                attemptKey: context.attemptKey,
+                checkpointedAt: new Date().toISOString(),
+              },
+            };
+            // Keep the in-memory failure snapshot in lockstep with the
+            // durable checkpoint. A later failure must not overwrite a
+            // successfully settled repair with stale diagnostics.
+            diagnostics = checkpointDiagnostics;
+            await updateRun({ diagnostics: checkpointDiagnostics });
+          }
+          : undefined,
         }, { adminClient: db, provider, creditStore });
       } finally {
         clearInterval(leaseHeartbeat);
@@ -5057,7 +5160,8 @@ export async function runSuggestionJob(
         Array.isArray(planningState.semanticRepairRedundancies) ? planningState.semanticRepairRedundancies as DramaticRedundancy[] : [],
       );
       planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification" };
-      diagnostics = { ...diagnostics, stage: "semantic_reverification_pending" };
+      const { semanticRepairProviderCheckpoint: _semanticRepairProviderCheckpoint, ...diagnosticsAfterRepair } = diagnostics;
+      diagnostics = { ...diagnosticsAfterRepair, stage: "semantic_reverification_pending" };
       await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
       throw new SuggestionWorkerYield();
     }
@@ -5741,7 +5845,7 @@ Deno.serve(async (req: Request) => {
     const runId = searchParams.get("run_id");
     const projectId = searchParams.get("project_id");
     const runColumns =
-      "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
+      "id, status, suggestions, warnings, error_code, error, diagnostics, planning_state, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
 
     let run: any = null;
     let error: any = null;
@@ -5912,7 +6016,7 @@ Deno.serve(async (req: Request) => {
   // a transient network failure.
   const existingResult = await db
     .from("outline_suggestion_runs")
-    .select("id, status, request_fingerprint, lease_expires_at, error_code, suggestions, warnings, error, diagnostics, story_material, credit_cost_charged, remaining_credits, request_json, created_at, updated_at, completed_at, attempt_count")
+    .select("id, status, request_fingerprint, lease_expires_at, error_code, suggestions, warnings, error, diagnostics, planning_state, story_material, credit_cost_charged, remaining_credits, request_json, created_at, updated_at, completed_at, attempt_count")
     .eq("user_id", user.id)
     .in("idempotency_key", lookupKeys)
     .maybeSingle();
@@ -5931,6 +6035,28 @@ Deno.serve(async (req: Request) => {
         "The idempotency key is already bound to a different suggestion request",
         409,
       );
+    }
+    if (isRetryableSemanticRepairFailure(existing)) {
+      const recoveredDiagnostics = {
+        ...(existing.diagnostics ?? {}),
+        semanticRecoveryAttempts: Number(existing.diagnostics?.semanticRecoveryAttempts ?? 0) + 1,
+        stage: "semantic_repair_recovery_pending",
+      };
+      const { error: retryError } = await db.from("outline_suggestion_runs").update({
+        status: "pending",
+        error_code: null,
+        error: null,
+        completed_at: null,
+        lease_owner: null,
+        lease_expires_at: null,
+        diagnostics: recoveredDiagnostics,
+        attempt_count: (existing.attempt_count ?? 0) + 1,
+      }).eq("id", existing.id).eq("status", "failed");
+      if (retryError) return errorResponse("db_error", retryError.message ?? "Could not recover failed semantic repair", 500);
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
+      // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      return corsResponse(JSON.stringify({ ...suggestionRunResponse(existing), status: "pending", errorCode: null, error: null, diagnostics: recoveredDiagnostics }), { status: 200 });
     }
     if (isRetryableStoryMaterialFailure(existing)) {
       // This exact request failed before billing. Requeue the same run under
@@ -6052,7 +6178,7 @@ Deno.serve(async (req: Request) => {
       return errorResponse("db_error", insert.error.message ?? "Could not create suggestion run", 500);
     }
     const existing = await db.from("outline_suggestion_runs")
-      .select("id, status, created_at, updated_at, suggestions, warnings, error_code, error, diagnostics, story_material, credit_cost_charged, remaining_credits, request_json, lease_expires_at, attempt_count, request_fingerprint")
+      .select("id, status, created_at, updated_at, suggestions, warnings, error_code, error, diagnostics, planning_state, story_material, credit_cost_charged, remaining_credits, request_json, lease_expires_at, attempt_count, request_fingerprint")
       .eq("user_id", user.id).eq("idempotency_key", identity.key).single();
     if (existing.error || !existing.data) return errorResponse("db_error", existing.error?.message ?? "Could not resolve suggestion run", 500);
     run = existing.data;
@@ -6062,6 +6188,7 @@ Deno.serve(async (req: Request) => {
     }
     const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
     const resumableExpansionFailure = run.status === "failed" && run.error_code === "failed_expansion" && expansionResumeState(run) !== null;
+    const resumableSemanticRepairFailure = isRetryableSemanticRepairFailure(run);
     if (stale) {
       if (await reclaimExpiredSuggestionRun(db, run)) {
         const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
@@ -6074,7 +6201,10 @@ Deno.serve(async (req: Request) => {
         }
         run = authoritative;
       }
-    } else if (resumableExpansionFailure) {
+    } else if (resumableExpansionFailure || resumableSemanticRepairFailure) {
+      const recoveredDiagnostics = resumableSemanticRepairFailure
+        ? { ...(run.diagnostics ?? {}), semanticRecoveryAttempts: Number(run.diagnostics?.semanticRecoveryAttempts ?? 0) + 1, stage: "semantic_repair_recovery_pending" }
+        : run.diagnostics;
       const reclaimed = await db.from("outline_suggestion_runs").update({
         status: "pending",
         error_code: null,
@@ -6082,6 +6212,7 @@ Deno.serve(async (req: Request) => {
         completed_at: null,
         lease_owner: null,
         lease_expires_at: null,
+        ...(recoveredDiagnostics ? { diagnostics: recoveredDiagnostics } : {}),
         attempt_count: (run.attempt_count ?? 0) + 1,
       }).eq("id", run.id).eq("status", "failed");
       if (!reclaimed.error) run.status = "pending";
