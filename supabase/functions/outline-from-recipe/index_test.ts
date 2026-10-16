@@ -30,6 +30,7 @@ Deno.test("outline suggestion polling contract preserves structured failures and
   assertEquals(source.includes('status: "failed"'), true);
   assertEquals(source.includes('status: "running"'), true);
   assertEquals(source.includes("suggestions: run.suggestions"), true);
+  assertEquals(source.includes("diagnostics, planning_state, story_material"), true);
 });
 
 import {
@@ -2857,6 +2858,12 @@ Deno.test("semantic repair canonicalizes a stale whole-arc target to the affecte
   );
   assertEquals(repaired[0].storyArcBeatID, "b");
   assertEquals(repaired[0].title, "Repaired");
+});
+
+Deno.test("semantic checkpoint updates local diagnostics before persistence", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertStringIncludes(source, "diagnostics = checkpointDiagnostics;");
+  assertStringIncludes(source, "await updateRun({ diagnostics: checkpointDiagnostics });");
 });
 
 Deno.test("semantic checkpoint replay requires a settled provider attempt", async () => {

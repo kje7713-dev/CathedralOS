@@ -4366,7 +4366,7 @@ function exhaustedSuggestionBillingMessage(settledCredits: number | null): strin
 }
 
 export const SUGGESTION_RUN_RECOVERY_COLUMNS =
-  "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
+  "id, status, suggestions, warnings, error_code, error, diagnostics, planning_state, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
 
 /** Read the persisted row after reclaim/reconciliation has completed. */
 export async function loadAuthoritativeSuggestionRun(db: any, runID: string): Promise<any | null> {
@@ -4869,20 +4869,23 @@ export async function runSuggestionJob(
             if (!parsed || !Array.isArray(parsed.replacements)) {
               throw new Error("story_arc_semantic_repair: response missing replacements");
             }
-            await updateRun({
-              diagnostics: {
-                ...diagnostics,
-                stage: "semantic_repair_checkpointed",
-                semanticRepairProviderCheckpoint: {
-                  action,
-                  content,
-                  finishReason: providerResult.finishReason ?? null,
-                  remainingCredits: null,
-                  attemptKey: context.attemptKey,
-                  checkpointedAt: new Date().toISOString(),
-                },
+            const checkpointDiagnostics = {
+              ...diagnostics,
+              stage: "semantic_repair_checkpointed",
+              semanticRepairProviderCheckpoint: {
+                action,
+                content,
+                finishReason: providerResult.finishReason ?? null,
+                remainingCredits: null,
+                attemptKey: context.attemptKey,
+                checkpointedAt: new Date().toISOString(),
               },
-            });
+            };
+            // Keep the in-memory failure snapshot in lockstep with the
+            // durable checkpoint. A later failure must not overwrite a
+            // successfully settled repair with stale diagnostics.
+            diagnostics = checkpointDiagnostics;
+            await updateRun({ diagnostics: checkpointDiagnostics });
           }
           : undefined,
         }, { adminClient: db, provider, creditStore });
@@ -5842,7 +5845,7 @@ Deno.serve(async (req: Request) => {
     const runId = searchParams.get("run_id");
     const projectId = searchParams.get("project_id");
     const runColumns =
-      "id, status, suggestions, warnings, error_code, error, diagnostics, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
+      "id, status, suggestions, warnings, error_code, error, diagnostics, planning_state, story_material, created_at, updated_at, completed_at, credit_cost_charged, remaining_credits, request_json, project_id, idempotency_key, request_fingerprint, attempt_count, lease_expires_at";
 
     let run: any = null;
     let error: any = null;
