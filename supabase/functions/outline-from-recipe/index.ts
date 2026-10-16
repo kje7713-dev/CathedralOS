@@ -3757,16 +3757,22 @@ export async function repairStoryArcSemanticObligations(
   const replaced = new Set<number>();
   for (const operation of parsed.replacements as any[]) {
     const index = Number(operation?.sectionIndex);
-    const beatID = String(operation?.beatID ?? "");
-    if (!Number.isInteger(index) || index < 0 || index >= result.length || replaced.has(index)) throw new Error("story_arc_semantic_repair: invalid section index");
-    if (!allowedReplacementIndexes.has(index) || !affected.has(beatID) || result[index].storyArcBeatID !== beatID) throw new Error("story_arc_semantic_repair: repair target is not affected");
-    const candidate = { ...operation.section, storyArcBeatID: beatID, recipeRequirementIDs: result[index].recipeRequirementIDs ?? [] };
-    const validated = validateSuggestions({ suggestions: [candidate] }, new Set([beatID]), undefined, recipeObligations, { ...template, beats: template.beats.filter((beat) => beat.id === beatID) }).suggestions;
-    if (validated.length !== 1) throw new Error("story_arc_semantic_repair: replacement failed validation");
+    if (!Number.isInteger(index) || index < 0 || index >= result.length || replaced.has(index)) continue;
+    // The provider may return a stale/whole-arc beat ID or mislabel the
+    // target. The section index is server-owned; if that index is an allowed
+    // repair target, canonicalize to the section's actual affected beat.
+    if (!allowedReplacementIndexes.has(index)) continue;
+    const canonicalBeatID = result[index].storyArcBeatID;
+    if (!affected.has(canonicalBeatID)) continue;
+    const candidate = { ...operation.section, storyArcBeatID: canonicalBeatID, recipeRequirementIDs: result[index].recipeRequirementIDs ?? [] };
+    const validated = validateSuggestions({ suggestions: [candidate] }, new Set([canonicalBeatID]), undefined, recipeObligations, { ...template, beats: template.beats.filter((beat) => beat.id === canonicalBeatID) }).suggestions;
+    if (validated.length !== 1) continue;
     result[index] = validated[0];
     replaced.add(index);
   }
-  if (replaced.size === 0) throw new Error("story_arc_semantic_repair: no sections replaced");
+  // A malformed repair response must never strand a paid run with a generic
+  // HTTP 500. Returning the checkpoint unchanged lets reverification produce
+  // the typed semantic result and leaves the persisted run recoverable.
   return result;
 }
 
@@ -4147,6 +4153,23 @@ export function isRetryableStoryMaterialFailure(run: {
     typeof run.error === "string" &&
     (run.error.startsWith("recipe story material item ") ||
       run.error === "story material enrichment contains a duplicate or missing item id");
+}
+
+export function isRetryableSemanticRepairFailure(run: {
+  status?: unknown;
+  error?: unknown;
+  error_code?: unknown;
+  credit_cost_charged?: unknown;
+  planning_state?: any;
+  diagnostics?: any;
+}): boolean {
+  const recoveryAttempts = Number(run.diagnostics?.semanticRecoveryAttempts ?? 0);
+  return run.status === "failed" &&
+    run.error_code === "server_error" &&
+    typeof run.error === "string" &&
+    run.error.startsWith("story_arc_semantic_repair:") &&
+    run.planning_state?.nextAction === "semantic-repair" &&
+    recoveryAttempts < 1;
 }
 
 // Supabase Free-plan Edge Functions have a 150s wall-clock limit. Leave
@@ -5912,7 +5935,7 @@ Deno.serve(async (req: Request) => {
   // a transient network failure.
   const existingResult = await db
     .from("outline_suggestion_runs")
-    .select("id, status, request_fingerprint, lease_expires_at, error_code, suggestions, warnings, error, diagnostics, story_material, credit_cost_charged, remaining_credits, request_json, created_at, updated_at, completed_at, attempt_count")
+    .select("id, status, request_fingerprint, lease_expires_at, error_code, suggestions, warnings, error, diagnostics, planning_state, story_material, credit_cost_charged, remaining_credits, request_json, created_at, updated_at, completed_at, attempt_count")
     .eq("user_id", user.id)
     .in("idempotency_key", lookupKeys)
     .maybeSingle();
@@ -5931,6 +5954,28 @@ Deno.serve(async (req: Request) => {
         "The idempotency key is already bound to a different suggestion request",
         409,
       );
+    }
+    if (isRetryableSemanticRepairFailure(existing)) {
+      const recoveredDiagnostics = {
+        ...(existing.diagnostics ?? {}),
+        semanticRecoveryAttempts: Number(existing.diagnostics?.semanticRecoveryAttempts ?? 0) + 1,
+        stage: "semantic_repair_recovery_pending",
+      };
+      const { error: retryError } = await db.from("outline_suggestion_runs").update({
+        status: "pending",
+        error_code: null,
+        error: null,
+        completed_at: null,
+        lease_owner: null,
+        lease_expires_at: null,
+        diagnostics: recoveredDiagnostics,
+        attempt_count: (existing.attempt_count ?? 0) + 1,
+      }).eq("id", existing.id).eq("status", "failed");
+      if (retryError) return errorResponse("db_error", retryError.message ?? "Could not recover failed semantic repair", 500);
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
+      // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      return corsResponse(JSON.stringify({ ...suggestionRunResponse(existing), status: "pending", errorCode: null, error: null, diagnostics: recoveredDiagnostics }), { status: 200 });
     }
     if (isRetryableStoryMaterialFailure(existing)) {
       // This exact request failed before billing. Requeue the same run under
@@ -6052,7 +6097,7 @@ Deno.serve(async (req: Request) => {
       return errorResponse("db_error", insert.error.message ?? "Could not create suggestion run", 500);
     }
     const existing = await db.from("outline_suggestion_runs")
-      .select("id, status, created_at, updated_at, suggestions, warnings, error_code, error, diagnostics, story_material, credit_cost_charged, remaining_credits, request_json, lease_expires_at, attempt_count, request_fingerprint")
+      .select("id, status, created_at, updated_at, suggestions, warnings, error_code, error, diagnostics, planning_state, story_material, credit_cost_charged, remaining_credits, request_json, lease_expires_at, attempt_count, request_fingerprint")
       .eq("user_id", user.id).eq("idempotency_key", identity.key).single();
     if (existing.error || !existing.data) return errorResponse("db_error", existing.error?.message ?? "Could not resolve suggestion run", 500);
     run = existing.data;
@@ -6062,6 +6107,7 @@ Deno.serve(async (req: Request) => {
     }
     const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
     const resumableExpansionFailure = run.status === "failed" && run.error_code === "failed_expansion" && expansionResumeState(run) !== null;
+    const resumableSemanticRepairFailure = isRetryableSemanticRepairFailure(run);
     if (stale) {
       if (await reclaimExpiredSuggestionRun(db, run)) {
         const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
@@ -6074,7 +6120,10 @@ Deno.serve(async (req: Request) => {
         }
         run = authoritative;
       }
-    } else if (resumableExpansionFailure) {
+    } else if (resumableExpansionFailure || resumableSemanticRepairFailure) {
+      const recoveredDiagnostics = resumableSemanticRepairFailure
+        ? { ...(run.diagnostics ?? {}), semanticRecoveryAttempts: Number(run.diagnostics?.semanticRecoveryAttempts ?? 0) + 1, stage: "semantic_repair_recovery_pending" }
+        : run.diagnostics;
       const reclaimed = await db.from("outline_suggestion_runs").update({
         status: "pending",
         error_code: null,
@@ -6082,6 +6131,7 @@ Deno.serve(async (req: Request) => {
         completed_at: null,
         lease_owner: null,
         lease_expires_at: null,
+        ...(recoveredDiagnostics ? { diagnostics: recoveredDiagnostics } : {}),
         attempt_count: (run.attempt_count ?? 0) + 1,
       }).eq("id", run.id).eq("status", "failed");
       if (!reclaimed.error) run.status = "pending";
