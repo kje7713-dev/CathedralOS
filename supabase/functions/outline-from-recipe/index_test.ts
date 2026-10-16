@@ -2866,6 +2866,14 @@ Deno.test("semantic checkpoint updates local diagnostics before persistence", as
   assertStringIncludes(source, "await updateRun({ diagnostics: checkpointDiagnostics });");
 });
 
+Deno.test("semantic checkpoint replay starts no lease heartbeat", async () => {
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  const replay = source.indexOf("await isSettledSemanticRepairCheckpoint");
+  const heartbeat = source.indexOf("const leaseHeartbeat = setInterval");
+  assertEquals(replay >= 0, true);
+  assertEquals(heartbeat > replay, true);
+});
+
 Deno.test("semantic checkpoint replay requires a settled provider attempt", async () => {
   const db = {
     from: (_table: string) => ({

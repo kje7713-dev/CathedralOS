@@ -4806,12 +4806,6 @@ export async function runSuggestionJob(
       const promptCacheKey = `cath:outline:${projectIdentity}:${provenance.sourceRecipeHash}:${stageFamily}:pcv2:promptv4`;
       const promptCacheKeyHash = await sha256Hex(promptCacheKey);
       await touchLease();
-      // Provider calls can exceed the three-minute worker lease, especially
-      // for worksheet enrichment. Renew while the call is in flight so the
-      // lease cannot expire and reclaim a healthy provider attempt.
-      const leaseHeartbeat = setInterval(() => {
-        void touchLease();
-      }, 30_000);
       const semanticRepairCheckpoint = action === "outline-semantic-repair-batch" &&
         diagnostics.semanticRepairProviderCheckpoint &&
         typeof diagnostics.semanticRepairProviderCheckpoint === "object"
@@ -4828,6 +4822,12 @@ export async function runSuggestionJob(
           finishReason: typeof semanticRepairCheckpoint.finishReason === "string" ? semanticRepairCheckpoint.finishReason : undefined,
         };
       }
+      // Provider calls can exceed the three-minute worker lease, especially
+      // for worksheet enrichment. Start the heartbeat only for a live provider
+      // dispatch; checkpoint replay returns above and needs no heartbeat.
+      const leaseHeartbeat = setInterval(() => {
+        void touchLease();
+      }, 30_000);
       let result: any;
       try {
         result = await billableLLM({
