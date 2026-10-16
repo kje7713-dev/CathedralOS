@@ -35,6 +35,7 @@ Deno.test("outline suggestion polling contract preserves structured failures and
 import {
   buildAllocationPrompt,
   buildExpansionPrompt,
+  buildStateChangeLedger,
   outlineLogicalStageFamily,
   buildPrompt,
   buildSuggestionResponseSchema,
@@ -84,9 +85,11 @@ import {
   validateStoryArcSemantics,
   validateArcSemanticObligations,
   validateGroundedArcEvidence,
+  validateGroundedDramaticRedundancies,
   validatePostRepairBeatCoverage,
   validateRequiredStoryArcFunctions,
   repairRequiredStoryArcFunctions,
+  repairStoryArcSemanticObligations,
   repairStoryArcMacroStructure,
   arcRoleContract,
   buildExpansionResponseSchema,
@@ -1336,6 +1339,29 @@ Deno.test("beat-local expansion rejects additions assigned to another beat", asy
   }
   assertEquals((failure as NovelScalePlanningError).code, "failed_expansion");
   assertEquals((failure as Error).message.includes("validation"), true);
+});
+
+Deno.test("expansion receives a whole-outline state-change ledger", () => {
+  const current: any[] = [{
+    title: "The First Cost", storyArcBeatID: "beat-1", dramaticFunction: "consequence",
+    resultingChange: "The alliance loses its safe route.", terminalState: "The survivors must cross the flooded district.",
+    summary: "The route is lost.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "They move on",
+  }];
+  const ledger = buildStateChangeLedger(current as any, [{
+    storyArcBeatID: "beat-0", dramaticFunction: "setup", resultingChange: "The threat is identified.",
+    terminalState: "The alliance prepares to move.", summary: "The threat is known.", container: "scene",
+  }] as any);
+  assertEquals(ledger, [
+    { sectionIndex: 0, beatID: "beat-0", title: "", dramaticEvent: "The threat is known.", resultingChange: "The threat is identified.", terminalState: "The alliance prepares to move." },
+    { sectionIndex: 1, beatID: "beat-1", title: "The First Cost", dramaticEvent: "The route is lost.", resultingChange: "The alliance loses its safe route.", terminalState: "The survivors must cross the flooded district." },
+  ]);
+  const prompt = buildExpansionPrompt({ ...sparseRequest, existingSections: [{
+    storyArcBeatID: "beat-0", resultingChange: "The threat is identified.", terminalState: "The alliance prepares to move.", container: "scene",
+  }] } as any, current as any);
+  assertEquals(prompt.system.includes("whole-outline state-change ledger"), true);
+  assertEquals(prompt.system.includes("causal predecessor/successor compatibility"), true);
+  assertEquals(prompt.user.includes("stateChangeLedger"), true);
+  assertEquals(prompt.user.includes("The alliance loses its safe route."), true);
 });
 
 Deno.test("beat-local expansion prompt carries the target beat contract", () => {
@@ -2716,6 +2742,104 @@ function assertOpenAIStrictSchema(schema: any, path = "schema"): void {
   }
 }
 
+Deno.test("dramatic redundancy grounding requires exact quotes from both ledger sections", () => {
+  const suggestions: any[] = [
+    { dramaticEvent: "The gate closes.", resultingChange: "The route is lost.", terminalState: "They must take the flooded road." },
+    { dramaticEvent: "The second gate closes.", resultingChange: "The route is lost again.", terminalState: "They must take the flooded road." },
+  ];
+  const valid = validateGroundedDramaticRedundancies([{
+    laterSectionIndex: 1, comparisonSectionIndex: 0, laterField: "resultingChange",
+    laterQuote: "The route is lost again.", comparisonField: "resultingChange",
+    comparisonQuote: "The route is lost.", reason: "Both sections close the same route."
+  }], suggestions);
+  assertEquals(valid.length, 1);
+  assertEquals(validateGroundedDramaticRedundancies([{
+    laterSectionIndex: 1, comparisonSectionIndex: 0, laterField: "resultingChange",
+    laterQuote: "paraphrased route loss", comparisonField: "resultingChange",
+    comparisonQuote: "The route is lost.", reason: "Not grounded."
+  }], suggestions), []);
+});
+
+Deno.test("semantic verification schema and input expose one per-section scene-function ledger", () => {
+  const template: any = { name: "Three-Act", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  const suggestions: any[] = [{ title: "The Gate", summary: "A gate closes.", dramaticEvent: "A gate closes.", resultingChange: "The route is lost.", terminalState: "The survivors reroute.", storyArcBeatID: "b" }];
+  const input: any = semanticVerificationInput(suggestions, template);
+  assertEquals(input.sceneFunctionLedger, [{ sectionIndex: 0, beatID: "b", title: "The Gate", dramaticEvent: "A gate closes.", resultingChange: "The route is lost.", terminalState: "The survivors reroute." }]);
+});
+
+Deno.test("semantic verifier prompt protects legitimate progression and hard-failure priority", async () => {
+  const template: any = { name: "Custom", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  let verifierInstruction = "";
+  const verifierCall = (async (system: string) => {
+    verifierInstruction = system;
+    return { content: JSON.stringify({ arcWideObligations: [], beats: [], dramaticRedundancies: [] }), creditCostCharged: 0, remainingCredits: 1 };
+  }) as any;
+  await verifyStoryArcSemantics([{ ...semanticSection("b", "A Boundary", "Mira sets a boundary.", "setup") }] as any, template, verifierCall);
+  assertStringIncludes(verifierInstruction, "Do not flag sections merely because they revisit the same relationship");
+  assertStringIncludes(verifierInstruction, "new consequence, cost, reversal, decision, information change");
+  assertStringIncludes(verifierInstruction, "if the reader fully remembers the earlier state change");
+  assertStringIncludes((await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts")), "Hard Story Arc/intimacy failures take priority");
+});
+
+Deno.test("semantic verifier returns only server-grounded dramatic redundancies", async () => {
+  const template: any = { name: "Custom", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  const suggestions: any[] = [
+    { ...semanticSection("b", "First Closure", "The route closes.", "setup"), resultingChange: "The route is lost." },
+    { ...semanticSection("b", "Second Closure", "The second route closes.", "setup"), resultingChange: "The route is lost again." },
+  ];
+  const result = await verifyStoryArcSemantics(suggestions as any, template, async () => ({
+    content: JSON.stringify({
+      arcWideObligations: [],
+      beats: [],
+      dramaticRedundancies: [{
+        laterSectionIndex: 1, comparisonSectionIndex: 0, laterField: "resultingChange",
+        laterQuote: "The route is lost again.", comparisonField: "resultingChange",
+        comparisonQuote: "The route is lost.", reason: "The later section repeats the closure."
+      }, {
+        laterSectionIndex: 1, comparisonSectionIndex: 0, laterField: "resultingChange",
+        laterQuote: "not actually quoted", comparisonField: "resultingChange",
+        comparisonQuote: "The route is lost.", reason: "Ungrounded."
+      }],
+    }), creditCostCharged: 0, remainingCredits: 1,
+  }) as any);
+  assertEquals(result.dramaticRedundancies.length, 1);
+  assertEquals(result.unsatisfied, []);
+});
+
+Deno.test("redundancy repair input targets only the later section and includes its neighbors", async () => {
+  const template: any = { name: "Custom", beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  const suggestions: any[] = [
+    semanticSection("b", "Before", "The route is mapped.", "setup"),
+    semanticSection("b", "Earlier Closure", "The route closes.", "setup"),
+    semanticSection("b", "Later Closure", "The second route closes.", "setup"),
+    semanticSection("b", "After", "The survivors cross the district.", "setup"),
+  ];
+  let repairInput: any;
+  const repaired = await repairStoryArcSemanticObligations(
+    suggestions as any, template, [], async (_system: string, user: string) => {
+      repairInput = JSON.parse(user);
+      return { content: JSON.stringify({ replacements: [{
+        sectionIndex: 2, beatID: "b", section: {
+          ...suggestions[2], title: "A Different Cost", dramaticEvent: "The survivors abandon the route and lose their supplies.",
+          resultingChange: "The survivors surrender their supplies to preserve the crossing.",
+          terminalState: "The crossing remains open but the survivors are resource-poor.",
+        },
+      }] }), creditCostCharged: 0, remainingCredits: 1 };
+    }, [], undefined, [{
+      laterSectionIndex: 2, comparisonSectionIndex: 1, laterField: "resultingChange",
+      laterQuote: "The second route closes.", comparisonField: "resultingChange",
+      comparisonQuote: "The route closes.", reason: "Repeated closure."
+    }],
+  );
+  assertEquals(repairInput.dramaticRedundancies[0].laterSection.title, "Later Closure");
+  assertEquals(repairInput.dramaticRedundancies[0].comparisonSection.title, "Earlier Closure");
+  assertEquals(repairInput.dramaticRedundancies[0].immediatePredecessor.title, "Earlier Closure");
+  assertEquals(repairInput.dramaticRedundancies[0].immediateSuccessor.title, "After");
+  assertEquals(repaired[1].title, "Earlier Closure");
+  assertEquals(repaired[2].title, "A Different Cost");
+  assertEquals(repaired[3].title, "After");
+});
+
 Deno.test("semantic evidence schemas satisfy strict Structured Outputs for the 10-beat Romance / HEA arc", () => {
   const roles = [
     "ordinary_life", "meet_attraction", "resistance", "connection_deepens", "midpoint_intimacy",
@@ -3837,14 +3961,14 @@ Deno.test("PR #573 canonical repair: sufficiency fails closed when canonical rec
   assertEquals(repaired.unresolvedQuestions.length, 1);
 });
 
-Deno.test("expansion prompt stays bounded as global outline grows", () => {
+Deno.test("expansion prompt preserves one compact ledger entry per section", () => {
   const target = { beatID: "beat-1", beatLabel: "Opening", beatDescription: "Begin", projectedWords: 1200, currentSections: [{ id: "target", title: "Target", summary: "Current target", storyArcBeatID: "beat-1", container: "scene" }] };
   const sizes = [10, 50, 100].map((count) => {
     const current = Array.from({ length: count }, (_, i) => ({ id: `s-${i}`, title: `Section ${i}`, summary: `Summary ${i}`, storyArcBeatID: "beat-1", container: "scene" }));
     const prompt = buildExpansionPrompt(sparseRequest as any, current as any, { round: 1, projectedTokens: 1200, projectedWords: 300, desiredWords: [70000, 90000], remainingDeficitTokens: 1000, beat: target as any }, []);
     return JSON.stringify(prompt).length;
   });
-  assertEquals(sizes[2] <= sizes[0] * 1.5, true);
+  assertEquals(sizes[2] > sizes[0], true);
 });
 
 Deno.test("restored planning topology removes packet routing and keeps bounded stages", async () => {
@@ -4044,7 +4168,7 @@ function fakeWorkerBilling(requestedActions: string[], providerCalls = requested
 
 function semanticVerifierFixture(request: any): unknown {
   const input = JSON.parse(request.messages?.find((message: any) => message.role === "user")?.content ?? "{}");
-  return { beats: (input.beats ?? []).map((beat: any) => ({
+  return { dramaticRedundancies: [], beats: (input.beats ?? []).map((beat: any) => ({
     beatID: beat.beatID,
     obligations: (beat.obligations ?? []).map((obligation: any) => {
       const section = (beat.sections ?? [])[0];
@@ -5477,6 +5601,7 @@ Deno.test("ungrounded intimacy verifier evidence enters semantic repair instead 
           reason: "claimed milestone",
         }],
         beats: [],
+        dramaticRedundancies: [],
       }),
     }) as any,
     recipe,
