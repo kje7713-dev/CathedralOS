@@ -48,6 +48,7 @@ private struct AppRootView: View {
     let recoveryContext: PersistenceRecoveryContext?
 
     @State private var hasRunLaunchTasks = false
+    @State private var syncSplashTimedOut = false
 
     var body: some View {
         ZStack {
@@ -80,6 +81,13 @@ private struct AppRootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.45), value: showsLaunchSyncSplash)
+        .task(id: isSyncOperationActive) {
+            syncSplashTimedOut = false
+            guard isSyncOperationActive else { return }
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard !Task.isCancelled else { return }
+            syncSplashTimedOut = true
+        }
         .task {
             guard !hasRunLaunchTasks else { return }
             hasRunLaunchTasks = true
@@ -87,13 +95,17 @@ private struct AppRootView: View {
         }
     }
 
-    private var showsLaunchSyncSplash: Bool {
+    private var isSyncOperationActive: Bool {
         switch durabilityCoordinator.operationState {
         case .running(.appLaunch), .running(.signIn), .running(.restoreAll):
             return true
         default:
             return false
         }
+    }
+
+    private var showsLaunchSyncSplash: Bool {
+        isSyncOperationActive && !syncSplashTimedOut
     }
 
     private func performLaunchRecoveryTasks() async {
@@ -652,30 +664,37 @@ private struct RecoveryModeView: View {
 
 private struct SyncSplashView: View {
     var body: some View {
-        ZStack {
-            Image("StoryDonkeySplash")
-                .resizable()
-                .scaledToFill()
-                .ignoresSafeArea()
+        GeometryReader { proxy in
+            ZStack {
+                // Keep the active app visible behind the sync state instead of
+                // replacing it with a full-screen cropped landscape image.
+                Color.black.opacity(0.28)
+                    .ignoresSafeArea()
 
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.62)],
-                startPoint: .center,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+                VStack(spacing: CathedralTheme.Spacing.sm) {
+                    Image("StoryDonkeySplash")
+                        .resizable()
+                        .scaledToFit()
+                        // Give the image a real bounded canvas. `maxWidth` and
+                        // `maxHeight` alone still allow the flexible image to
+                        // claim the available screen in this overlay.
+                        .frame(
+                            width: min(proxy.size.width - 64, 320),
+                            height: min(proxy.size.height * 0.42, 360)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
 
-            VStack(spacing: CathedralTheme.Spacing.sm) {
-                Spacer()
-                ProgressView()
-                    .tint(.white)
-                Text("Syncing your stories…")
-                    .font(CathedralTheme.Typography.body(16, weight: .semibold))
-                    .foregroundStyle(.white)
+                    ProgressView()
+                        .tint(.white)
+                    Text("Syncing your stories…")
+                        .font(CathedralTheme.Typography.body(16, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .padding(CathedralTheme.Spacing.lg)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .padding(CathedralTheme.Spacing.lg)
             }
-            .padding(.bottom, CathedralTheme.Spacing.xl)
         }
-        .background(Color.black)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Syncing your stories")
     }
