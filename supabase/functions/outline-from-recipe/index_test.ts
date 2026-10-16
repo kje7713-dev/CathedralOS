@@ -5645,3 +5645,39 @@ Deno.test("novel scale uses the preferred 80,000-word floor and rejects tiny new
   assertEquals(true, true);
   assertEquals(needsNovelExpansion(Array.from({ length: 54 }, () => ({ container: "scene" }))), true);
 });
+
+Deno.test("semantic verifier canonicalizes an exact quote mislabeled to another allowed field", async () => {
+  const template: any = {
+    name: "Custom",
+    relationshipFocus: "none",
+    intimacyMilestoneRoles: [],
+    beats: [{ id: "b", role: "setup", label: "Setup", description: "Make the attraction undeniable." }],
+  };
+  const suggestions: any[] = [{
+    storyArcBeatID: "b",
+    dramaticEvent: "They enter the monitored ballroom.",
+    resultingChange: "Their attraction becomes undeniable under observation.",
+    terminalState: "The resort can now exploit the visible change.",
+  }];
+  const result = await verifyStoryArcSemantics(suggestions as any, template, async () => ({
+    content: JSON.stringify({
+      arcWideObligations: [],
+      beats: [{
+        beatID: "b",
+        obligations: [{
+          obligationID: "authored_beat_requirement",
+          satisfied: true,
+          sectionIndex: 0,
+          field: "dramaticEvent",
+          quote: "Their attraction becomes undeniable under observation.",
+          reason: "The authored requirement is satisfied.",
+        }],
+      }],
+      dramaticRedundancies: [],
+    }),
+    creditCostCharged: 0,
+    remainingCredits: 1,
+  }) as any);
+  assertEquals(result.unsatisfied, []);
+  assertEquals(result.beats[0].obligations[0].field, "resultingChange");
+});
