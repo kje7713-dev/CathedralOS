@@ -83,6 +83,10 @@ struct CompletedSuggestionRun {
     let idempotencyKey: String
     let modelID: String?
     let reasoningEffort: String?
+    /// True when the server saved billable suggestions but a later validation
+    /// stage failed. The user may review/accept the saved work without a new
+    /// generation charge.
+    let isRecoverableDraft: Bool
 }
 
 struct SuggestionRunFailure: Equatable {
@@ -877,6 +881,16 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// idempotency identity once so the backend can resume its checkpoint.
     /// The backend records semanticRecoveryAttempts, preventing an endless
     /// POST loop if the recovery itself fails.
+    /// A paid run that failed after persisting suggestions still owns usable
+    /// customer work. Surface it for review instead of discarding it with the
+    /// terminal error. This is deliberately separate from checkpoint replay:
+    /// no provider call or new charge is made by this path.
+    static func hasPaidSavedSuggestionWork(_ job: OutlineSuggestionJob) -> Bool {
+        job.status == "failed" &&
+            (job.creditCostCharged ?? 0) > 0 &&
+            !(job.suggestions ?? []).isEmpty
+    }
+
     static func shouldRecoverPaidSuggestionCheckpoint(_ job: OutlineSuggestionJob) -> Bool {
         guard job.status == "failed",
               job.errorCode == "server_error",
@@ -1224,7 +1238,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                         result: result,
                         idempotencyKey: metadata.idempotencyKey,
                         modelID: metadata.request.modelID,
-                        reasoningEffort: metadata.request.reasoningEffort
+                        reasoningEffort: metadata.request.reasoningEffort,
+                        isRecoverableDraft: false
                     )
                     suggestionRunRevision &+= 1
                     suggestionPollingTasks[metadata.projectID] = nil
@@ -1238,6 +1253,28 @@ final class DataDurabilityCoordinator: ObservableObject {
                         activeSuggestionRuns[metadata.projectID] = metadata
                         persistSuggestionRun(metadata)
                         continue
+                    }
+                    if Self.hasPaidSavedSuggestionWork(job) {
+                        let result = OutlineSuggestionResult(
+                            suggestions: job.suggestions ?? [],
+                            warnings: job.warnings ?? [],
+                            creditCostCharged: job.creditCostCharged,
+                            remainingCredits: job.remainingCredits,
+                            sourceRecipe: job.sourceRecipe ?? metadata.request.recipe
+                        )
+                        retainCompletedSuggestionMetadata(metadata)
+                        activeSuggestionRuns[metadata.projectID] = nil
+                        completedSuggestionRun = CompletedSuggestionRun(
+                            projectID: metadata.projectID,
+                            result: result,
+                            idempotencyKey: metadata.idempotencyKey,
+                            modelID: metadata.request.modelID,
+                            reasoningEffort: metadata.request.reasoningEffort,
+                            isRecoverableDraft: true
+                        )
+                        suggestionRunRevision &+= 1
+                        suggestionPollingTasks[metadata.projectID] = nil
+                        return
                     }
                     let failure = OutlineSuggestionService.errorForFailedJob(errorCode: job.errorCode, message: job.error)
                     failSuggestionRun(metadata.projectID, message: failure.localizedDescription)

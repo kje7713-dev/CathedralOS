@@ -156,6 +156,25 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             leaseExpiresAt: failed.leaseExpiresAt
         )
         XCTAssertFalse(DataDurabilityCoordinator.shouldRecoverPaidSuggestionCheckpoint(unrelatedPaidFailure))
+
+        let semanticReverificationFailure = OutlineSuggestionJob(
+            runID: failed.runID,
+            status: "failed",
+            suggestions: failed.suggestions,
+            warnings: failed.warnings,
+            error: "story_arc_semantic_unresolved",
+            errorCode: "story_arc_semantic_unresolved",
+            sourceRecipe: failed.sourceRecipe,
+            creditCostCharged: failed.creditCostCharged,
+            remainingCredits: failed.remainingCredits,
+            diagnostics: nil,
+            planningState: ["nextAction": .string("semantic-reverification")],
+            attemptCount: failed.attemptCount,
+            updatedAt: failed.updatedAt,
+            leaseExpiresAt: failed.leaseExpiresAt
+        )
+        XCTAssertTrue(DataDurabilityCoordinator.hasPaidSavedSuggestionWork(semanticReverificationFailure))
+        XCTAssertFalse(DataDurabilityCoordinator.hasPaidSavedSuggestionWork(unpaid))
     }
 
     func testSuggestionStatusPollingHasARealSuccessInterval() {

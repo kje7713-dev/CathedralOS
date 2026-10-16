@@ -690,12 +690,15 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
            ),
            currentKey == completed.idempotencyKey,
            let result = durabilityCoordinator.consumeCompletedSuggestion(for: project.id) {
+            let isRecoverableDraft = completed.isRecoverableDraft
             suggestionsLoading = false
             suggestions = result.suggestions
             suggestionSourceRecipe = result.sourceRecipe
             recoverableSuggestions = result
-            var feedback = "Suggestions generated. Charged \(String(format: "%.2f", result.creditCostCharged ?? 0)) credits."
-            if let remaining = result.remainingCredits {
+            var feedback = isRecoverableDraft
+                ? "Your paid suggestions were saved even though the final check failed. Review and accept them below; no new generation charge was made."
+                : "Suggestions generated. Charged \(String(format: "%.2f", result.creditCostCharged ?? 0)) credits."
+            if let remaining = result.remainingCredits, !isRecoverableDraft {
                 feedback += " Remaining balance: \(String(format: "%.2f", remaining)) credits."
             }
             if !result.warnings.isEmpty {
@@ -825,7 +828,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 projectID: projectID,
                 idempotencyKey: request.idempotencyKey
             ),
-            job.status == "completed",
+            (job.status == "completed" || DataDurabilityCoordinator.hasPaidSavedSuggestionWork(job)),
             let suggestions = job.suggestions, !suggestions.isEmpty,
             let sourceRecipe = job.sourceRecipe else {
                 recoverableSuggestions = nil
