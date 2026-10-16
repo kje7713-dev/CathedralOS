@@ -38,6 +38,7 @@ import {
   buildExpansionPrompt,
   outlineLogicalStageFamily,
   buildPrompt,
+  assertDistinctOutlineTitles,
   buildSuggestionResponseSchema,
   buildObligationRepairPrompt,
   mergeObligationRepairOperations,
@@ -1217,6 +1218,8 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
     ["beat-2", { minSections: 1, rationale: "escalation" }],
   ])).system;
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
+  assertEquals(outlinePrompt.includes("Recipe realization priority"), true);
+  assertEquals(outlinePrompt.includes("governing creative brief"), true);
   assertEquals(outlinePrompt.includes("Novel-ready section titles"), true);
   assertEquals(outlinePrompt.includes("Do not restate or lightly rephrase"), true);
   assertEquals(outlinePrompt.includes("evocative fiction headings, not outline summaries"), true);
@@ -1238,6 +1241,8 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
     terminalBeat: "The choice is made", storyArcBeatID: "beat-1",
   }]);
   assertEquals(expansion.system.includes("Add distinct events, consequences"), true);
+  assertEquals(expansion.system.includes("used-event ledger"), true);
+  assertEquals(expansion.system.includes("advance the recipe's authored premise"), true);
   assertEquals(expansion.system.includes("Do not inflate containers"), true);
   assertEquals(expansion.system.includes("ONLY ADDITIONAL"), true);
   const original = [{ title: "Setup", summary: "A setup", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Choice", storyArcBeatID: "beat-1" }];
@@ -1268,6 +1273,15 @@ Deno.test("semantic disagreement is advisory: a late apparent conflict still com
     "The Freeze Order",
     "Wei Jian and Volkov Stand Down",
   ]);
+});
+
+Deno.test("outline rejects repeated titles across Story Arc beats", () => {
+  const section = (beat: string) => ({
+    title: "The Archive Handoff", summary: "A distinct handoff.", container: "scene",
+    pov: "thirdPersonLimited", terminalBeat: "The handoff ends", storyArcBeatID: beat,
+  });
+  assertThrows(() => assertDistinctOutlineTitles([section("beat-1"), section("beat-2")] as any), Error, "duplicate outline title across sections");
+  assertDistinctOutlineTitles([section("beat-1"), { ...section("beat-2"), title: "The Cooling Annex" }] as any);
 });
 
 Deno.test("malformed outline output remains a structural failure", () => {

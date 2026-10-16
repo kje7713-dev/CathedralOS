@@ -2396,7 +2396,7 @@ export function buildExpansionPrompt(
     ? `This is beat-local expansion for Story Arc beat ${beatContext.beatID}${beatContext.beatLabel ? ` (${beatContext.beatLabel})` : ""}. Develop only this beat; every returned section must use storyArcBeatID ${beatContext.beatID}. The beat currently contains approximately ${Math.round(beatContext.projectedWords).toLocaleString()} projected words. Its description is: ${beatContext.beatDescription ?? "(not supplied)"}. ${semanticContract}`
     : "Expand across the supplied outline while preserving each section's Story Arc beat.";
   return {
-    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
+    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. The current sections and the supplied recipe together form a used-event ledger: do not replay an existing title, revelation, confrontation, relationship turn, solution, or resulting state under another Story Arc beat. Every addition must advance the recipe's authored premise, character/relationship material, tone, and ending intent when applicable—not merely increase word-count. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.`,
@@ -2433,6 +2433,7 @@ export function validateExpansionAdditions(
   const originalTitles = new Set(original.map((s) => s.title));
   const additions: ExpansionAddition[] = [];
   const fingerprints = new Set(original.map((s) => `${s.title}|${s.summary}|${s.storyArcBeatID}`));
+  const titles = new Set(original.map((s) => s.title.trim().replace(/\s+/g, " ").toLocaleLowerCase()));
   for (const raw of parsed.suggestions) {
     const { insertAfterTitle } = raw ?? {};
     const validated = validateSuggestions({ suggestions: [raw] }, beatIds, undefined, obligations, template).suggestions[0];
@@ -2461,6 +2462,9 @@ export function validateExpansionAdditions(
     const fingerprint = `${validated.title}|${validated.summary}|${validated.storyArcBeatID}`;
     if (fingerprints.has(fingerprint)) throw new Error("expansion introduced a duplicate section contract");
     fingerprints.add(fingerprint);
+    const titleKey = validated.title.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+    if (titles.has(titleKey)) throw new Error(`expansion introduced a duplicate outline title: ${validated.title}`);
+    titles.add(titleKey);
     additions.push({ ...validated, insertAfterTitle: resolvedInsertAfterTitle });
   }
   return additions;
@@ -2631,6 +2635,9 @@ Choose a container for the scale of one dramatic unit, not to fake novel length:
 For a new novel, use only scene, developedScene, setPiece, sceneSequence, or chapter as generation-bearing leaves. Do not create moment, vignette, microScene, beat, shortStory, or episode leaves. Do not split one continuous dramatic objective into several short sections merely because each tactic can be named as its own event: setup → attempt → resistance → changed tactic → consequence usually belongs in one developedScene. A brief final image, kiss, gesture, or emotional beat should normally close the preceding substantive scene rather than become an isolated tiny novel section. Favor more developed story, never padding; preserve distinct state change, no duplicate revelations or resolutions, and no filler sections.
 The expected ranges are literary targets; runtime/provider headroom is not a desired length.
 
+## Recipe realization priority
+The recipe is the governing creative brief, not metadata to distribute as section tags. Required recipe obligations outrank generic outline habits, filler, and even the desire for evenly balanced Story Arc coverage. Materially dramatize the premise, selected characters, relationships, story spark, themes, setting, tone/audience guidance, and ending intent wherever the recipe supplies them. A section may carry a recipe ID only when its Section Contract actually advances that requirement; never tag a section merely to make coverage counts pass. Before finalizing, audit the whole outline against every required obligation and redesign weak or generic sections until the recipe visibly drives the plot, escalation, relationship movement, and payoff.
+
 ## Recipe obligations
 The JSON planning context contains the authoritative obligations exactly once.
 
@@ -2728,6 +2735,24 @@ export class AllocationRetryRequired extends Error {
 
 export function suggestionContractFingerprint(suggestion: Suggestion): string {
   return `${suggestion.title}|${suggestion.summary}|${suggestion.storyArcBeatID}`;
+}
+
+/**
+ * A title is not the whole dramatic contract, but repeating an exact title
+ * across Story Arc beats is a reliable hard signal that the planner replayed
+ * an event under a new beat. Keep this separate from repair validation, where
+ * duplicate titles are temporarily allowed while a stable index is replaced.
+ */
+export function assertDistinctOutlineTitles(suggestions: Suggestion[]): void {
+  const seen = new Map<string, number>();
+  suggestions.forEach((suggestion, index) => {
+    const key = suggestion.title.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+    const prior = seen.get(key);
+    if (prior !== undefined) {
+      throw new Error(`duplicate outline title across sections: ${suggestion.title} (sections ${prior + 1} and ${index + 1})`);
+    }
+    seen.set(key, index);
+  });
 }
 
 export function mergeSuggestionsByBeatOrder(
@@ -2850,6 +2875,9 @@ export function buildAllocationPrompt(
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
 This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections.
+
+## Recipe realization priority
+Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
@@ -4945,6 +4973,9 @@ export async function runSuggestionJob(
       initialSuggestions: Suggestion[],
       initialWarnings: string[],
     ) => {
+      // A repeated title across beats is a hard replay signal. Reject it
+      // before optional expansion can amplify the bad outline.
+      assertDistinctOutlineTitles(initialSuggestions);
       let completedSuggestions = initialSuggestions;
       let completionWarnings = initialWarnings;
       const initialScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
