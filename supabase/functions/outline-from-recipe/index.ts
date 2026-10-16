@@ -3765,7 +3765,22 @@ export async function repairStoryArcSemanticObligations(
     const canonicalBeatID = result[index].storyArcBeatID;
     if (!affected.has(canonicalBeatID)) continue;
     const candidate = { ...operation.section, storyArcBeatID: canonicalBeatID, recipeRequirementIDs: result[index].recipeRequirementIDs ?? [] };
-    const validated = validateSuggestions({ suggestions: [candidate] }, new Set([canonicalBeatID]), undefined, recipeObligations, { ...template, beats: template.beats.filter((beat) => beat.id === canonicalBeatID) }).suggestions;
+    let validated: Suggestion[];
+    try {
+      validated = validateSuggestions(
+        { suggestions: [candidate] },
+        new Set([canonicalBeatID]),
+        undefined,
+        recipeObligations,
+        { ...template, beats: template.beats.filter((beat) => beat.id === canonicalBeatID) },
+      ).suggestions;
+    } catch {
+      // Replacement-local schema/contract failures are treated like any other
+      // rejected operation: preserve the checkpoint and let reverification
+      // decide whether the unchanged outline remains acceptable. Errors from
+      // the surrounding repair lifecycle are intentionally not caught here.
+      continue;
+    }
     if (validated.length !== 1) continue;
     result[index] = validated[0];
     replaced.add(index);
@@ -4776,6 +4791,20 @@ export async function runSuggestionJob(
       const leaseHeartbeat = setInterval(() => {
         void touchLease();
       }, 30_000);
+      const semanticRepairCheckpoint = action === "outline-semantic-repair-batch" &&
+        diagnostics.semanticRepairProviderCheckpoint &&
+        typeof diagnostics.semanticRepairProviderCheckpoint === "object"
+        ? diagnostics.semanticRepairProviderCheckpoint as Record<string, unknown>
+        : null;
+      if (semanticRepairCheckpoint && typeof semanticRepairCheckpoint.content === "string") {
+        diagnostics = { ...diagnostics, stage: "semantic_repair_checkpoint_replay" };
+        return {
+          content: semanticRepairCheckpoint.content,
+          creditCostCharged: 0,
+          remainingCredits: Number(semanticRepairCheckpoint.remainingCredits ?? 0),
+          finishReason: typeof semanticRepairCheckpoint.finishReason === "string" ? semanticRepairCheckpoint.finishReason : undefined,
+        };
+      }
       let result: any;
       try {
         result = await billableLLM({
@@ -4808,6 +4837,23 @@ export async function runSuggestionJob(
           if (validateResponse) await validateResponse(providerResult.content, providerResult.finishReason);
           return providerResult.content;
         },
+        beforeSettlement: action === "outline-semantic-repair-batch"
+          ? async (content, providerResult) => {
+            await updateRun({
+              diagnostics: {
+                ...diagnostics,
+                stage: "semantic_repair_checkpointed",
+                semanticRepairProviderCheckpoint: {
+                  action,
+                  content,
+                  finishReason: providerResult.finishReason ?? null,
+                  remainingCredits: null,
+                  checkpointedAt: new Date().toISOString(),
+                },
+              },
+            });
+          }
+          : undefined,
         }, { adminClient: db, provider, creditStore });
       } finally {
         clearInterval(leaseHeartbeat);
@@ -5080,7 +5126,8 @@ export async function runSuggestionJob(
         Array.isArray(planningState.semanticRepairRedundancies) ? planningState.semanticRepairRedundancies as DramaticRedundancy[] : [],
       );
       planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification" };
-      diagnostics = { ...diagnostics, stage: "semantic_reverification_pending" };
+      const { semanticRepairProviderCheckpoint: _semanticRepairProviderCheckpoint, ...diagnosticsAfterRepair } = diagnostics;
+      diagnostics = { ...diagnosticsAfterRepair, stage: "semantic_reverification_pending" };
       await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
       throw new SuggestionWorkerYield();
     }

@@ -2874,6 +2874,22 @@ Deno.test("malformed semantic repair targets preserve the checkpoint instead of 
   assertEquals(repaired, [source]);
 });
 
+Deno.test("semantic repair skips replacement validation exceptions and reverifies the checkpoint", async () => {
+  const template: any = { name: "Custom", beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  const source = semanticSection("b", "Original", "The original event.", "setup");
+  const repaired = await repairStoryArcSemanticObligations(
+    [source] as any,
+    template,
+    [{ beatID: "b", obligationID: "authored_beat_requirement", reason: "repair needed" }],
+    async () => ({ content: JSON.stringify({ replacements: [{
+      sectionIndex: 0,
+      beatID: "b",
+      section: { ...source, title: "Malformed", dramaticFunction: "not-a-contract-function" },
+    }] }), creditCostCharged: 0, remainingCredits: 1 }) as any,
+  );
+  assertEquals(repaired, [source]);
+});
+
 Deno.test("semantic evidence schemas satisfy strict Structured Outputs for the 10-beat Romance / HEA arc", () => {
   const roles = [
     "ordinary_life", "meet_attraction", "resistance", "connection_deepens", "midpoint_intimacy",

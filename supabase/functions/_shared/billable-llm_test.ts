@@ -1617,3 +1617,47 @@ Deno.test("runBillableLLM: hard input ceiling allows 269999 and 270000, rejects 
   assertEquals(creditStore.chargeCalls.length, 0);
   assertEquals(admin.rpcCalls.length, 0);
 });
+
+Deno.test("outline settlement waits for the durable feature checkpoint", async () => {
+  const events: string[] = [];
+  const attempt = { id: "checkpoint-attempt", metadata: {} as Record<string, unknown> };
+  const admin = {
+    from: (table: string) => {
+      if (table !== "generation_provider_attempts") {
+        return { insert: (_row: unknown) => Promise.resolve({ data: null, error: null }) };
+      }
+      return {
+        insert: (_row: unknown) => ({
+          select: (_columns: string) => ({ single: () => Promise.resolve({ data: { id: attempt.id }, error: null }) }),
+        }),
+        update: (patch: Record<string, unknown>) => ({
+          eq: (_column: string, _value: unknown) => {
+            Object.assign(attempt, patch);
+            return Promise.resolve({ data: null, error: null });
+          },
+        }),
+      };
+    },
+    rpc: (name: string) => {
+      if (name === "get_outline_stage_totals") return Promise.resolve({ data: [{ raw_charge_credits: 0, settled_charge_credits: 0 }], error: null });
+      if (name === "begin_outline_provider_attempt") return Promise.resolve({ data: [{ attempt_id: attempt.id, attempt_key: "checkpoint:attempt:1", attempt_ordinal: 1 }], error: null });
+      if (name === "settle_outline_provider_attempt") {
+        events.push("settlement");
+        return Promise.resolve({ data: [{ settlement_status: "settled", usage_event_id: "usage", ledger_id: "ledger", remaining_credits: 10 }], error: null });
+      }
+      if (name === "reconcile_outline_provider_attempts") return Promise.resolve({ data: null, error: null });
+      throw new Error(`unexpected RPC ${name}`);
+    },
+  };
+  const request = makeRequest({
+    purpose: "outline-suggestion",
+    usageContext: { ...makeRequest().usageContext, featureRunID: "00000000-0000-0000-0000-0000000000cc", logicalStageKey: "checkpoint" },
+    beforeSettlement: async () => {
+      events.push("checkpoint");
+      attempt.metadata.checkpointed = true;
+    },
+  });
+  await runBillableLLM(request, { adminClient: admin, provider: { complete: () => Promise.resolve(makeLLMResponse()) }, creditStore: makeCreditStore() });
+  assertEquals(events, ["checkpoint", "settlement"]);
+  assertEquals(attempt.metadata.checkpointed, true);
+});
