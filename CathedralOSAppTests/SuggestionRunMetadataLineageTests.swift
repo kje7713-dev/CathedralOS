@@ -195,6 +195,23 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         XCTAssertTrue(message.contains("No additional generation charge was made"))
     }
 
+    func testPaidSavedSuggestionFeedbackExplainsSemanticFailure() {
+        let result = OutlineSuggestionResult(
+            suggestions: [],
+            warnings: [],
+            creditCostCharged: 15.21,
+            remainingCredits: 223.36,
+            sourceRecipe: makeRequest().recipe
+        )
+        let message = DataDurabilityCoordinator.paidSavedSuggestionFeedback(
+            result: result,
+            failureCode: "story_arc_semantic_unresolved"
+        )
+        XCTAssertTrue(message.contains("final Story Arc check"))
+        XCTAssertTrue(message.contains("story non-negotiable"))
+        XCTAssertTrue(message.contains("No additional generation charge"))
+    }
+
     func testSuggestionStatusPollingHasARealSuccessInterval() {
         // Protect the normal successful pending/running path from a hot loop
         // that previously generated roughly two requests per second.
