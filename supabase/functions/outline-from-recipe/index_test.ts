@@ -96,6 +96,9 @@ import {
   validateNovelLeafContainers,
   NOVEL_LEAF_CONTAINERS,
   NOVEL_GENERATION_CONTAINERS,
+  NOVEL_CHAPTER_MIN_SECTIONS,
+  NOVEL_MAX_CHAPTERS,
+  validateNovelChapterAllocation,
   intimacyRequirement,
   intimacyPlanningDirective,
   semanticVerificationInput,
@@ -1230,7 +1233,7 @@ Deno.test("outline section contract assigns canonical plot decisions to the plan
 Deno.test("novel planning exposes container semantics and projected-size expansion", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
-  assertEquals(allocationPrompt.includes("70,000-90,000 word"), true);
+  assertEquals(allocationPrompt.includes("at least 70,000 words"), true);
   assertEquals(allocationPrompt.includes("minimum number of NEW dramatic sections still required"), true);
   assertEquals(allocationPrompt.includes("floor, not a target or maximum"), true);
   assertEquals(source.includes("targetSections"), false);
@@ -1239,7 +1242,7 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(source.includes("assertPromptWithinBudget"), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
   assertEquals(source.includes("maxItems: MAX_PLANNED_SECTIONS"), true);
-  assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
+  assertEquals(source.includes("maxPlannedSectionsForFormat"), true);
   assertEquals(source.includes("collectAdvisoryOutlineQuality"), true);
   assertEquals(source.includes("outline failed Story Arc semantic validation"), false);
   assertEquals(source.includes("dramatic distinctness validation"), false);
@@ -5648,6 +5651,19 @@ Deno.test("fresh novel generation and expansion schemas allow chapters only", ()
   assertEquals(outlineSchema.properties.beats.properties["beat-1"].items.properties.container.enum, ["chapter"]);
   const expansionSchema = buildExpansionResponseSchema(undefined, "novel") as any;
   assertEquals(expansionSchema.properties.suggestions.items.properties.container.enum, ["chapter"]);
+});
+
+Deno.test("fresh novel allocation is capped at 75 chapters", () => {
+  assertEquals([NOVEL_CHAPTER_MIN_SECTIONS, NOVEL_MAX_CHAPTERS], [24, 75]);
+  const request = { requestedFormat: "novel", existingSections: [] } as any;
+  const valid = new Map([["beat-1", { minSections: 12, rationale: "opening" }], ["beat-2", { minSections: 12, rationale: "escalation" }]]);
+  validateNovelChapterAllocation(valid, request);
+  validateNovelChapterAllocation(new Map([["beat-1", { minSections: 25, rationale: "material-rich" }]]), request);
+  assertThrows(() => validateNovelChapterAllocation(new Map([["beat-1", { minSections: 23, rationale: "too-short" }]]), request), "24-75");
+  assertThrows(() => validateNovelChapterAllocation(new Map([["beat-1", { minSections: 76, rationale: "too-long" }]]), request), "24-75");
+  const prompt = buildAllocationPrompt({ ...sparseRequest, requestedFormat: "novel" } as any).system;
+  assertStringIncludes(prompt, "24-75 total new chapters");
+  assertStringIncludes(prompt, "upper ceiling");
 });
 
 Deno.test("novel scale uses the preferred 80,000-word floor and rejects tiny new leaves", () => {
