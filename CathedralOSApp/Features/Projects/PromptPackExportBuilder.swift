@@ -224,6 +224,7 @@ enum PromptPackExportBuilder {
             selectedRelationships:  relationships,
             selectedThemeQuestions: themeQuestions,
             selectedMotifs:         motifs,
+            storyNonNegotiables:    pack.storyNonNegotiables,
             promptPack:         .init(
                 id:                    pack.id,
                 name:                  pack.name,

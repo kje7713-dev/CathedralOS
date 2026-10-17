@@ -30,6 +30,8 @@ struct PromptPackExportPayload: Codable {
     let selectedRelationships: [RelationshipPayload]
     let selectedThemeQuestions: [ThemeQuestionPayload]
     let selectedMotifs: [MotifPayload]
+    /// User-authored requirements that must be materially realized by the outline.
+    let storyNonNegotiables: [String]
     let promptPack: PromptPackPayload
 
     // MARK: Memberwise initializer
@@ -45,6 +47,7 @@ struct PromptPackExportPayload: Codable {
         selectedRelationships: [RelationshipPayload] = [],
         selectedThemeQuestions: [ThemeQuestionPayload] = [],
         selectedMotifs: [MotifPayload] = [],
+        storyNonNegotiables: [String] = [],
         promptPack: PromptPackPayload
     ) {
         self.schema = schema
@@ -57,6 +60,7 @@ struct PromptPackExportPayload: Codable {
         self.selectedRelationships = selectedRelationships
         self.selectedThemeQuestions = selectedThemeQuestions
         self.selectedMotifs = selectedMotifs
+        self.storyNonNegotiables = storyNonNegotiables
         self.promptPack = promptPack
     }
 
@@ -64,7 +68,7 @@ struct PromptPackExportPayload: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case schema, version, project, setting, selectedCharacters
-        case selectedStorySpark, selectedAftertaste, selectedRelationships, selectedThemeQuestions, selectedMotifs, promptPack
+        case selectedStorySpark, selectedAftertaste, selectedRelationships, selectedThemeQuestions, selectedMotifs, storyNonNegotiables, promptPack
     }
 
     init(from decoder: Decoder) throws {
@@ -79,6 +83,7 @@ struct PromptPackExportPayload: Codable {
         selectedRelationships  = try c.decode([RelationshipPayload].self,   forKey: .selectedRelationships)
         selectedThemeQuestions = try c.decode([ThemeQuestionPayload].self,  forKey: .selectedThemeQuestions)
         selectedMotifs         = try c.decode([MotifPayload].self,          forKey: .selectedMotifs)
+        storyNonNegotiables    = try c.decodeIfPresent([String].self,       forKey: .storyNonNegotiables) ?? []
         promptPack         = try c.decode(PromptPackPayload.self,  forKey: .promptPack)
     }
 
@@ -97,6 +102,7 @@ struct PromptPackExportPayload: Codable {
         try c.encode(selectedRelationships,  forKey: .selectedRelationships)
         try c.encode(selectedThemeQuestions, forKey: .selectedThemeQuestions)
         try c.encode(selectedMotifs,         forKey: .selectedMotifs)
+        try c.encode(storyNonNegotiables,    forKey: .storyNonNegotiables)
         try c.encode(promptPack, forKey: .promptPack)
     }
 

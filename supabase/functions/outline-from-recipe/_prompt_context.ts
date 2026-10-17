@@ -82,6 +82,7 @@ export function compactRecipe(recipe: any): Record<string, unknown> {
     setting: recipe?.setting ? { included: recipe.setting.included ?? true, name: compactText(recipe.setting.name, 160), description: compactText(recipe.setting.description ?? recipe.setting.summary, 900) } : null,
     selectedCharacters: Array.isArray(recipe?.selectedCharacters) ? recipe.selectedCharacters.map(compactEntity) : [],
     selectedRelationships: Array.isArray(recipe?.selectedRelationships) ? recipe.selectedRelationships.map(compactEntity) : [],
+    storyNonNegotiables: Array.isArray(recipe?.storyNonNegotiables) ? recipe.storyNonNegotiables.map((item: unknown) => compactText(item, 1200)).filter(Boolean).slice(0, 50) : [],
     selectedThemeQuestions: Array.isArray(recipe?.selectedThemeQuestions) ? recipe.selectedThemeQuestions.map(compactEntity) : [],
     selectedMotifs: Array.isArray(recipe?.selectedMotifs) ? recipe.selectedMotifs.map(compactEntity) : [],
     selectedStorySpark: recipe?.selectedStorySpark ? compactStorySparkForPlanning(recipe.selectedStorySpark) : null,

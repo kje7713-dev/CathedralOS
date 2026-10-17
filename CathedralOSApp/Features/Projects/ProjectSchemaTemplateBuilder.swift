@@ -903,6 +903,7 @@ enum ProjectSchemaTemplateBuilder {
                 selectedAftertasteID: pp.selectedAftertasteID?.uuidString,
                 notes: pp.notes,
                 instructionBias: pp.instructionBias,
+                storyNonNegotiables: pp.storyNonNegotiables,
                 includeProjectSetting: pp.includeProjectSetting,
                 selectedRelationshipIDs: pp.selectedRelationshipIDs.map { $0.uuidString },
                 selectedThemeQuestionIDs: pp.selectedThemeQuestionIDs.map { $0.uuidString },

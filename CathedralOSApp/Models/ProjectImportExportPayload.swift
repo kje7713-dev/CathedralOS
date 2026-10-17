@@ -380,6 +380,7 @@ struct ProjectImportExportPayload: Codable {
         let selectedAftertasteID: String?
         let notes: String?
         let instructionBias: String?
+        let storyNonNegotiables: [String]?
         let includeProjectSetting: Bool
         let selectedRelationshipIDs: [String]
         let selectedThemeQuestionIDs: [String]

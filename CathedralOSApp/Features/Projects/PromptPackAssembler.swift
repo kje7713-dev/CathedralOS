@@ -189,6 +189,10 @@ enum PromptPackAssembler {
             sections.append(lines.joined(separator: "\n"))
         }
 
+        if !payload.storyNonNegotiables.isEmpty {
+            sections.append("## Story Non-Negotiables\n" + payload.storyNonNegotiables.map { "- \($0)" }.joined(separator: "\n"))
+        }
+
         // 7. Pack notes and instruction bias
         if !payload.promptPack.notes.isEmpty {
             sections.append("## Notes\n\(payload.promptPack.notes)")

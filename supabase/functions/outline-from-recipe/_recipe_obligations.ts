@@ -6,7 +6,8 @@ export type RecipeObligationClass =
   | "world_constraint"
   | "supporting_theme"
   | "supporting_motif"
-  | "ending_intent";
+  | "ending_intent"
+  | "story_non_negotiable";
 
 export interface RecipeObligation {
   id: string;
@@ -85,6 +86,12 @@ export function deriveRecipeObligations(recipe: Record<string, unknown>): Recipe
   }
 
   if (meaningful(recipe.selectedAftertaste)) add("ending_intent", `Resolve toward the selected aftertaste or ending residue: ${compact(recipe.selectedAftertaste)}`, "selectedAftertaste", true);
+
+  const nonNegotiables = Array.isArray(recipe.storyNonNegotiables) ? recipe.storyNonNegotiables : [];
+  nonNegotiables.forEach((item, index) => {
+    const statement = typeof item === "string" ? item : compact((item as Record<string, unknown>)?.requirement ?? item, 1200);
+    if (statement.trim()) add("story_non_negotiable", `Satisfy this user-authored story non-negotiable as an unmistakable event or outcome: ${statement}`, `storyNonNegotiables.${index}`, true);
+  });
 
   const themes = Array.isArray(recipe.selectedThemeQuestions) ? recipe.selectedThemeQuestions : [];
   for (const theme of themes) if (meaningful(theme)) add("supporting_theme", `Keep this theme question alive as supporting guidance, without turning it into a mandatory event: ${compact(theme)}`, "selectedThemeQuestions", false);
