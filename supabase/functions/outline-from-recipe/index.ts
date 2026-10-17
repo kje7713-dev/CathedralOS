@@ -540,6 +540,21 @@ export const NOVEL_LEAF_CONTAINERS = ["scene", "developedScene", "setPiece", "sc
 // Existing sections may retain their historical leaf containers, but fresh
 // novel generation and expansion must emit chapter-scale units only.
 export const NOVEL_GENERATION_CONTAINERS = ["chapter"] as const;
+export const NOVEL_CHAPTER_MIN_SECTIONS = 24;
+export const NOVEL_MAX_CHAPTERS = 75;
+
+export function validateNovelChapterAllocation(
+  allocation: Map<string, Allocation>,
+  req: Pick<OutlineFromRecipeRequest, "requestedFormat" | "existingSections">,
+): void {
+  if (requestedStoryMaterialFormat(req) !== "novel" || (req.existingSections?.length ?? 0) > 0) return;
+  const total = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
+  if (total < NOVEL_CHAPTER_MIN_SECTIONS || total > NOVEL_MAX_CHAPTERS) {
+    throw new Error(
+      `fresh novel chapter allocation must contain ${NOVEL_CHAPTER_MIN_SECTIONS}-${NOVEL_MAX_CHAPTERS} total chapters; received ${total}`,
+    );
+  }
+}
 
 export function validateNovelLeafContainers(
   suggestions: Array<{ container?: string | null }>,
@@ -651,6 +666,9 @@ export const NOVEL_PREFERRED_MIN_WORDS = 80000;
 const TOKENS_PER_WORD = 1.3;
 const NOVEL_MIN_PROJECTED_TOKENS = NOVEL_PREFERRED_MIN_WORDS * TOKENS_PER_WORD;
 const MAX_PLANNED_SECTIONS = 200;
+export function maxPlannedSectionsForFormat(format: StoryMaterialFormat): number {
+  return format === "novel" ? NOVEL_MAX_CHAPTERS : MAX_PLANNED_SECTIONS;
+}
 export const MAX_EXPANSION_ROUNDS = 3;
 
 const ALLOWED_CONTAINERS = new Set([
@@ -2151,6 +2169,7 @@ export interface ProgressiveExpansionOptions {
   priorDiagnostics?: ExpansionRoundDiagnostic[];
   qualityGate?: (suggestions: Suggestion[]) => boolean;
   beats?: Array<{ id: string; label?: string; description?: string }>;
+  sectionCap?: number;
   onBeat?: (
     round: number,
     nextBeatIndex: number,
@@ -2252,6 +2271,7 @@ export async function progressivelyExpandOutline(
   const diagnostics: ExpansionRoundDiagnostic[] = [...(options.priorDiagnostics ?? [])];
   const warnings: string[] = [];
   const startRound = Math.max(1, options.startRound ?? 1);
+  const sectionCap = options.sectionCap ?? MAX_PLANNED_SECTIONS;
   const shouldContinueDevelopment = (current: Suggestion[]) =>
     needsNovelExpansion(current, existingSections) || options.qualityGate?.(current) === true;
   for (let round = startRound; round <= MAX_EXPANSION_ROUNDS && shouldContinueDevelopment(suggestions); round++) {
@@ -2294,7 +2314,7 @@ export async function progressivelyExpandOutline(
           throw new ExpansionValidationError(`beat-local expansion returned a section for another beat; expected ${beatContext.beatID}`);
         }
         const merged = mergeExpansionAdditions(roundSuggestions, additions);
-        if (merged.length > MAX_PLANNED_SECTIONS) {
+        if (merged.length > sectionCap) {
           hitCap = true;
           break;
         }
@@ -2302,7 +2322,7 @@ export async function progressivelyExpandOutline(
         additionsReturned += additions.length;
         await options.onBeat?.(round, beatIndex + 1, roundSuggestions, diagnostics);
       }
-      const overCap = hitCap || roundSuggestions.length > MAX_PLANNED_SECTIONS;
+      const overCap = hitCap || roundSuggestions.length > sectionCap;
       const accepted = overCap ? suggestions : roundSuggestions;
       const projectedTokensAfter = evaluateNovelScale(accepted, existingSections).projectedTokens;
       const diagnostic: ExpansionRoundDiagnostic = {
@@ -2311,14 +2331,14 @@ export async function progressivelyExpandOutline(
         additionsReturned: overCap ? 0 : additionsReturned, sectionCountAfter: accepted.length,
         projectedTokensAfter, projectedWordsAfter: projectedTokensAfter / TOKENS_PER_WORD,
         remainingEstimatedDeficitTokens: evaluateNovelScale(accepted, existingSections).deficitTokens,
-        status: overCap || accepted.length >= MAX_PLANNED_SECTIONS ? "capped" : "completed",
-        ...(overCap ? { error: `global ${MAX_PLANNED_SECTIONS}-section safety cap reached` } : {}),
+        status: overCap || accepted.length >= sectionCap ? "capped" : "completed",
+        ...(overCap ? { error: `global ${sectionCap}-section safety cap reached` } : {}),
       };
       suggestions = accepted;
       diagnostics.push(diagnostic);
       await onRound?.(diagnostic, diagnostics, suggestions);
-      if (overCap || roundSuggestions.length >= MAX_PLANNED_SECTIONS) {
-        warnings.push(`Outline expansion stopped at the global ${MAX_PLANNED_SECTIONS}-section safety cap.`);
+      if (overCap || roundSuggestions.length >= sectionCap) {
+        warnings.push(`Outline expansion stopped at the global ${sectionCap}-section safety cap.`);
         break;
       }
       if (additionsReturned === 0) break;
@@ -2418,7 +2438,7 @@ export function buildExpansionPrompt(
     ? `This is beat-local expansion for Story Arc beat ${beatContext.beatID}${beatContext.beatLabel ? ` (${beatContext.beatLabel})` : ""}. Develop only this beat; every returned section must use storyArcBeatID ${beatContext.beatID}. The beat currently contains approximately ${Math.round(beatContext.projectedWords).toLocaleString()} projected words. Its description is: ${beatContext.beatDescription ?? "(not supplied)"}. ${semanticContract}`
     : "Expand across the supplied outline while preserving each section's Story Arc beat.";
   return {
-    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. The current sections and the supplied recipe together form a used-event ledger: do not replay an existing title, revelation, confrontation, relationship turn, solution, or resulting state under another Story Arc beat. Every addition must advance the recipe's authored premise, character/relationship material, tone, and ending intent when applicable—not merely increase word-count. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Every Story Non-Negotiable is a must-do acceptance criterion. Preserve and materially realize any unmet must-do before adding optional expansion; if a must-do contains a number, produce that many distinct realized events. Never attach a must-do ID to an unrelated section. For a novel, every addition must use container=chapter and target the existing chapter minimum of 3,000 planned tokens; do not return scene, developedScene, setPiece, or sceneSequence additions. For non-novel formats, preserve the applicable container semantics. These are literary planning ranges only, not provider ceilings. Do not inflate containers or relabel existing containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
+    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. The current sections and the supplied recipe together form a used-event ledger: do not replay an existing title, revelation, confrontation, relationship turn, solution, or resulting state under another Story Arc beat. Every addition must advance the recipe's authored premise, character/relationship material, tone, and ending intent when applicable—not merely increase word-count. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Every Story Non-Negotiable is a must-do acceptance criterion. Preserve and materially realize any unmet must-do before adding optional expansion; if a must-do contains a number, produce that many distinct realized events. Never attach a must-do ID to an unrelated section. For a novel, every addition must use container=chapter and target the existing chapter minimum of 3,000 planned tokens; do not return scene, developedScene, setPiece, or sceneSequence additions. Each added chapter must contain multiple connected movements, a meaningful state change, and a concrete terminal state. For non-novel formats, preserve the applicable container semantics. These are literary planning ranges only, not provider ceilings. Do not inflate containers or relabel existing containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.`,
@@ -2655,7 +2675,7 @@ Choose a container for the scale of one dramatic unit, not to fake novel length:
 - setPiece: a major confrontation, action, ceremony, revelation, or complex high-stakes event, 2,000-5,000
 - sceneSequence: several connected scenes, locations, or times pursuing one coherent objective, 3,000-7,000
 - chapter: a publishing unit containing multiple substantial movements that belong together, 3,000-8,000+
-For a new novel, every generation-bearing leaf must use the chapter container. Each generated section is a chapter-scale unit targeting the existing chapter minimum of 3,000 planned tokens. Do not use scene, developedScene, setPiece, or sceneSequence for fresh novel generation; those containers remain valid only for pre-existing sections or non-novel formats. Do not create moment, vignette, microScene, beat, shortStory, or episode leaves. Do not split one continuous dramatic objective into several short sections merely because each tactic can be named as its own event: setup → attempt → resistance → changed tactic → consequence usually belongs in one developedScene. A brief final image, kiss, gesture, or emotional beat should normally close the preceding substantive scene rather than become an isolated tiny novel section. Favor more developed story, never padding; preserve distinct state change, no duplicate revelations or resolutions, and no filler sections.
+For a new novel, every generation-bearing leaf must use the chapter container. Each generated section is a chapter-scale unit targeting the existing chapter minimum of 3,000 planned tokens. Do not use scene, developedScene, setPiece, or sceneSequence for fresh novel generation; those containers remain valid only for pre-existing sections or non-novel formats. Every novel chapter must contain multiple connected movements (setup, pressure or complication, a changed tactic or choice, and a concrete consequence), not one isolated beat expanded with adjectives. Do not create moment, vignette, microScene, beat, shortStory, or episode leaves. Do not split one continuous dramatic objective into several short sections merely because each tactic can be named as its own event: setup → attempt → resistance → changed tactic → consequence usually belongs in one developedScene. A brief final image, kiss, gesture, or emotional beat should normally close the preceding substantive scene rather than become an isolated tiny novel section. Favor more developed story, never padding; preserve distinct state change, no duplicate revelations or resolutions, and no filler sections.
 The expected ranges are literary targets; runtime/provider headroom is not a desired length.
 
 ## Recipe realization priority
@@ -2932,7 +2952,7 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, every allocated section must use the chapter container and its existing 3,000-token minimum; allocate fewer, fuller chapters rather than many small scenes.
+This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a substantial work of at least 70,000 words when sections generate near their expected literary ranges, with approximately 80,000 words as the preferred planning floor. This is a broad scale target, not an exact word count or an upper ceiling. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, every allocated section must use the chapter container and its existing 3,000-token minimum. Allocate ${NOVEL_CHAPTER_MIN_SECTIONS}-${NOVEL_MAX_CHAPTERS} total new chapters for a fresh novel, preserving at least one meaningful chapter for each arc movement and allowing additional chapters when the material warrants them; prefer fewer, fuller chapters over many small scenes, but do not compress a genuinely long story below the cap.
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
@@ -2991,7 +3011,7 @@ export async function planSectionAllocation(
 
   const call = async (correction: boolean): Promise<string> => {
     const callSystem = correction
-      ? `${system}\n\nThe previous allocation was invalid. Return a complete corrected allocation for every beat; never omit, duplicate, or invent a beat.`
+      ? `${system}\n\nThe previous allocation was invalid. Return a complete corrected allocation for every beat and obey the ${NOVEL_CHAPTER_MIN_SECTIONS}-${NOVEL_MAX_CHAPTERS} fresh-novel chapters; never omit, duplicate, or invent a beat.`
       : system;
     const rawResult = billableCall
       ? await billableCall(
@@ -3019,10 +3039,12 @@ export async function planSectionAllocation(
   const corrections = options.retryOnly ? [true] : [false, true];
   for (const correction of corrections) {
     try {
-      return parseAndValidateAllocation(
+      const allocation = parseAndValidateAllocation(
         await call(correction),
         req.arcTemplate.beats,
       );
+      validateNovelChapterAllocation(allocation, req);
+      return allocation;
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
       if (error instanceof OutlineOutputExhaustedError) throw error;
@@ -3892,11 +3914,26 @@ export async function repairRequiredStoryArcFunctions(
   template: Pick<ArcTemplateBlob, "name" | "beats">,
   billableCall: SuggestionLLMCall,
   obligations: RecipeObligation[] = [],
+  requestedFormat: StoryMaterialFormat = "other",
 ): Promise<{ suggestions: Suggestion[]; repaired: string[]; unresolved: string[] }> {
   let result = suggestions.map((section) => ({ ...section }));
   const repaired: string[] = [];
   const unresolved: string[] = [];
 
+  const repairSchema = requestedFormat === "novel"
+    ? {
+      ...REQUIRED_FUNCTION_REPAIR_SCHEMA,
+      properties: {
+        section: {
+          ...SECTION_SCHEMA,
+          properties: {
+            ...SECTION_SCHEMA.properties,
+            container: { type: "string", enum: [...NOVEL_GENERATION_CONTAINERS] },
+          },
+        },
+      },
+    }
+    : REQUIRED_FUNCTION_REPAIR_SCHEMA;
   for (const beat of template.beats) {
     const roleContract = arcRoleContract(beat, template.name);
     for (const required of roleContract.requiredFunctions) {
@@ -3922,7 +3959,7 @@ export async function repairRequiredStoryArcFunctions(
           system,
           user,
           4000,
-          { type: "json_schema", json_schema: { name: "outline_required_function_repair", strict: true, schema: REQUIRED_FUNCTION_REPAIR_SCHEMA } },
+          { type: "json_schema", json_schema: { name: "outline_required_function_repair", strict: true, schema: repairSchema } },
           `outline-semantic-repair-${beat.id}-${required}`,
           (content, finishReason) => {
             const parsed = parseOutlineJSON<{ section?: Record<string, unknown> }>(content, finishReason);
@@ -3933,6 +3970,7 @@ export async function repairRequiredStoryArcFunctions(
               recipeRequirementIDs: target.recipeRequirementIDs ?? [],
             };
             const validated = validateSuggestions({ suggestions: [candidate] }, new Set([beat.id]), undefined, obligations, { ...template, beats: [beat] });
+            validateNovelLeafContainers(validated.suggestions, requestedFormat);
             if (validated.suggestions.length !== 1) throw new Error("semantic repair response did not produce one valid section");
             return validated.suggestions[0];
           },
@@ -3943,7 +3981,9 @@ export async function repairRequiredStoryArcFunctions(
           storyArcBeatID: beat.id,
           recipeRequirementIDs: target.recipeRequirementIDs ?? [],
         };
-        repairedSection = validateSuggestions({ suggestions: [candidate] }, new Set([beat.id]), undefined, obligations, { ...template, beats: [beat] }).suggestions[0];
+        const validated = validateSuggestions({ suggestions: [candidate] }, new Set([beat.id]), undefined, obligations, { ...template, beats: [beat] });
+        validateNovelLeafContainers(validated.suggestions, requestedFormat);
+        repairedSection = validated.suggestions[0];
       } catch (error) {
         if (error instanceof OutlineOutputExhaustedError) throw error;
         repairedSection = undefined;
@@ -4972,9 +5012,10 @@ export async function runSuggestionJob(
               const additions = parseExpansionResponse(content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, finishReason);
               validateNovelLeafContainers(additions, requestedStoryMaterialFormat(body));
               const merged = mergeExpansionAdditions(current, additions);
-              if (merged.length > MAX_PLANNED_SECTIONS) {
+              const sectionCap = maxPlannedSectionsForFormat(requestedStoryMaterialFormat(body));
+              if (merged.length > sectionCap) {
                 throw new ExpansionValidationError(
-                  `outline expansion exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`,
+                  `outline expansion exceeded the ${sectionCap}-section safety cap for ${requestedStoryMaterialFormat(body)}`,
                 );
               }
               return additions;
@@ -5008,6 +5049,7 @@ export async function runSuggestionJob(
         },
         {
           existingSections: body.existingSections ?? [],
+          sectionCap: maxPlannedSectionsForFormat(requestedStoryMaterialFormat(body)),
           startRound,
           startBeatIndex,
           priorDiagnostics,
@@ -5589,8 +5631,9 @@ export async function runSuggestionJob(
           const deduped = removeDuplicateOutlineSections(validated.suggestions);
           validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
           const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true);
-          if (merged.length > MAX_PLANNED_SECTIONS) {
-            throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
+          const sectionCap = maxPlannedSectionsForFormat(requestedStoryMaterialFormat(body));
+          if (merged.length > sectionCap) {
+            throw new Error(`outline exceeded the ${sectionCap}-section safety cap for ${requestedStoryMaterialFormat(body)}`);
           }
           return { ...validated, suggestions: merged };
         },
@@ -5606,25 +5649,57 @@ export async function runSuggestionJob(
       // Structural replay is removed before any durable checkpoint or semantic
       // provider stage. Never surface duplicate first-pass sections.
       diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions), structuralDedupedSections: deduped.removed };
-      if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
-        throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
+      const sectionCap = maxPlannedSectionsForFormat(requestedStoryMaterialFormat(body));
+      if (result.suggestions.length > sectionCap) {
+        throw new Error(`outline exceeded the ${sectionCap}-section safety cap for ${requestedStoryMaterialFormat(body)}`);
       }
     }
 
     // Structural validation and required recipe-obligation coverage are completion invariants; literary heuristics remain advisory.
     latestValidSuggestions = result.suggestions;
-    const initialQuality = collectAdvisoryOutlineQuality(
+    let initialQuality = collectAdvisoryOutlineQuality(
       result.suggestions,
       storyMaterial,
       requestedStoryMaterialFormat(body),
       body.arcTemplate,
       allocation,
     );
+    let semanticArcRepairedSections: string[] = [];
+    let semanticArcUnresolvedSections: string[] = [];
+    const needsClosureRepair = initialQuality.semanticArcIssues.some((issue) =>
+      issue.includes("declares resolution") || issue.includes("no observable closure")
+    );
+    if (needsClosureRepair) {
+      try {
+        const closureRepair = await repairRequiredStoryArcFunctions(
+          result.suggestions,
+          body.arcTemplate,
+          billableCall,
+          recipeObligations,
+          requestedStoryMaterialFormat(body),
+        );
+        result = { ...result, suggestions: closureRepair.suggestions };
+        latestValidSuggestions = result.suggestions;
+        semanticArcRepairedSections = closureRepair.repaired;
+        semanticArcUnresolvedSections = closureRepair.unresolved;
+        initialQuality = collectAdvisoryOutlineQuality(
+          result.suggestions,
+          storyMaterial,
+          requestedStoryMaterialFormat(body),
+          body.arcTemplate,
+          allocation,
+        );
+      } catch (error) {
+        semanticArcUnresolvedSections = [
+          `closure repair unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        ];
+      }
+    }
     diagnostics = {
       ...diagnostics,
       sectionContractValidated: true,
-      semanticArcRepairedSections: [],
-      semanticArcUnresolvedSections: [],
+      semanticArcRepairedSections,
+      semanticArcUnresolvedSections,
       dramaticDistinctnessIssues: initialQuality.distinctnessIssues,
       semanticArcIssues: initialQuality.semanticArcIssues,
       causalScaleIssues: initialQuality.causalScaleIssues,
