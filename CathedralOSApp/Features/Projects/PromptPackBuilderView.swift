@@ -15,6 +15,7 @@ struct PromptPackBuilderView: View {
     @State private var includeProjectSetting = true
     @State private var notes = ""
     @State private var instructionBias = ""
+    @State private var storyNonNegotiables = ""
     @State private var selectedRelationshipIDs: Set<UUID> = []
     @State private var selectedThemeQuestionIDs: Set<UUID> = []
     @State private var selectedMotifIDs: Set<UUID> = []
@@ -248,6 +249,19 @@ struct PromptPackBuilderView: View {
                 } header: {
                     CathedralFormSectionHeader("Instruction Bias")
                 }
+
+                // Story non-negotiables
+                Section {
+                    TextField("One must-happen requirement per line…", text: $storyNonNegotiables, axis: .vertical)
+                        .font(CathedralTheme.Typography.body())
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(4...12)
+                } header: {
+                    CathedralFormSectionHeader("Story Non-Negotiables")
+                } footer: {
+                    Text("Add requirements the outline must satisfy. Keep each requirement on its own line.")
+                        .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                }
             }
             .cathedralFormStyle()
             .navigationTitle(isEditing ? "Edit Pack" : "New Pack")
@@ -304,6 +318,7 @@ struct PromptPackBuilderView: View {
         includeProjectSetting = p.includeProjectSetting
         notes = p.notes ?? ""
         instructionBias = p.instructionBias ?? ""
+        storyNonNegotiables = p.storyNonNegotiables.joined(separator: "\n")
         selectedRelationshipIDs = Set(p.selectedRelationshipIDs)
         selectedThemeQuestionIDs = Set(p.selectedThemeQuestionIDs)
         selectedMotifIDs = Set(p.selectedMotifIDs)
@@ -356,6 +371,10 @@ struct PromptPackBuilderView: View {
         p.includeProjectSetting = includeProjectSetting
         p.notes = notes.trimmingCharacters(in: .whitespaces).nilIfEmpty
         p.instructionBias = instructionBias.trimmingCharacters(in: .whitespaces).nilIfEmpty
+        p.storyNonNegotiables = storyNonNegotiables
+            .split(whereSeparator: { $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
         p.selectedRelationshipIDs = Array(selectedRelationshipIDs)
         p.selectedThemeQuestionIDs = Array(selectedThemeQuestionIDs)
         p.selectedMotifIDs = Array(selectedMotifIDs)

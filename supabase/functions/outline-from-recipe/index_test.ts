@@ -318,6 +318,16 @@ Deno.test("recipe obligations derive required plot signals and supporting-only t
   assertEquals(obligations.every((item) => item.id.startsWith("R")), true);
 });
 
+Deno.test("story non-negotiables derive as required obligations", () => {
+  const obligations = deriveRecipeObligations({
+    ...sparseRequest.recipe,
+    storyNonNegotiables: ["The protagonists must choose intimacy after accountability."],
+  } as any);
+  const nonNegotiable = obligations.find((item) => item.classification === "story_non_negotiable");
+  assertEquals(nonNegotiable?.required, true);
+  assertStringIncludes(nonNegotiable?.statement ?? "", "must choose intimacy after accountability");
+});
+
 Deno.test("existing accepted sections satisfy obligation coverage", () => {
   const obligations = deriveRecipeObligations({ ...sparseRequest.recipe, selectedStorySpark: { text: "R2" } } as any);
   const existing = [{ storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] }];

@@ -699,6 +699,7 @@ interface CanonicalRecipeEnvelope {
   selectedStorySpark: unknown | null;
   selectedAftertaste: unknown | null;
   selectedRelationships: unknown[];
+  storyNonNegotiables?: unknown[];
   selectedThemeQuestions: unknown[];
   selectedMotifs: unknown[];
   promptPack: {

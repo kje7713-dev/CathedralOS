@@ -284,6 +284,7 @@ enum ProjectImportMapper {
             pack.selectedAftertasteID = pp.selectedAftertasteID.flatMap(UUID.init(uuidString:))
             pack.notes = pp.notes
             pack.instructionBias = pp.instructionBias
+            pack.storyNonNegotiables = pp.storyNonNegotiables ?? []
             pack.includeProjectSetting = pp.includeProjectSetting
             pack.selectedRelationshipIDs = pp.selectedRelationshipIDs.compactMap(UUID.init(uuidString:))
             pack.selectedThemeQuestionIDs = pp.selectedThemeQuestionIDs.compactMap(UUID.init(uuidString:))

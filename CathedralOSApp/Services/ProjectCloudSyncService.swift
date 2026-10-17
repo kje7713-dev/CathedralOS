@@ -2067,6 +2067,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
             pack.selectedAftertasteID = payload.selectedAftertasteID.flatMap(UUID.init(uuidString:))
             pack.notes = payload.notes
             pack.instructionBias = payload.instructionBias
+            pack.storyNonNegotiables = payload.storyNonNegotiables ?? []
             pack.includeProjectSetting = payload.includeProjectSetting
             pack.selectedRelationshipIDs = payload.selectedRelationshipIDs.compactMap(UUID.init(uuidString:))
             pack.selectedThemeQuestionIDs = payload.selectedThemeQuestionIDs.compactMap(UUID.init(uuidString:))

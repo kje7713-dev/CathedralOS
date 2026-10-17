@@ -10,6 +10,7 @@ class PromptPack {
     var selectedAftertasteID: UUID?
     var notes: String?
     var instructionBias: String?
+    var storyNonNegotiables: [String]
     var includeProjectSetting: Bool = true
     var selectedRelationshipIDs: [UUID]
     var selectedThemeQuestionIDs: [UUID]
@@ -24,6 +25,7 @@ class PromptPack {
         self.selectedAftertasteID = nil
         self.notes = nil
         self.instructionBias = nil
+        self.storyNonNegotiables = []
         self.includeProjectSetting = true
         self.selectedRelationshipIDs = []
         self.selectedThemeQuestionIDs = []
