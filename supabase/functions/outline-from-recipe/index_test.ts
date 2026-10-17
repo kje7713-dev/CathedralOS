@@ -98,6 +98,7 @@ import {
   intimacyRequirement,
   intimacyPlanningDirective,
   semanticVerificationInput,
+  removeDuplicateOutlineSections,
   verifyStoryArcSemantics,
   SELECTED_INTIMACY_LEVEL_OBLIGATION,
   planSectionAllocation,
@@ -105,6 +106,7 @@ import {
   logRequest,
   isRetryableStoryMaterialFailure,
   isRetryableSemanticRepairFailure,
+  isRetryableSemanticVerificationFailure,
   isSettledSemanticRepairCheckpoint,
   StoryMaterialSufficiencyError,
   StoryMaterialValidationError,
@@ -1300,6 +1302,21 @@ Deno.test("semantic disagreement is advisory: a late apparent conflict still com
     "The Freeze Order",
     "Wei Jian and Volkov Stand Down",
   ]);
+});
+
+Deno.test("first-pass deduplication removes cross-beat replay and keeps the first section", () => {
+  const base = {
+    title: "Same Event", summary: "Same summary", container: "chapter", pov: "thirdPersonLimited",
+    terminalBeat: "The state changes.", entryState: "Before.", dramaticEvent: "The same event.",
+    resultingChange: "The same change.", terminalState: "After.", dramaticFunction: "escalation",
+  };
+  const result = removeDuplicateOutlineSections([
+    { ...base, storyArcBeatID: "beat-1" },
+    { ...base, storyArcBeatID: "beat-2" },
+  ] as any);
+  assertEquals(result.suggestions.length, 1);
+  assertEquals(result.suggestions[0].storyArcBeatID, "beat-1");
+  assertEquals(result.removed, [{ title: "Same Event", index: 1 }]);
 });
 
 Deno.test("outline rejects repeated titles across Story Arc beats", () => {
@@ -3041,6 +3058,18 @@ Deno.test("PR3 all seven built-in template families use explicit canonical role 
 
 
 // MARK: - PR 7: idempotency-safe planning rate limits
+
+Deno.test("unresolved semantic verification gets one bounded checkpoint retry", () => {
+  const base = {
+    status: "failed",
+    error_code: "story_arc_semantic_unresolved",
+    planning_state: { nextAction: "semantic-reverification" },
+    diagnostics: { semanticRetryCount: 0 },
+  };
+  assertEquals(isRetryableSemanticVerificationFailure(base), true);
+  assertEquals(isRetryableSemanticVerificationFailure({ ...base, diagnostics: { semanticRetryCount: 1 } }), false);
+  assertEquals(isRetryableSemanticVerificationFailure({ ...base, planning_state: { nextAction: "semantic-repair" } }), false);
+});
 
 Deno.test("paid semantic repair target failures are recoverable once from their checkpoint", () => {
   const base = {
@@ -5524,6 +5553,27 @@ Deno.test("explicit intimacy is a whole-arc verifier obligation and generic arcs
   assertEquals((input.arcWideObligations as any[])[0].sections.length, 1);
   const generic = { name: "Mystery", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "m", role: "the_crime", label: "The Crime", description: "" }] } as any;
   assertEquals((semanticVerificationInput(suggestions as any, generic, recipe).arcWideObligations as any[]).length, 0);
+});
+
+Deno.test("semantic verifier receives every story non-negotiable with Section Contract fields", () => {
+  const template = {
+    name: "Dark Romance",
+    beats: [{ id: "e", role: "entanglement", label: "Entanglement", description: "" }],
+  } as any;
+  const suggestions = [{
+    storyArcBeatID: "e",
+    dramaticEvent: "They choose intimacy after accountability.",
+    resultingChange: "Trust becomes mutual.",
+    terminalState: "They remain together.",
+  }];
+  const input = semanticVerificationInput(suggestions as any, template, {
+    project: {},
+    storyNonNegotiables: ["The protagonists must choose intimacy after accountability."],
+  } as any);
+  const requirements = input.storyNonNegotiables as any[];
+  assertEquals(requirements.length, 1);
+  assertEquals(requirements[0].obligationID, "story_non_negotiable_0");
+  assertEquals(requirements[0].sections[0].resultingChange, "Trust becomes mutual.");
 });
 
 Deno.test("ungrounded intimacy verifier evidence enters semantic repair instead of throwing", async () => {

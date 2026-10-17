@@ -907,6 +907,8 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
         if failureCode == "insufficient_credits" {
             message += " The next stage was not started because the available credit balance was insufficient."
+        } else if failureCode == "story_arc_semantic_unresolved" {
+            message += " The final Story Arc check still found one or more authored requirements unmet after repair. Review the sections for the story non-negotiable before accepting them."
         }
         message += " No additional generation charge was made. Review and accept them below."
         return message

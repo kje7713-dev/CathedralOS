@@ -2652,7 +2652,7 @@ Choose a container for the scale of one dramatic unit, not to fake novel length:
 - setPiece: a major confrontation, action, ceremony, revelation, or complex high-stakes event, 2,000-5,000
 - sceneSequence: several connected scenes, locations, or times pursuing one coherent objective, 3,000-7,000
 - chapter: a publishing unit containing multiple substantial movements that belong together, 3,000-8,000+
-For a new novel, use only scene, developedScene, setPiece, sceneSequence, or chapter as generation-bearing leaves. Do not create moment, vignette, microScene, beat, shortStory, or episode leaves. Do not split one continuous dramatic objective into several short sections merely because each tactic can be named as its own event: setup → attempt → resistance → changed tactic → consequence usually belongs in one developedScene. A brief final image, kiss, gesture, or emotional beat should normally close the preceding substantive scene rather than become an isolated tiny novel section. Favor more developed story, never padding; preserve distinct state change, no duplicate revelations or resolutions, and no filler sections.
+For a new novel, prefer the chapter container: each chapter-scale section targets the existing chapter minimum of 3,000 planned tokens. Use scene, developedScene, setPiece, or sceneSequence only when the material genuinely requires a smaller or differently shaped dramatic unit; never use them to fragment one chapter or inflate section counts. Do not create moment, vignette, microScene, beat, shortStory, or episode leaves. Do not split one continuous dramatic objective into several short sections merely because each tactic can be named as its own event: setup → attempt → resistance → changed tactic → consequence usually belongs in one developedScene. A brief final image, kiss, gesture, or emotional beat should normally close the preceding substantive scene rather than become an isolated tiny novel section. Favor more developed story, never padding; preserve distinct state change, no duplicate revelations or resolutions, and no filler sections.
 The expected ranges are literary targets; runtime/provider headroom is not a desired length.
 
 ## Recipe realization priority
@@ -2758,7 +2758,15 @@ export class AllocationRetryRequired extends Error {
 }
 
 export function suggestionContractFingerprint(suggestion: Suggestion): string {
-  return `${suggestion.title}|${suggestion.summary}|${suggestion.storyArcBeatID}`;
+  // Beat identity is deliberately excluded: replaying the same section under
+  // another Story Arc beat is still the same section contract.
+  return [
+    suggestion.title,
+    suggestion.summary,
+    suggestion.dramaticEvent ?? "",
+    suggestion.resultingChange ?? "",
+    suggestion.terminalState ?? "",
+  ].map((value) => String(value).trim().replace(/\s+/g, " ").toLocaleLowerCase()).join("|");
 }
 
 /**
@@ -2779,10 +2787,32 @@ export function assertDistinctOutlineTitles(suggestions: Suggestion[]): void {
   });
 }
 
+export function removeDuplicateOutlineSections(
+  suggestions: Suggestion[],
+): { suggestions: Suggestion[]; removed: Array<{ title: string; index: number }> } {
+  const seenContracts = new Set<string>();
+  const seenTitles = new Set<string>();
+  const kept: Suggestion[] = [];
+  const removed: Array<{ title: string; index: number }> = [];
+  for (const [index, suggestion] of suggestions.entries()) {
+    const contract = suggestionContractFingerprint(suggestion);
+    const title = suggestion.title.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+    if (seenContracts.has(contract) || seenTitles.has(title)) {
+      removed.push({ title: suggestion.title, index });
+      continue;
+    }
+    seenContracts.add(contract);
+    seenTitles.add(title);
+    kept.push(suggestion);
+  }
+  return { suggestions: kept, removed };
+}
+
 export function mergeSuggestionsByBeatOrder(
   beatOrder: string[],
   firstPass: Suggestion[],
   repaired: Suggestion[],
+  dedupeDuplicates = false,
 ): Suggestion[] {
   const beatSet = new Set(beatOrder);
   const seen = new Set<string>();
@@ -2798,6 +2828,7 @@ export function mergeSuggestionsByBeatOrder(
       }
       const fingerprint = suggestionContractFingerprint(suggestion);
       if (seen.has(fingerprint)) {
+        if (dedupeDuplicates) continue;
         throw new Error(`duplicate section contract returned by ${source}: ${fingerprint}`);
       }
       seen.add(fingerprint);
@@ -2898,7 +2929,7 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections.
+This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes.
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
@@ -3493,7 +3524,7 @@ const SEMANTIC_VERIFICATION_SCHEMA = {
 export function semanticVerificationInput(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
-  recipe?: Pick<CanonicalRecipeEnvelope, "project">,
+  recipe?: Pick<CanonicalRecipeEnvelope, "project" | "storyNonNegotiables">,
 ): Record<string, unknown> {
   const requirement = intimacyRequirement({ arcTemplate: template as ArcTemplateBlob, recipe: recipe as CanonicalRecipeEnvelope });
   const eligible = new Set((template.intimacyMilestoneRoles ?? []));
@@ -3502,6 +3533,17 @@ export function semanticVerificationInput(
     relationshipFocus: template.relationshipFocus ?? "none",
     intimacyMilestoneRoles: template.intimacyMilestoneRoles ?? [],
     selectedIntimacyLevel: requirement?.level ?? "unspecified",
+    storyNonNegotiables: (Array.isArray(recipe?.storyNonNegotiables) ? recipe.storyNonNegotiables : []).map((item, index) => ({
+      obligationID: `story_non_negotiable_${index}`,
+      instruction: typeof item === "string" ? item : String((item as Record<string, unknown>)?.requirement ?? item),
+      sections: suggestions.map((section, sectionIndex) => ({
+        sectionIndex,
+        beatID: section.storyArcBeatID,
+        dramaticEvent: section.dramaticEvent ?? "",
+        resultingChange: section.resultingChange ?? "",
+        terminalState: section.terminalState ?? "",
+      })),
+    })),
     arcWideObligations: requirement ? [{
       obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION,
       instruction: requirement.instruction,
@@ -3531,7 +3573,7 @@ export async function verifyStoryArcSemantics(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
   billableCall: SuggestionLLMCall,
-  recipe?: Pick<CanonicalRecipeEnvelope, "project">,
+  recipe?: Pick<CanonicalRecipeEnvelope, "project" | "storyNonNegotiables">,
 ): Promise<SemanticVerificationResult> {
   const input = semanticVerificationInput(suggestions, template, recipe);
   const raw = await billableCall(
@@ -3551,6 +3593,31 @@ export async function verifyStoryArcSemantics(
   const seen = new Set<string>();
   const beats: SemanticVerificationResult["beats"] = [];
   const unsatisfied: SemanticVerificationResult["unsatisfied"] = [];
+  const storyNonNegotiables = (Array.isArray(recipe?.storyNonNegotiables) ? recipe.storyNonNegotiables : [])
+    .map((item, index) => ({
+      obligationID: `story_non_negotiable_${index}`,
+      instruction: typeof item === "string" ? item : String((item as Record<string, unknown>)?.requirement ?? item),
+    }));
+  for (const required of storyNonNegotiables) {
+    const rawObligation = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === required.obligationID);
+    const sectionIndex = Number(rawObligation?.sectionIndex);
+    const section = suggestions[sectionIndex];
+    const quote = normalizeEvidenceText(String(rawObligation?.quote ?? ""));
+    const groundedField = findGroundedSemanticField(section, quote, ["dramaticEvent", "resultingChange", "terminalState"]);
+    const providerClaimedSatisfied = Boolean(rawObligation?.satisfied);
+    const verified = {
+      obligationID: required.obligationID,
+      satisfied: providerClaimedSatisfied && Boolean(groundedField),
+      sectionIndex,
+      field: groundedField ?? "dramaticEvent",
+      quote,
+      reason: providerClaimedSatisfied && !groundedField
+        ? "provider evidence quote was not grounded in a Section Contract field; story non-negotiable review required"
+        : String(rawObligation?.reason ?? `section does not unmistakably satisfy: ${required.instruction}`),
+    } as SemanticVerificationObligation;
+    arcWideObligations.push(verified);
+    if (!verified.satisfied) unsatisfied.push({ beatID: section?.storyArcBeatID ?? "__story_arc__", obligationID: required.obligationID, reason: verified.reason });
+  }
   if (requirement) {
     const rawObligation = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === SELECTED_INTIMACY_LEVEL_OBLIGATION);
     const eligibleSections = suggestions.map((section, sectionIndex) => ({ section, sectionIndex })).filter(({ section }) => {
@@ -4131,6 +4198,18 @@ export async function isSettledSemanticRepairCheckpoint(
   } catch {
     return false;
   }
+}
+
+export function isRetryableSemanticVerificationFailure(run: {
+  status?: unknown;
+  error_code?: unknown;
+  planning_state?: any;
+  diagnostics?: any;
+}): boolean {
+  return run.status === "failed" &&
+    run.error_code === "story_arc_semantic_unresolved" &&
+    run.planning_state?.nextAction === "semantic-reverification" &&
+    Number(run.diagnostics?.semanticRetryCount ?? 0) < 1;
 }
 
 export function isRetryableSemanticRepairFailure(run: {
@@ -4844,6 +4923,19 @@ export async function runSuggestionJob(
       };
     };
 
+    let allocation: Map<string, Allocation> | undefined;
+    const sectionAllocationDeficits = (suggestions: Suggestion[]) => {
+      const counts = new Map<string, number>();
+      const effectiveAllocation = allocation ?? new Map<string, Allocation>(
+        Array.isArray(planningState.allocationEntries) ? planningState.allocationEntries as Array<[string, Allocation]> : [],
+      );
+      for (const suggestion of suggestions) counts.set(suggestion.storyArcBeatID, (counts.get(suggestion.storyArcBeatID) ?? 0) + 1);
+      return body.arcTemplate.beats
+        .map((beat) => ({ beatID: beat.id, label: beat.label, required: effectiveAllocation.get(beat.id)?.minSections ?? 0, actual: counts.get(beat.id) ?? 0 }))
+        .filter((entry) => entry.actual < entry.required)
+        .map((entry) => ({ ...entry, missing: entry.required - entry.actual }));
+    };
+
     const expandNovel = async (
       initialSuggestions: Suggestion[],
       recipeObligations: RecipeObligation[],
@@ -4862,6 +4954,11 @@ export async function runSuggestionJob(
         async (current, context, beat) => {
           const expansionContext = beat ? { ...context, beat } : context;
           const expansion = buildExpansionPrompt(body, current, expansionContext, recipeObligations);
+          const deficits = sectionAllocationDeficits(current);
+          const targetDeficit = beat ? deficits.find((entry) => entry.beatID === beat.beatID) : undefined;
+          if (targetDeficit) {
+            expansion.system += ` This beat is under its post-deduplication allocation floor by ${targetDeficit.missing} section${targetDeficit.missing === 1 ? "" : "s"}. Add that many distinct chapter-scale dramatic units before optional expansion; do not replay any existing section.`;
+          }
           const expandedRaw = await billableCall(
             expansion.system,
             expansion.user,
@@ -4915,13 +5012,15 @@ export async function runSuggestionJob(
           qualityGate: (current) => {
             if (requestedStoryMaterialFormat(body) !== "novel") return false;
             const scale = evaluateNovelScale(current, body.existingSections ?? []);
+            const hasAllocationDeficit = sectionAllocationDeficits(current).length > 0;
             const quality = collectAdvisoryOutlineQuality(
               current,
               body.storyMaterialEnrichment,
               requestedStoryMaterialFormat(body),
               body.arcTemplate,
             );
-            return !scale.meetsPreferredMinimum ||
+            return hasAllocationDeficit ||
+              !scale.meetsPreferredMinimum ||
               quality.causalScaleIssues.length > 0 ||
               quality.unusedStoryMaterialItems > 0;
           },
@@ -4973,16 +5072,21 @@ export async function runSuggestionJob(
           "outline expansion did not reach plausible novel scale",
         );
       }
+      const remainingAllocationDeficits = sectionAllocationDeficits(completedSuggestions);
+      const finalWarnings = remainingAllocationDeficits.length > 0
+        ? [...completionWarnings, `Completed after the bounded three-round repair pass with ${remainingAllocationDeficits.reduce((sum, entry) => sum + entry.missing, 0)} allocation section deficit${remainingAllocationDeficits.reduce((sum, entry) => sum + entry.missing, 0) === 1 ? "" : "s"} remaining.`]
+        : completionWarnings;
       await updateRun({
         status: "completed",
         suggestions: completedSuggestions,
-        warnings: completionWarnings,
+        warnings: finalWarnings,
         completed_at: new Date().toISOString(),
         planning_state: { ...planningState, phase: "completed", nextAction: "completed" },
         diagnostics: {
           ...diagnostics,
           stage: "completed",
           finalSectionCounts: countSuggestionsByBeat(completedSuggestions),
+          allocationDeficits: remainingAllocationDeficits,
           novelScale: finalScale,
           ...(requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsPreferredMinimum
             ? { preferredScaleWarning: `Novel plan is below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word development target.` }
@@ -5056,6 +5160,10 @@ export async function runSuggestionJob(
     const persistedSemanticSuggestions = Array.isArray(claimedRun.suggestions)
       ? claimedRun.suggestions as Suggestion[]
       : [];
+    const recordSemanticWarning = (message: string) => {
+      const previous = Array.isArray(diagnostics.semanticWarnings) ? diagnostics.semanticWarnings as string[] : [];
+      diagnostics = { ...diagnostics, semanticWarnings: [...previous, message] };
+    };
     const continueAfterSemanticVerification = async (suggestions: Suggestion[]) => {
       const semanticCoverage = obligationCoverage([...(body.existingSections ?? []), ...suggestions], recipeObligations);
       if (semanticCoverage.missingRequired.length > 0) {
@@ -5072,7 +5180,17 @@ export async function runSuggestionJob(
       await postValidatedOutline(suggestions, []);
     };
     if (planningState.nextAction === "semantic-verification") {
-      const verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
+      let verification: SemanticVerificationResult | undefined;
+      try {
+        verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
+      } catch (error) {
+        recordSemanticWarning(`Semantic verification was unavailable; continuing with the best structural outline: ${error instanceof Error ? error.message : String(error)}`);
+        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
+        diagnostics = { ...diagnostics, stage: "semantic_verification_warning" };
+        await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(persistedSemanticSuggestions);
+        return;
+      }
       diagnostics = { ...diagnostics, stage: "semantic_verified", semanticVerification: verification };
       if (verification.unsatisfied.length > 0) {
         planningState = { ...planningState, phase: "semantic_repair_pending", nextAction: "semantic-repair", semanticRepairFailures: verification.unsatisfied };
@@ -5085,14 +5203,24 @@ export async function runSuggestionJob(
       return;
     }
     if (planningState.nextAction === "semantic-repair") {
-      const repaired = await repairStoryArcSemanticObligations(
-        persistedSemanticSuggestions,
-        body.arcTemplate,
-        Array.isArray(planningState.semanticRepairFailures) ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }> : [],
-        billableCall,
-        recipeObligations,
-        body.recipe,
-      );
+      let repaired = persistedSemanticSuggestions;
+      try {
+        repaired = await repairStoryArcSemanticObligations(
+          persistedSemanticSuggestions,
+          body.arcTemplate,
+          Array.isArray(planningState.semanticRepairFailures) ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }> : [],
+          billableCall,
+          recipeObligations,
+          body.recipe,
+        );
+      } catch (error) {
+        recordSemanticWarning(`Semantic repair was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
+        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
+        diagnostics = { ...diagnostics, stage: "semantic_repair_warning" };
+        await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(repaired);
+        return;
+      }
       planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification" };
       const { semanticRepairProviderCheckpoint: _semanticRepairProviderCheckpoint, ...diagnosticsAfterRepair } = diagnostics;
       diagnostics = { ...diagnosticsAfterRepair, stage: "semantic_reverification_pending" };
@@ -5100,13 +5228,21 @@ export async function runSuggestionJob(
       throw new SuggestionWorkerYield();
     }
     if (planningState.nextAction === "semantic-reverification") {
-      const verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
+      let verification: SemanticVerificationResult | undefined;
+      try {
+        verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
+      } catch (error) {
+        recordSemanticWarning(`Semantic re-verification was unavailable; continuing with the repaired outline: ${error instanceof Error ? error.message : String(error)}`);
+        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
+        diagnostics = { ...diagnostics, stage: "semantic_reverification_warning" };
+        await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(persistedSemanticSuggestions);
+        return;
+      }
       diagnostics = { ...diagnostics, stage: "semantic_reverified", semanticVerification: verification };
       await updateRun({ suggestions: persistedSemanticSuggestions, diagnostics });
       if (verification.unsatisfied.length > 0) {
-        const unresolved = new Error("story_arc_semantic_unresolved");
-        (unresolved as Error & { errorCode?: string }).errorCode = "story_arc_semantic_unresolved";
-        throw unresolved;
+        recordSemanticWarning(`Semantic obligations remained after bounded repair; continuing with the best repaired outline (${verification.unsatisfied.length} unresolved).`);
       }
       await continueAfterSemanticVerification(persistedSemanticSuggestions);
       return;
@@ -5373,7 +5509,6 @@ export async function runSuggestionJob(
     const persistedAllocation = Array.isArray(planningState.allocationEntries)
       ? planningState.allocationEntries as Array<[string, Allocation]>
       : null;
-    let allocation: Map<string, Allocation>;
     if (persistedAllocation) {
       allocation = new Map<string, Allocation>(persistedAllocation);
     } else {
@@ -5448,12 +5583,13 @@ export async function runSuggestionJob(
           const flattened = flattenSuggestionResponse(parseOutlineJSON(content, finishReason), body.arcTemplate.beats);
           diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
           const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
-          validateNovelLeafContainers(validated.suggestions, requestedStoryMaterialFormat(body));
-          const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []);
+          const deduped = removeDuplicateOutlineSections(validated.suggestions);
+          validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
+          const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true);
           if (merged.length > MAX_PLANNED_SECTIONS) {
             throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
           }
-          return validated;
+          return { ...validated, suggestions: merged };
         },
       );
       const flattened = flattenSuggestionResponse(
@@ -5461,9 +5597,12 @@ export async function runSuggestionJob(
         body.arcTemplate.beats,
       );
       const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
-      validateNovelLeafContainers(validated.suggestions, requestedStoryMaterialFormat(body));
-      result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), validated.suggestions, []), warnings: validated.warnings };
-      diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions) };
+      const deduped = removeDuplicateOutlineSections(validated.suggestions);
+      validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
+      result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true), warnings: validated.warnings };
+      // Structural replay is removed before any durable checkpoint or semantic
+      // provider stage. Never surface duplicate first-pass sections.
+      diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions), structuralDedupedSections: deduped.removed };
       if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
         throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
       }
@@ -5967,6 +6106,23 @@ Deno.serve(async (req: Request) => {
         409,
       );
     }
+    if (isRetryableSemanticVerificationFailure(existing)) {
+      const recoveredDiagnostics = {
+        ...(existing.diagnostics ?? {}),
+        semanticRetryCount: Number(existing.diagnostics?.semanticRetryCount ?? 0) + 1,
+        stage: "semantic_reverification_retry_pending",
+      };
+      const { error: retryError } = await db.from("outline_suggestion_runs").update({
+        status: "pending", error_code: null, error: null, completed_at: null,
+        lease_owner: null, lease_expires_at: null, diagnostics: recoveredDiagnostics,
+        attempt_count: (existing.attempt_count ?? 0) + 1,
+      }).eq("id", existing.id).eq("status", "failed");
+      if (retryError) return errorResponse("db_error", retryError.message ?? "Could not retry semantic verification", 500);
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
+      // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      return corsResponse(JSON.stringify({ ...suggestionRunResponse(existing), status: "pending", errorCode: null, error: null, diagnostics: recoveredDiagnostics }), { status: 200 });
+    }
     if (isRetryableSemanticRepairFailure(existing)) {
       const recoveredDiagnostics = {
         ...(existing.diagnostics ?? {}),
@@ -6136,6 +6292,7 @@ Deno.serve(async (req: Request) => {
     const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
     const resumableExpansionFailure = isRetryableExpansionFailure(run);
     const resumableSemanticRepairFailure = isRetryableSemanticRepairFailure(run);
+    const resumableSemanticVerificationFailure = isRetryableSemanticVerificationFailure(run);
     if (stale) {
       if (await reclaimExpiredSuggestionRun(db, run)) {
         const authoritative = await loadAuthoritativeSuggestionRun(db, run.id);
@@ -6148,8 +6305,8 @@ Deno.serve(async (req: Request) => {
         }
         run = authoritative;
       }
-    } else if (resumableExpansionFailure || resumableSemanticRepairFailure) {
-      const recoveredDiagnostics = resumableSemanticRepairFailure
+    } else if (resumableExpansionFailure || resumableSemanticRepairFailure || resumableSemanticVerificationFailure) {
+      const recoveredDiagnostics = resumableSemanticRepairFailure || resumableSemanticVerificationFailure
         ? { ...(run.diagnostics ?? {}), semanticRecoveryAttempts: Number(run.diagnostics?.semanticRecoveryAttempts ?? 0) + 1, stage: "semantic_repair_recovery_pending" }
         : run.diagnostics;
       const reclaimed = await db.from("outline_suggestion_runs").update({

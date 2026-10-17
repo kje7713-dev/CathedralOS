@@ -455,8 +455,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             }
         }
         .alert("Suggestions Ready", isPresented: suggestionsFeedbackPresented) {
-            if recoverableSuggestionFailureCode == "insufficient_credits" {
-                Button("Resume After Adding Credits") {
+            if recoverableSuggestionFailureCode == "insufficient_credits" ||
+                recoverableSuggestionFailureCode == "story_arc_semantic_unresolved" {
+                Button(recoverableSuggestionFailureCode == "insufficient_credits" ? "Resume After Adding Credits" : "Retry Final Check") {
                     suggestionsFeedback = nil
                     recoverableSuggestions = nil
                     recoverableSuggestionFailureCode = nil
