@@ -177,6 +177,24 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         XCTAssertFalse(DataDurabilityCoordinator.hasPaidSavedSuggestionWork(unpaid))
     }
 
+    func testPaidSavedSuggestionFeedbackShowsSettledChargeAndInsufficientBalance() {
+        let result = OutlineSuggestionResult(
+            suggestions: [],
+            warnings: [],
+            creditCostCharged: 11.276760,
+            remainingCredits: 42.252460,
+            sourceRecipe: makeRequest().recipe
+        )
+        let message = DataDurabilityCoordinator.paidSavedSuggestionFeedback(
+            result: result,
+            failureCode: "insufficient_credits"
+        )
+        XCTAssertTrue(message.contains("Already charged 11.28 credits"))
+        XCTAssertTrue(message.contains("Remaining balance: 42.25 credits"))
+        XCTAssertTrue(message.contains("available credit balance was insufficient"))
+        XCTAssertTrue(message.contains("No additional generation charge was made"))
+    }
+
     func testSuggestionStatusPollingHasARealSuccessInterval() {
         // Protect the normal successful pending/running path from a hot loop
         // that previously generated roughly two requests per second.

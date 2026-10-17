@@ -117,3 +117,16 @@ export function renderRecipeObligations(obligations: RecipeObligation[]): string
   if (obligations.length === 0) return "No explicit recipe obligations were derived; preserve the supplied premise and use judgment without inventing mandatory requirements.";
   return obligations.map((obligation) => `- ${obligation.id} [${obligation.classification}]${obligation.required ? " REQUIRED" : " supporting"}: ${obligation.statement}`).join("\n");
 }
+
+/**
+ * Story Non-Negotiables are acceptance criteria, not metadata labels. Keep
+ * them in a separate prompt block so the provider sees them as explicit
+ * must-dos even when the recipe contains many other obligations.
+ */
+export function renderStoryNonNegotiableMustDos(obligations: RecipeObligation[]): string {
+  const mustDos = obligations.filter((obligation) => obligation.classification === "story_non_negotiable");
+  if (mustDos.length === 0) return "No Story Non-Negotiable must-dos were supplied.";
+  return mustDos.map((obligation) =>
+    `- ${obligation.id} MUST DO: ${obligation.statement.replace(/^Satisfy this user-authored story non-negotiable as an unmistakable event or outcome:\s*/i, "")}`,
+  ).join("\n");
+}

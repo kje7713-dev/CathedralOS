@@ -87,6 +87,9 @@ struct CompletedSuggestionRun {
     /// stage failed. The user may review/accept the saved work without a new
     /// generation charge.
     let isRecoverableDraft: Bool
+    /// Server failure classification retained so the UI can explain why a
+    /// saved draft stopped without implying that no charge occurred.
+    let failureCode: String?
 }
 
 struct SuggestionRunFailure: Equatable {
@@ -891,6 +894,24 @@ final class DataDurabilityCoordinator: ObservableObject {
             !(job.suggestions ?? []).isEmpty
     }
 
+    static func paidSavedSuggestionFeedback(
+        result: OutlineSuggestionResult,
+        failureCode: String?
+    ) -> String {
+        var message = "Your paid suggestions were saved, but the final check did not complete."
+        if let charged = result.creditCostCharged, charged > 0 {
+            message += " Already charged \(String(format: "%.2f", charged)) credits for completed stages."
+        }
+        if let remaining = result.remainingCredits {
+            message += " Remaining balance: \(String(format: "%.2f", remaining)) credits."
+        }
+        if failureCode == "insufficient_credits" {
+            message += " The next stage was not started because the available credit balance was insufficient."
+        }
+        message += " No additional generation charge was made. Review and accept them below."
+        return message
+    }
+
     static func shouldRecoverPaidSuggestionCheckpoint(_ job: OutlineSuggestionJob) -> Bool {
         guard job.status == "failed",
               job.errorCode == "server_error",
@@ -1072,6 +1093,26 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
     }
 
+    /// Resumes a terminal paid expansion checkpoint after the user adds
+    /// credits. Clearing runID forces the same idempotency key through POST;
+    /// the backend requeues only when a durable expansion checkpoint proves
+    /// earlier settled stages can be resumed without replay or double charge.
+    func resumeFailedSuggestionRun(
+        projectID: UUID,
+        lineageID: UUID,
+        service: OutlineSuggestionService = OutlineSuggestionService()
+    ) {
+        guard suggestionPollingTasks[projectID] == nil,
+              var metadata = loadSuggestionRunMetadata(lineageID: lineageID, projectID: projectID) else { return }
+        metadata.status = "recovery_pending"
+        metadata.runID = nil
+        metadata.updatedAt = Date()
+        activeSuggestionRuns[projectID] = metadata
+        persistSuggestionRun(metadata)
+        suggestionRunFailure = nil
+        attachSuggestionTask(metadata, service: service)
+    }
+
     /// Reconnects to the durable server run without rebuilding a request.
     /// This intentionally does not accept a current request or idempotency
     /// key: the persisted run's identity is authoritative for reconciliation.
@@ -1239,7 +1280,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                         idempotencyKey: metadata.idempotencyKey,
                         modelID: metadata.request.modelID,
                         reasoningEffort: metadata.request.reasoningEffort,
-                        isRecoverableDraft: false
+                        isRecoverableDraft: false,
+                        failureCode: nil
                     )
                     suggestionRunRevision &+= 1
                     suggestionPollingTasks[metadata.projectID] = nil
@@ -1270,7 +1312,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                             idempotencyKey: metadata.idempotencyKey,
                             modelID: metadata.request.modelID,
                             reasoningEffort: metadata.request.reasoningEffort,
-                            isRecoverableDraft: true
+                            isRecoverableDraft: true,
+                            failureCode: job.errorCode
                         )
                         suggestionRunRevision &+= 1
                         suggestionPollingTasks[metadata.projectID] = nil
