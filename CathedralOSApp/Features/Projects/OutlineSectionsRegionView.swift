@@ -249,6 +249,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var suggestionSourceRecipe: PromptPackExportPayload?
     @State private var suggestionsLoading = false
     @State private var recoverableSuggestions: OutlineSuggestionResult?
+    @State private var recoverableSuggestionFailureCode: String?
     @State private var recipeSelectionService = RecipeSelectionService()
     @State private var recipeSelection: RecipeSelectionResult?
     @State private var suggestionsError: String?
@@ -454,6 +455,18 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             }
         }
         .alert("Suggestions Ready", isPresented: suggestionsFeedbackPresented) {
+            if recoverableSuggestionFailureCode == "insufficient_credits" {
+                Button("Resume After Adding Credits") {
+                    suggestionsFeedback = nil
+                    recoverableSuggestions = nil
+                    recoverableSuggestionFailureCode = nil
+                    suggestionsLoading = true
+                    durabilityCoordinator.resumeFailedSuggestionRun(
+                        projectID: project.id,
+                        lineageID: project.stableLineageID
+                    )
+                }
+            }
             Button("Review Suggestions") {
                 suggestionsFeedback = nil
                 showingSuggestionSheet = true
@@ -695,9 +708,16 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             suggestions = result.suggestions
             suggestionSourceRecipe = result.sourceRecipe
             recoverableSuggestions = result
-            var feedback = isRecoverableDraft
-                ? "Your paid suggestions were saved even though the final check failed. Review and accept them below; no new generation charge was made."
-                : "Suggestions generated. Charged \(String(format: "%.2f", result.creditCostCharged ?? 0)) credits."
+            recoverableSuggestionFailureCode = completed.failureCode
+            var feedback: String
+            if isRecoverableDraft {
+                feedback = DataDurabilityCoordinator.paidSavedSuggestionFeedback(
+                    result: result,
+                    failureCode: completed.failureCode
+                )
+            } else {
+                feedback = "Suggestions generated. Charged \(String(format: "%.2f", result.creditCostCharged ?? 0)) credits."
+            }
             if let remaining = result.remainingCredits, !isRecoverableDraft {
                 feedback += " Remaining balance: \(String(format: "%.2f", remaining)) credits."
             }
@@ -841,6 +861,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 remainingCredits: job.remainingCredits,
                 sourceRecipe: sourceRecipe
             )
+            recoverableSuggestionFailureCode = job.errorCode
         } catch {
             // Recovery is best-effort and must not block the normal Suggest flow.
             recoverableSuggestions = nil
@@ -868,6 +889,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // than being returned as the new result with the old charge.
         durabilityCoordinator.beginNewSuggestionGeneration(for: project.stableLineageID)
         recoverableSuggestions = nil
+        recoverableSuggestionFailureCode = nil
         // PR 1: explicit recipe selection. Use the same selected recipe as
         // loadRecoverableSuggestions and the review-sheet source.
         guard let recipe = recipeSelection?.selectedRecipe,

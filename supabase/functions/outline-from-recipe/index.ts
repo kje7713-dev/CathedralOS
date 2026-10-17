@@ -35,6 +35,7 @@ import {
   deriveRecipeObligations,
   obligationCoverage,
   renderRecipeObligations,
+  renderStoryNonNegotiableMustDos,
 } from "./_recipe_obligations.ts";
 import {
   notifyProviderBillingUnavailable,
@@ -2191,6 +2192,23 @@ export interface ExpansionResumeState {
   priorDiagnostics: ExpansionRoundDiagnostic[];
 }
 
+/**
+ * A failed expansion may be resumed after credits are added. The durable
+ * expansion checkpoint proves earlier paid stages are complete, so retrying
+ * this identity does not replay or double-charge them.
+ */
+export function isRetryableExpansionFailure(run: {
+  status?: unknown;
+  error_code?: unknown;
+  suggestions?: unknown;
+  diagnostics?: unknown;
+}): boolean {
+  return run.status === "failed" &&
+    (run.error_code === "failed_expansion" || run.error_code === "insufficient_credits") &&
+    Array.isArray(run.suggestions) && run.suggestions.length > 0 &&
+    expansionResumeState(run) !== null;
+}
+
 export function expansionResumeState(run: {
   suggestions?: unknown;
   diagnostics?: unknown;
@@ -2397,7 +2415,7 @@ export function buildExpansionPrompt(
     ? `This is beat-local expansion for Story Arc beat ${beatContext.beatID}${beatContext.beatLabel ? ` (${beatContext.beatLabel})` : ""}. Develop only this beat; every returned section must use storyArcBeatID ${beatContext.beatID}. The beat currently contains approximately ${Math.round(beatContext.projectedWords).toLocaleString()} projected words. Its description is: ${beatContext.beatDescription ?? "(not supplied)"}. ${semanticContract}`
     : "Expand across the supplied outline while preserving each section's Story Arc beat.";
   return {
-    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. The current sections and the supplied recipe together form a used-event ledger: do not replay an existing title, revelation, confrontation, relationship turn, solution, or resulting state under another Story Arc beat. Every addition must advance the recipe's authored premise, character/relationship material, tone, and ending intent when applicable—not merely increase word-count. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
+    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. The current sections and the supplied recipe together form a used-event ledger: do not replay an existing title, revelation, confrontation, relationship turn, solution, or resulting state under another Story Arc beat. Every addition must advance the recipe's authored premise, character/relationship material, tone, and ending intent when applicable—not merely increase word-count. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Every Story Non-Negotiable is a must-do acceptance criterion. Preserve and materially realize any unmet must-do before adding optional expansion; if a must-do contains a number, produce that many distinct realized events. Never attach a must-do ID to an unrelated section. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.`,
@@ -2415,6 +2433,7 @@ The JSON request contains the authoritative obligations exactly once.`,
           })),
         },
       },
+      mustDos: compactObligations(obligations.filter((o) => o.classification === "story_non_negotiable")),
       targetBeat: beatContext ? { ...beatContext, currentSections: compactExistingSections(beatContext.currentSections ?? []), unmetObligations: compactObligations(obligations.filter((o) => o.required && !beatContext.currentSections?.some((s) => (s.recipeRequirementIDs ?? []).includes(o.id)))) } : null,
       unusedStoryMaterial: compactMaterial({ relevant: unusedStoryMaterial }),
       neighbors: { previous: [], next: [] },
@@ -2641,6 +2660,10 @@ The recipe is the governing creative brief, not metadata to distribute as sectio
 
 ## Recipe obligations
 The JSON planning context contains the authoritative obligations exactly once.
+
+## STORY NON-NEGOTIABLE MUST-DOS (acceptance criteria)
+${renderStoryNonNegotiableMustDos(obligations)}
+These are mandatory acceptance criteria, not descriptive tags. Reserve concrete sections/events for every must-do. If a must-do contains a number, treat that number as the minimum count of distinct realized events, not prose flavor. Only assign a must-do ID when the section's dramaticEvent, resultingChange, or terminalState materially realizes the stated requirement; never attach the ID to an unrelated section to make coverage appear complete. Before finalizing, audit every must-do against the actual section contracts. If one is not realized, leave it unsatisfied for the server's repair path rather than falsely labeling an unrelated section.
 
 ## Compact planning context
 Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation. When the planning context supplies a concrete location, clue, institution, object, threat mechanism, or consequence, use it rather than generic phrases such as "damaged site", "weak point", "psychic pressure", or "thin place".
@@ -6003,6 +6026,22 @@ Deno.serve(async (req: Request) => {
         { status: 200 },
       );
     }
+    if (isRetryableExpansionFailure(existing)) {
+      const { error: retryError } = await db.from("outline_suggestion_runs").update({
+        status: "pending",
+        error_code: null,
+        error: null,
+        completed_at: null,
+        lease_owner: null,
+        lease_expires_at: null,
+        attempt_count: (existing.attempt_count ?? 0) + 1,
+      }).eq("id", existing.id).eq("status", "failed");
+      if (retryError) return errorResponse("db_error", retryError.message ?? "Could not resume expansion", 500);
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
+      // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      return corsResponse(JSON.stringify({ ...suggestionRunResponse(existing), status: "pending", errorCode: null, error: null }), { status: 200 });
+    }
     if (!existing) {
       return errorResponse("db_error", "Could not resolve existing suggestion run", 500);
     }
@@ -6095,7 +6134,7 @@ Deno.serve(async (req: Request) => {
       return errorResponse("idempotency_conflict", "The idempotency key is already bound to a different suggestion request", 409);
     }
     const stale = run.status === "running" && run.lease_expires_at && new Date(run.lease_expires_at).getTime() < Date.now();
-    const resumableExpansionFailure = run.status === "failed" && run.error_code === "failed_expansion" && expansionResumeState(run) !== null;
+    const resumableExpansionFailure = isRetryableExpansionFailure(run);
     const resumableSemanticRepairFailure = isRetryableSemanticRepairFailure(run);
     if (stale) {
       if (await reclaimExpiredSuggestionRun(db, run)) {

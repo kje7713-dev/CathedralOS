@@ -149,6 +149,7 @@ export function buildCompactPlanningView(req: any, obligations: any[] = [], mate
     } : null,
     recipe: compactRecipe(req?.recipe),
     obligations: compactObligations(obligations),
+    mustDos: compactObligations(obligations.filter((o: any) => o.classification === "story_non_negotiable")),
     materialIndex: compactMaterial(material),
     arc: {
       id: req?.arcTemplate?.id,

@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects, assertThrows, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { deriveRecipeObligations, obligationCoverage } from "./_recipe_obligations.ts";
+import { deriveRecipeObligations, obligationCoverage, renderStoryNonNegotiableMustDos } from "./_recipe_obligations.ts";
 import { compactArcNarrativeText, compactMaterial } from "./_prompt_context.ts";
 
 Deno.test("continuation auth keeps user JWT out of apikey and authenticates watchdog explicitly", () => {
@@ -58,6 +58,7 @@ import {
   needsNovelExpansion,
   buildExpansionCheckpoint,
   expansionResumeState,
+  isRetryableExpansionFailure,
   projectedExpectedTokens,
   projectedTokenRange,
   parseAndValidateAllocation,
@@ -326,6 +327,22 @@ Deno.test("story non-negotiables derive as required obligations", () => {
   const nonNegotiable = obligations.find((item) => item.classification === "story_non_negotiable");
   assertEquals(nonNegotiable?.required, true);
   assertStringIncludes(nonNegotiable?.statement ?? "", "must choose intimacy after accountability");
+});
+
+Deno.test("story non-negotiables are rendered as explicit must-do acceptance criteria", () => {
+  const obligations = deriveRecipeObligations({
+    ...sparseRequest.recipe,
+    storyNonNegotiables: ["There must be 10 hard core long sex scenes built in."],
+  } as any);
+  const mustDos = renderStoryNonNegotiableMustDos(obligations);
+  assertStringIncludes(mustDos, "R2 MUST DO:");
+  assertStringIncludes(mustDos, "There must be 10 hard core long sex scenes built in.");
+  const request = { ...sparseRequest, storyNonNegotiables: ["There must be 10 hard core long sex scenes built in."] } as any;
+  const prompt = buildPrompt(request, new Map(), obligations);
+  assertStringIncludes(prompt.system, "STORY NON-NEGOTIABLE MUST-DOS (acceptance criteria)");
+  assertStringIncludes(prompt.system, "treat that number as the minimum count of distinct realized events");
+  const planningContext = JSON.parse(prompt.user).planningContext;
+  assertEquals(planningContext.mustDos[0].directive.includes("There must be 10 hard core long sex scenes built in."), true);
 });
 
 Deno.test("existing accepted sections satisfy obligation coverage", () => {
@@ -1633,6 +1650,26 @@ Deno.test("successful round 1 plus failed round 2 retains the round-1 checkpoint
   assertEquals(checkpoint.nextRound, 2);
   assertEquals(checkpoint.expansionRounds.filter((round: any) => round.status === "completed").length, 1);
   assertEquals(checkpoint.scale.projectedWords, evaluateNovelScale(Array.from({ length: 37 }, () => ({ container: "scene" }))).projectedWords);
+});
+
+Deno.test("insufficient-credit expansion failures are resumable from their durable checkpoint", () => {
+  const run = {
+    status: "failed",
+    error_code: "insufficient_credits",
+    suggestions: sceneOutline(37),
+    diagnostics: {
+      expansionCheckpoint: {
+        stage: "expansion",
+        nextRound: 2,
+        nextBeatIndex: 0,
+        scale: evaluateNovelScale(sceneOutline(37)),
+        expansionRounds: [],
+      },
+    },
+  };
+  assertEquals(isRetryableExpansionFailure(run), true);
+  assertEquals(isRetryableExpansionFailure({ ...run, error_code: "server_error" }), false);
+  assertEquals(isRetryableExpansionFailure({ ...run, suggestions: [] }), false);
 });
 
 Deno.test("retry resumes from the persisted expansion checkpoint without repeating first-pass work", async () => {
