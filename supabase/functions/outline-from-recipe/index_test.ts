@@ -1248,7 +1248,8 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   ])).system;
   assertEquals(outlinePrompt.includes("Novel length policy"), true);
   assertEquals(outlinePrompt.includes("120,000-word hard cap"), true);
-  assertEquals(outlinePrompt.includes("complete projected outline"), true);
+  assertEquals(outlinePrompt.includes("Fit the complete story package into the budget"), true);
+  assertEquals(outlinePrompt.includes("do not drop story material"), true);
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
   assertEquals(outlinePrompt.includes("Recipe realization priority"), true);
   assertEquals(outlinePrompt.includes("governing creative brief"), true);
