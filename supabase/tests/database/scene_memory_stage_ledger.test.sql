@@ -4,7 +4,7 @@
 
 create extension if not exists pgtap;
 begin;
-select plan(8);
+select plan(11);
 
 insert into auth.users (id, aud, role, email)
 values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'authenticated', 'authenticated',
@@ -22,16 +22,18 @@ insert into public.generation_outputs (
   100, 'complete', 'private', false
 );
 
+create temp table first_extraction_settlement as
+  select settlement_status, remaining_credits
+    from public.settle_scene_memory_stage(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid,
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:scene-memory-extraction:v2',
+      'v2', 'scene-memory-extraction',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid,
+      'gpt-4o-mini', 100, 20, 2, 1, 10, 9
+    );
 select results_eq(
-  $$select settlement_status, remaining_credits
-      from public.settle_scene_memory_stage(
-        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid,
-        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:scene-memory-extraction:v2',
-        'v2', 'scene-memory-extraction',
-        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid,
-        'gpt-4o-mini', 100, 20, 2, 1, 10, 9
-      )$$,
-  $$values ('settled'::text, 8::integer)$$,
+  $$select settlement_status, remaining_credits::numeric from first_extraction_settlement$$,
+  $$values ('settled'::text, 8::numeric)$$,
   'first stage settlement debits once and records remaining credits'
 );
 
@@ -42,16 +44,18 @@ select is(
   'versioned stage identity is unique'
 );
 
+create temp table duplicate_extraction_settlement as
+  select settlement_status, remaining_credits
+    from public.settle_scene_memory_stage(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid,
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:scene-memory-extraction:v2',
+      'v2', 'scene-memory-extraction',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid,
+      'gpt-4o-mini', 100, 20, 2, 1, 10, 9
+    );
 select results_eq(
-  $$select settlement_status, remaining_credits
-      from public.settle_scene_memory_stage(
-        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid,
-        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:scene-memory-extraction:v2',
-        'v2', 'scene-memory-extraction',
-        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid,
-        'gpt-4o-mini', 100, 20, 2, 1, 10, 9
-      )$$,
-  $$values ('duplicate'::text, 8::integer)$$,
+  $$select settlement_status, remaining_credits::numeric from duplicate_extraction_settlement$$,
+  $$values ('duplicate'::text, 8::numeric)$$,
   'repeating the same stage is a no-op'
 );
 
@@ -104,7 +108,7 @@ select is(
   (select monthly_credit_allowance + purchased_credit_balance
      from public.user_entitlements
     where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
-  8,
+  8::numeric,
   'legacy compatibility lookup leaves the balance unchanged'
 );
 
@@ -114,6 +118,51 @@ select is(
       and related_generation_output_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
   1::bigint,
   'settlement writes exactly one credit ledger debit'
+);
+
+create temp table first_embedding_settlement as
+  select settlement_status, remaining_credits
+    from public.settle_scene_memory_stage(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid,
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:scene-memory-embedding:v2',
+      'v2', 'scene-memory-embedding',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid,
+      'text-embedding-3-small', 73555, 0, 0.117688
+    );
+select results_eq(
+  $$select settlement_status, remaining_credits::numeric from first_embedding_settlement$$,
+  $$values ('settled'::text, 7.882312::numeric)$$,
+  'embedding settlement preserves fractional usage-based charge'
+);
+
+create temp table duplicate_embedding_settlement as
+  select settlement_status, remaining_credits
+    from public.settle_scene_memory_stage(
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid,
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:scene-memory-embedding:v2',
+      'v2', 'scene-memory-embedding',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid,
+      'text-embedding-3-small', 73555, 0, 0.117688
+    );
+select results_eq(
+  $$select settlement_status, remaining_credits::numeric from duplicate_embedding_settlement$$,
+  $$values ('duplicate'::text, 7.882312::numeric)$$,
+  'retrying embedding settlement does not debit twice'
+);
+
+select is(
+  (select count(*) from public.generation_usage_events
+    where stage_identity = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:scene-memory-embedding:v2'),
+  1::bigint,
+  'embedding settlement writes exactly one usage event'
+);
+
+select is(
+  (select count(*) from public.user_credit_ledger
+    where user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+      and related_generation_output_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
+  2::bigint,
+  'embedding settlement adds exactly one ledger debit'
 );
 
 select * from finish();
