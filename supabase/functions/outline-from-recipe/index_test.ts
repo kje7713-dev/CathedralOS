@@ -1246,6 +1246,9 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
     ["beat-1", { minSections: 1, rationale: "setup" }],
     ["beat-2", { minSections: 1, rationale: "escalation" }],
   ])).system;
+  assertEquals(outlinePrompt.includes("Novel length policy"), true);
+  assertEquals(outlinePrompt.includes("120,000-word hard cap"), true);
+  assertEquals(outlinePrompt.includes("complete projected outline"), true);
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
   assertEquals(outlinePrompt.includes("Recipe realization priority"), true);
   assertEquals(outlinePrompt.includes("governing creative brief"), true);

@@ -2637,6 +2637,9 @@ export function buildPrompt(
 
 Every section must commit to one canonical event. Never use unresolved alternatives such as "X or Y", "someone", "a friend", "somewhere", or multiple possible versions of the event. Choose the specific person, place, object, and action.
 
+## Novel length policy
+For a novel, plan toward 90,000 words, with an 80,000-word minimum and a 120,000-word hard cap. The cap applies to the complete outline projection, not only to later expansion. Allocate the available word budget across the Story Arc beats before choosing sections. Cover every authored obligation, essential character arc, major conflict, reversal, consequence, and ending commitment within that budget. Combine related events into fuller sections; do not create one section per enrichment item. If optional planner-invented material does not fit, merge it, shorten it, or leave it unused and report it rather than exceeding the cap. Never add sections merely because more material exists. Use the chapter container for substantial units and the server's expected container ranges as planning estimates; keep the complete projected outline at or below 120,000 words.
+
 Selected motifs are supporting material, not a quota. Use a motif in a section only when the section contract, causality, physical continuity, or a meaningful transformation requires it; do not repeat a motif merely to prove that the outline remembers it. Prefer concrete scene-specific images when no selected motif is needed.
 
 Each section must produce a materially new resulting state. Do not create another section merely to restate or reconfirm a relationship change, realization, warning, or trust shift already achieved. Revisit an arc only when a new event escalates, reverses, costs, or transforms it.
@@ -2648,7 +2651,7 @@ Evaluate the WHOLE proposed novel — including sections in other Story Arc beat
 
 Avoid redundant patterns such as: the group pushes the same threat back twice as two separate victories; the same breach or conflict is effectively closed twice; a character resolves the same belonging or identity question twice; the same relationship realization receives another "final" resolution; or a later climax restages the earlier climax with greater spectacle but substantially the same result.
 
-Do NOT solve redundant dramatic work by reducing the planned novel. Allocation, minimum section coverage, and target novel length remain authoritative. When multiple planned sections would otherwise perform similar dramatic work, redesign the LATER section to create a different change while still fulfilling its Story Arc role, recipe obligations, allocation, and expected length contribution. The amount of story should be preserved; the amount of distinct story should grow.
+Do not solve redundant dramatic work by adding sections. Allocation, minimum section coverage, and the novel length policy remain authoritative. When multiple planned sections would otherwise perform similar dramatic work, combine or redesign them so the complete outline remains within the 120,000-word cap while still fulfilling its Story Arc role and recipe obligations. Preserve required story content; remove padding and optional repetition.
 
 A later section may revisit the same characters, antagonist, conflict, location, or thematic question, but must advance it through a genuinely new development: a new consequence; an increased or different cost; a reversal; changed knowledge; changed power; transferred agency; a harder decision; resolution of a different thread; a changed relationship; a transformed meaning of the earlier event; or a materially different tactical state. Each section should earn its place by changing something the previous sections have not already changed.
 
@@ -2684,7 +2687,7 @@ Use the deterministic, provenance-preserving planning view below. Items marked s
 
 ## Use the minimum-only allocation
 
-For each beat, generate at least the stated minimum number of distinct sections. The minimum is a floor for dramatic coverage, not a target or maximum: generate additional sections whenever the material supports distinct events, consequences, decisions, or revelations. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.
+For each beat, generate at least the stated minimum number of distinct sections while respecting the novel length policy. The minimum is a coverage floor, not permission to exceed the 120,000-word cap: add sections only when the required story cannot be covered by combining material. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.
 
 ## Character arc and plot integration
 Whenever practical, relationship and character-arc turns should cause or complicate plot events rather than occurring as isolated character-development scenes.
