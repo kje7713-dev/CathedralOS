@@ -645,7 +645,11 @@ final class AcceptAllLifecycleTests: XCTestCase {
             context: context,
             service: service
         )
-        try await Task.sleep(nanoseconds: 200_000_000)
+        // Wait for the async fake POST to surface its error instead of relying
+        // on a fixed delay that can be too short on a loaded CI simulator.
+        for _ in 0..<40 where coordinator.acceptRunError == nil {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
 
         XCTAssertNotNil(coordinator.acceptRunError,
                         "POST failure must surface a user-visible error")
