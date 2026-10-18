@@ -643,10 +643,12 @@ const CONTAINER_EXPECTED_RANGES: Record<string, [number, number]> = {
   setPiece: [2000, 5000], sceneSequence: [3000, 7000], shortStory: [2500, 8000],
   chapter: [3000, 8000], episode: [5000, 15000],
 };
-const NOVEL_TARGET_WORDS: [number, number] = [70000, 90000];
+export const NOVEL_TARGET_WORDS: [number, number] = [90000, 120000];
 export const NOVEL_PREFERRED_MIN_WORDS = 80000;
+export const NOVEL_MAX_WORDS = 120000;
 const TOKENS_PER_WORD = 1.3;
 const NOVEL_MIN_PROJECTED_TOKENS = NOVEL_PREFERRED_MIN_WORDS * TOKENS_PER_WORD;
+const NOVEL_MAX_PROJECTED_TOKENS = NOVEL_MAX_WORDS * TOKENS_PER_WORD;
 const MAX_PLANNED_SECTIONS = 200;
 export const MAX_EXPANSION_ROUNDS = 3;
 
@@ -1869,9 +1871,11 @@ export interface NovelScaleEvaluation {
   projectedWords: number;
   minimumWords: number;
   preferredMinimumWords: number;
+  maximumWords: number;
   deficitTokens: number;
   meetsMinimum: boolean;
   meetsPreferredMinimum: boolean;
+  exceedsMaximum: boolean;
 }
 
 /**
@@ -1891,9 +1895,11 @@ export function evaluateNovelScale(
     projectedWords: projectedTokens / TOKENS_PER_WORD,
     minimumWords: NOVEL_PREFERRED_MIN_WORDS,
     preferredMinimumWords: NOVEL_PREFERRED_MIN_WORDS,
+    maximumWords: NOVEL_MAX_WORDS,
     deficitTokens,
     meetsMinimum: deficitTokens === 0,
     meetsPreferredMinimum: projectedTokens / TOKENS_PER_WORD >= NOVEL_PREFERRED_MIN_WORDS,
+    exceedsMaximum: projectedTokens > NOVEL_MAX_PROJECTED_TOKENS,
   };
 }
 
@@ -1972,7 +1978,7 @@ export type ExpansionAddition = Suggestion & { insertAfterTitle: string | null }
 
 export class ExpansionValidationError extends Error {}
 
-export type NovelPlanningFailureCode = "failed_under_target" | "failed_expansion";
+export type NovelPlanningFailureCode = "failed_under_target" | "failed_over_target" | "failed_expansion";
 
 export class RecipeObligationValidationError extends Error {
   readonly code = "missing_recipe_obligations";
@@ -2249,8 +2255,10 @@ export async function progressivelyExpandOutline(
   const diagnostics: ExpansionRoundDiagnostic[] = [...(options.priorDiagnostics ?? [])];
   const warnings: string[] = [];
   const startRound = Math.max(1, options.startRound ?? 1);
-  const shouldContinueDevelopment = (current: Suggestion[]) =>
-    needsNovelExpansion(current, existingSections) || options.qualityGate?.(current) === true;
+  const shouldContinueDevelopment = (current: Suggestion[]) => {
+    const scale = evaluateNovelScale(current, existingSections);
+    return !scale.exceedsMaximum && (needsNovelExpansion(current, existingSections) || options.qualityGate?.(current) === true);
+  };
   for (let round = startRound; round <= MAX_EXPANSION_ROUNDS && shouldContinueDevelopment(suggestions); round++) {
     const projectedTokensBefore = evaluateNovelScale(suggestions, existingSections).projectedTokens;
     const before: ExpansionPromptContext = {
@@ -2291,7 +2299,7 @@ export async function progressivelyExpandOutline(
           throw new ExpansionValidationError(`beat-local expansion returned a section for another beat; expected ${beatContext.beatID}`);
         }
         const merged = mergeExpansionAdditions(roundSuggestions, additions);
-        if (merged.length > MAX_PLANNED_SECTIONS) {
+        if (merged.length > MAX_PLANNED_SECTIONS || evaluateNovelScale(merged, existingSections).exceedsMaximum) {
           hitCap = true;
           break;
         }
@@ -2346,6 +2354,12 @@ export async function progressivelyExpandOutline(
     throw new NovelScalePlanningError(
       "failed_under_target",
       `Novel outline remains below the ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word preferred planning floor after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
+    );
+  }
+  if (finalScale.exceedsMaximum) {
+    throw new NovelScalePlanningError(
+      "failed_over_target",
+      `Novel outline exceeds the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
     );
   }
   return { suggestions, warnings: [...new Set(warnings)], diagnostics };
@@ -2929,7 +2943,7 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes.
+This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan toward 90,000 words, with an 80,000-word minimum and a 120,000-word hard cap when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. Treat 120,000 words as an absolute ceiling, not a normal target. This is a budget constraint, not permission to add sections indefinitely. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes.
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
@@ -4974,6 +4988,11 @@ export async function runSuggestionJob(
                   `outline expansion exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`,
                 );
               }
+              if (evaluateNovelScale(merged, body.existingSections ?? []).exceedsMaximum) {
+                throw new ExpansionValidationError(
+                  `outline expansion exceeded the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`,
+                );
+              }
               return additions;
             },
           );
@@ -5072,6 +5091,12 @@ export async function runSuggestionJob(
           "outline expansion did not reach plausible novel scale",
         );
       }
+      if (requestedStoryMaterialFormat(body) === "novel" && finalScale.exceedsMaximum) {
+        throw new NovelScalePlanningError(
+          "failed_over_target",
+          `Novel outline exceeds the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`,
+        );
+      }
       const remainingAllocationDeficits = sectionAllocationDeficits(completedSuggestions);
       const finalWarnings = remainingAllocationDeficits.length > 0
         ? [...completionWarnings, `Completed after the bounded three-round repair pass with ${remainingAllocationDeficits.reduce((sum, entry) => sum + entry.missing, 0)} allocation section deficit${remainingAllocationDeficits.reduce((sum, entry) => sum + entry.missing, 0) === 1 ? "" : "s"} remaining.`]
@@ -5107,6 +5132,12 @@ export async function runSuggestionJob(
       let completedSuggestions = initialSuggestions;
       let completionWarnings = initialWarnings;
       const initialScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
+      if (requestedStoryMaterialFormat(body) === "novel" && initialScale.exceedsMaximum) {
+        throw new NovelScalePlanningError(
+          "failed_over_target",
+          `Novel outline exceeds the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap before expansion.`,
+        );
+      }
       const initialQuality = collectAdvisoryOutlineQuality(
         completedSuggestions,
         body.storyMaterialEnrichment,
