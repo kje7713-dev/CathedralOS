@@ -36,6 +36,8 @@ Deno.test("outline suggestion polling contract preserves structured failures and
 import {
   buildAllocationPrompt,
   buildExpansionPrompt,
+  fitAllocationToNovelBudget,
+  maximumBudgetedNewSections,
   outlineLogicalStageFamily,
   buildPrompt,
   assertDistinctOutlineTitles,
@@ -382,6 +384,29 @@ Deno.test("planner prompt passes empty existingSectionsByBeat when no existing s
     assertEquals(parsed.existingSectionsByBeat[sparseRequest.arcTemplate.beats[beatIndex].id], []);
   }
   assertEquals(parsed.existingUnlinkedSections, []);
+});
+
+Deno.test("allocator floors are scaled to the novel word budget", () => {
+  const req = {
+    ...sparseRequest,
+    arcTemplate: {
+      ...sparseRequest.arcTemplate,
+      beats: Array.from({ length: 11 }, (_, index) => ({
+        id: `beat-${index + 1}`,
+        role: index === 0 ? "ordinaryWorld" : "risingAction",
+        label: `Beat ${index + 1}`,
+        description: "Distinct movement.",
+      })),
+    },
+  } as any;
+  const allocation = new Map(req.arcTemplate.beats.map((beat: any) => [beat.id, {
+    minSections: 20,
+    rationale: "material-rich movement",
+  }]));
+  const fitted = fitAllocationToNovelBudget(allocation, req);
+  const total = Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0);
+  assertEquals(total <= maximumBudgetedNewSections(req), true);
+  assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
 });
 
 Deno.test("planner prompt groups one existing section onto its linked beat", () => {

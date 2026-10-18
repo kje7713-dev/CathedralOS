@@ -2767,6 +2767,58 @@ type Allocation = {
   rationale: string;
 };
 
+const MIN_CHAPTER_TOKENS = CONTAINER_EXPECTED_RANGES.chapter?.[0] ?? 3000;
+
+export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): number {
+  if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
+  const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
+  return Math.max(
+    req.arcTemplate.beats.length,
+    Math.min(
+      MAX_PLANNED_SECTIONS,
+      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / MIN_CHAPTER_TOKENS),
+    ),
+  );
+}
+
+/** Keep every beat's coverage floor, but never let allocator floors make the
+ * novel cap mathematically impossible. Relative allocation priority is
+ * preserved through largest-remainder scaling; later stages can still combine
+ * events inside each fuller section. */
+export function fitAllocationToNovelBudget(
+  allocation: Map<string, Allocation>,
+  req: OutlineFromRecipeRequest,
+): Map<string, Allocation> {
+  const budget = maximumBudgetedNewSections(req);
+  const total = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
+  if (requestedStoryMaterialFormat(req) !== "novel" || total <= budget) return allocation;
+
+  const positive = Array.from(allocation.entries()).filter(([, plan]) => plan.minSections > 0);
+  const baseFloor = positive.length <= budget ? 1 : 0;
+  const remaining = Math.max(0, budget - baseFloor * positive.length);
+  const weights = positive.map(([beatID, plan]) => ({ beatID, plan, raw: plan.minSections }));
+  const weightTotal = weights.reduce((sum, item) => sum + item.raw, 0) || 1;
+  const scaled = weights.map((item) => {
+    const exact = remaining * item.raw / weightTotal;
+    return { ...item, exact, value: Math.floor(exact) + baseFloor, fraction: exact - Math.floor(exact) };
+  });
+  let assigned = scaled.reduce((sum, item) => sum + item.value, 0);
+  for (const item of [...scaled].sort((left, right) => right.fraction - left.fraction)) {
+    if (assigned >= budget) break;
+    item.value++;
+    assigned++;
+  }
+  const byBeat = new Map(scaled.map((item) => [item.beatID, item]));
+  return new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
+    const scaledPlan = byBeat.get(beatID);
+    if (!scaledPlan || scaledPlan.value === plan.minSections) return [beatID, plan];
+    return [beatID, {
+      minSections: scaledPlan.value,
+      rationale: `${plan.rationale} Budget-normalized from ${plan.minSections} to ${scaledPlan.value} sections so the complete novel can remain within ${NOVEL_MAX_WORDS.toLocaleString()} words.`,
+    }];
+  }));
+}
+
 export class AllocationRetryRequired extends Error {
   constructor(public readonly reason: string) {
     super(`allocation planner requires one bounded retry: ${reason}`);
@@ -2943,10 +2995,11 @@ export function buildAllocationPrompt(
   req: OutlineFromRecipeRequest,
   obligations: RecipeObligation[] = [],
 ): { system: string; user: string } {
+  const maxBudgetedSections = maximumBudgetedNewSections(req);
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan toward 90,000 words, with an 80,000-word minimum and a 120,000-word hard cap when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. Treat 120,000 words as an absolute ceiling, not a normal target. This is a budget constraint, not permission to add sections indefinitely. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes.
+This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan toward 90,000 words, with an 80,000-word minimum and a 120,000-word hard cap when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. Treat 120,000 words as an absolute ceiling, not a normal target. This is a budget constraint, not permission to add sections indefinitely. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes. The server budget for NEW sections in this request is at most ${maxBudgetedSections}; the sum of all minSections values must fit inside that budget. Combine related events within a section instead of creating an allocation floor that would exceed it.
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
@@ -3033,9 +3086,9 @@ export async function planSectionAllocation(
   const corrections = options.retryOnly ? [true] : [false, true];
   for (const correction of corrections) {
     try {
-      return parseAndValidateAllocation(
-        await call(correction),
-        req.arcTemplate.beats,
+      return fitAllocationToNovelBudget(
+        parseAndValidateAllocation(await call(correction), req.arcTemplate.beats),
+        req,
       );
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
