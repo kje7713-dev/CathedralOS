@@ -550,6 +550,18 @@ final class AcceptAllLifecycleTests: XCTestCase {
         XCTAssertTrue(coordinator.acceptRunError?.contains("refreshing this project failed") == true)
         XCTAssertEqual(completedCallbackCount, 0, "A failed local refresh must not clear the saved review draft.")
 
+        let callsBeforeBlockedProject = service.startCallCount
+        coordinator.beginAcceptAll(
+            edgeFunctionURL: URL(string: "https://example.test/functions/v1/accept-outline-sections")!,
+            outlineID: UUID(), projectID: UUID(), projectLineageID: UUID(),
+            suggestions: [makeSuggestion()], startingPosition: 0,
+            idempotencyKey: "key-blocked-by-refresh-recovery", sourceRecipe: makeRecipe(),
+            context: context, service: service
+        )
+        XCTAssertEqual(service.startCallCount, callsBeforeBlockedProject,
+                       "A second project must not overwrite another project's pending refresh recovery.")
+        XCTAssertTrue(coordinator.acceptRunError?.contains("Retry Sync") == true)
+
         projectSync.restoreError = nil
         coordinator.retryAcceptAllRefresh(
             context: context,

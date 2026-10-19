@@ -588,6 +588,13 @@ final class DataDurabilityCoordinator: ObservableObject {
             reportAcceptRunError("Accept All is already in progress for this outline.")
             return
         }
+        // A completed server Accept All may still have a device-refresh
+        // checkpoint. Do not let another project replace that single durable
+        // recovery record before the user retries the targeted refresh.
+        if acceptRefreshRecovery != nil {
+            reportAcceptRunError("Accept All refresh recovery is pending. Retry Sync before accepting another project.")
+            return
+        }
         // Stale-state reconciliation: if a terminal run is held in memory or
         // persisted defaults, clear it so the new request can proceed. This
         // prevents a previous run's terminal state from permanently blocking

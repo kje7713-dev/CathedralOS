@@ -2235,9 +2235,10 @@ export function isRetryableExpansionFailure(run: {
 }): boolean {
   const planningState = run.planning_state;
   if (planningState && typeof planningState === "object" &&
+      (planningState as { phase?: unknown; nextAction?: unknown }).phase === "failed" &&
       (planningState as { nextAction?: unknown }).nextAction === "allocation-repair-exhausted") return false;
   if (run.diagnostics && typeof run.diagnostics === "object" &&
-      (run.diagnostics as { stage?: unknown }).stage === "allocation_repair_exhausted") return false;
+      (run.diagnostics as { failureStage?: unknown }).failureStage === "allocation_repair_exhausted") return false;
   return run.status === "failed" &&
     (run.error_code === "failed_expansion" || run.error_code === "insufficient_credits") &&
     Array.isArray(run.suggestions) && run.suggestions.length > 0 &&
@@ -3323,7 +3324,9 @@ export function allocationDeficits(
   return Array.from(allocation.entries())
     .map(([beatID, plan]) => {
       const actual = counts[beatID] ?? 0;
-      const required = plan.coverageMinimum ?? plan.allocationMinimum ?? plan.minSections;
+      // `minSections` is the budget-normalized hard floor for new sections.
+      // `allocationMinimum` retains the planner's original advisory request.
+      const required = plan.minSections;
       return { beatID, required, actual, missing: Math.max(0, required - actual) };
     })
     .filter((entry) => entry.missing > 0);
@@ -5249,7 +5252,12 @@ export async function runSuggestionJob(
         );
       }
       const remainingAllocationDeficits = sectionAllocationDeficits(completedSuggestions);
-      const allocationShortfallReport = allocationShortfalls(completedSuggestions, allocation ?? new Map());
+      const effectiveAllocation = allocation ?? new Map<string, Allocation>(
+        Array.isArray(planningState.allocationEntries)
+          ? planningState.allocationEntries as Array<[string, Allocation]>
+          : [],
+      );
+      const allocationShortfallReport = allocationShortfalls(completedSuggestions, effectiveAllocation);
       diagnostics = { ...diagnostics, allocationShortfalls: allocationShortfallReport };
       if (remainingAllocationDeficits.length > 0) {
         const checkpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? []);
@@ -5261,7 +5269,7 @@ export async function runSuggestionJob(
           planningState = {
             ...planningState,
             phase: "failed",
-            nextAction: "review-suggestions",
+            nextAction: "allocation-repair-exhausted",
             expansionCheckpoint: checkpoint,
           };
           diagnostics = markMeaningfulProgress({

@@ -448,9 +448,12 @@ Deno.test("budget normalization preserves one-section coverage per uncovered bea
   assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
   assertEquals(Array.from(fitted.values()).every((plan) => plan.coverageMinimum === 1), true);
   assertEquals(allocationShortfalls([], fitted).every((entry) => entry.intended === 20 && entry.shortfall === 20), true);
-  assertEquals(allocationDeficits([], fitted), req.arcTemplate.beats.map((beat: any) => ({
-    beatID: beat.id, required: 1, actual: 0, missing: 1,
-  })));
+  assertEquals(
+    allocationDeficits([], fitted).map(({ beatID, required, actual, missing }) => ({ beatID, required, actual, missing })),
+    Array.from(fitted.entries()).map(([beatID, plan]) => ({
+      beatID, required: plan.minSections, actual: 0, missing: plan.minSections,
+    })),
+  );
 });
 
 Deno.test("budget normalization fails explicitly when uncovered beats cannot fit", () => {
@@ -469,6 +472,16 @@ Deno.test("allocation repair is terminal when a resumed checkpoint starts after 
   const deficits = [{ beatID: "beat-2", required: 1, actual: 0, missing: 1 }];
   assertEquals(allocationRepairExhausted(deficits, [{ round: MAX_EXPANSION_ROUNDS, status: "completed" } as any]), true);
   assertEquals(allocationRepairExhausted(deficits, [{ round: MAX_EXPANSION_ROUNDS - 1, status: "completed" } as any]), false);
+});
+
+Deno.test("final allocation coverage enforces the budget-normalized allocation floor", () => {
+  const allocation = new Map([
+    ["beat-1", { minSections: 5, allocationMinimum: 5, coverageMinimum: 1, rationale: "opening" }],
+  ]);
+  const suggestions = [{ storyArcBeatID: "beat-1" }] as any;
+  assertEquals(allocationDeficits(suggestions, allocation), [{
+    beatID: "beat-1", required: 5, actual: 1, missing: 4,
+  }]);
 });
 
 Deno.test("final allocation coverage reports a repair deficit when a beat is omitted", () => {
@@ -1842,8 +1855,20 @@ Deno.test("insufficient-credit expansion failures are resumable from their durab
     },
   };
   assertEquals(isRetryableExpansionFailure(run), true);
-  assertEquals(isRetryableExpansionFailure({ ...run, planning_state: { nextAction: "allocation-repair-exhausted" } }), false);
-  assertEquals(isRetryableExpansionFailure({ ...run, diagnostics: { stage: "allocation_repair_exhausted", expansionCheckpoint: run.diagnostics.expansionCheckpoint } }), false);
+  const exhaustedFailedRun = {
+    ...run,
+    planning_state: {
+      phase: "failed",
+      nextAction: "allocation-repair-exhausted",
+      expansionCheckpoint: run.diagnostics.expansionCheckpoint,
+    },
+    diagnostics: {
+      ...run.diagnostics,
+      stage: "failed",
+      failureStage: "allocation_repair_exhausted",
+    },
+  };
+  assertEquals(isRetryableExpansionFailure(exhaustedFailedRun), false);
   assertEquals(isRetryableExpansionFailure({ ...run, error_code: "server_error" }), false);
   assertEquals(isRetryableExpansionFailure({ ...run, suggestions: [] }), false);
 });
