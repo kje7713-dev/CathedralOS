@@ -16,6 +16,15 @@ private final class SuggestionRunTestSessionProvider: SupabaseSessionProvider {
     }
 }
 
+private func makeSuggestion(storyArcBeatID: String = "22222222-2222-2222-2222-222222222222") -> OutlineSuggestion {
+    OutlineSuggestion(
+        title: "T", summary: "S", container: "chapter", pov: "third",
+        terminalBeat: "end", entryState: nil, dramaticEvent: nil,
+        resultingChange: nil, terminalState: nil,
+        storyArcBeatID: storyArcBeatID, recipeRequirementIDs: nil
+    )
+}
+
 // MARK: - SuggestionRunMetadataLineageTests
 //
 // PR 6 — move durable suggestion-run client identity from local project UUID
