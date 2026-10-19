@@ -75,6 +75,7 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
     var targetedRestoreProjectIDs: [UUID] = []
     var targetedRestoreLineageIDs: [UUID] = []
     var restoreDelayNanoseconds: UInt64 = 0
+    var targetedRestoreErrors: [Error?] = []
     var restoreError: Error?
     var restoreResult = ProjectRestoreReport(
         projects: [],
@@ -130,6 +131,13 @@ private final class SpyProjectSyncService: ProjectCloudSyncServiceProtocol {
         targetedRestoreProjectIDs.append(localProjectID)
         targetedRestoreLineageIDs.append(projectLineageID)
         eventLog?.events.append("project.restore.targeted")
+        if restoreDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: restoreDelayNanoseconds)
+        }
+        if !targetedRestoreErrors.isEmpty {
+            let nextError = targetedRestoreErrors.removeFirst()
+            if let nextError { throw nextError }
+        }
         if let restoreError { throw restoreError }
         return restoreResult
     }
@@ -340,6 +348,47 @@ final class DataDurabilityTests: XCTestCase {
         XCTAssertFalse(relaunched.isAcceptRefreshRetrying)
         XCTAssertFalse(relaunched.acceptRefreshRecoveryAvailable)
         XCTAssertNil(defaults.data(forKey: "cathedralos.acceptOutline.refreshRecovery"))
+    }
+
+    func testConcurrentRetryDoesNotRecreateRecoveryAfterDelayedFailure() async throws {
+        let suiteName = "DataDurabilityTests.retry-failure-race.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let projectID = UUID()
+        let lineageID = UUID()
+        let recovery = [
+            "projectID": projectID.uuidString,
+            "lineageID": lineageID.uuidString,
+            "message": "Accept All completed, but refreshing this project failed: prior failure"
+        ]
+        defaults.set(try JSONSerialization.data(withJSONObject: recovery), forKey: "cathedralos.acceptOutline.refreshRecovery")
+
+        let projectSpy = SpyProjectSyncService()
+        projectSpy.restoreDelayNanoseconds = 50_000_000
+        projectSpy.targetedRestoreErrors = [NSError(domain: "RetryFailure", code: 1)]
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSpy,
+            outputSyncService: SpyOutputSyncService(),
+            defaults: defaults
+        )
+        let context = try makeInMemoryContext()
+
+        coordinator.retryAcceptAllRefresh(context: context, projectID: projectID, lineageID: lineageID)
+        coordinator.retryAcceptAllRefresh(context: context, projectID: projectID, lineageID: lineageID)
+
+        for _ in 0..<20 where coordinator.isAcceptRefreshRetrying {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertEqual(projectSpy.targetedRestoreLineageIDs, [lineageID],
+                       "A delayed failing retry must still have only one targeted restore in flight.")
+        XCTAssertFalse(coordinator.isAcceptRefreshRetrying)
+        XCTAssertTrue(coordinator.acceptRefreshRecoveryAvailable,
+                      "A failed retry must preserve the recovery checkpoint for a later attempt.")
+        XCTAssertNotNil(defaults.data(forKey: "cathedralos.acceptOutline.refreshRecovery"))
+        XCTAssertTrue(coordinator.acceptRunError?.contains("refreshing this project failed") == true)
     }
 
     func testSignOutDoesNotDeleteLocalProjects() async throws {

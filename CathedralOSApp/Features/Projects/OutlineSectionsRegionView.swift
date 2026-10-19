@@ -655,8 +655,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     private var acceptAllFailurePresented: Binding<Bool> {
         Binding(
             get: {
-                self.durabilityCoordinator.activeAcceptRun == nil
+                let isRefreshFailure = self.durabilityCoordinator.acceptRunError?.hasPrefix("Accept All completed, but refreshing") == true
+                return self.durabilityCoordinator.activeAcceptRun == nil
                     && self.durabilityCoordinator.acceptRunError != nil
+                    && (!isRefreshFailure
+                        || self.durabilityCoordinator.acceptRefreshRecoveryProjectIdentity?.lineageID == self.project.stableLineageID)
             },
             set: { if !$0 { self.durabilityCoordinator.dismissAcceptRunError() } }
         )
