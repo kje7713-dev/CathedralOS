@@ -36,6 +36,9 @@ Deno.test("outline suggestion polling contract preserves structured failures and
 import {
   buildAllocationPrompt,
   buildExpansionPrompt,
+  isRetryableInsufficientCreditFailure,
+  fitAllocationToNovelBudget,
+  maximumBudgetedNewSections,
   outlineLogicalStageFamily,
   buildPrompt,
   assertDistinctOutlineTitles,
@@ -384,6 +387,44 @@ Deno.test("planner prompt passes empty existingSectionsByBeat when no existing s
   assertEquals(parsed.existingUnlinkedSections, []);
 });
 
+Deno.test("charged insufficient-credit runs with a planning checkpoint are resumable", () => {
+  assertEquals(isRetryableInsufficientCreditFailure({
+    status: "failed",
+    error_code: "insufficient_credits",
+    credit_cost_charged: 3.67,
+    planning_state: { phase: "allocation_complete", nextAction: "outline-suggestions" },
+  }), true);
+  assertEquals(isRetryableInsufficientCreditFailure({
+    status: "failed",
+    error_code: "insufficient_credits",
+    credit_cost_charged: 0,
+    planning_state: { phase: "allocation_complete", nextAction: "outline-suggestions" },
+  }), false);
+});
+
+Deno.test("allocator floors are scaled to the novel word budget", () => {
+  const req = {
+    ...sparseRequest,
+    arcTemplate: {
+      ...sparseRequest.arcTemplate,
+      beats: Array.from({ length: 11 }, (_, index) => ({
+        id: `beat-${index + 1}`,
+        role: index === 0 ? "ordinaryWorld" : "risingAction",
+        label: `Beat ${index + 1}`,
+        description: "Distinct movement.",
+      })),
+    },
+  } as any;
+  const allocation = new Map(req.arcTemplate.beats.map((beat: any) => [beat.id, {
+    minSections: 20,
+    rationale: "material-rich movement",
+  }]));
+  const fitted = fitAllocationToNovelBudget(allocation, req);
+  const total = Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0);
+  assertEquals(total <= maximumBudgetedNewSections(req), true);
+  assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
+});
+
 Deno.test("planner prompt groups one existing section onto its linked beat", () => {
   const section = { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] };
   const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [section] } as any);
@@ -663,7 +704,8 @@ Deno.test("sparse recipe context is preserved for the single comprehensive outli
   assertEquals(user.includes("Douche"), true);
   assertEquals(system.includes("30-60"), false);
   assertEquals(system.includes("5-15"), false);
-  assertEquals(system.includes("minimum is a floor for dramatic coverage, not a target or maximum"), true);
+  assertEquals(plannerPrompt.system.includes("minSections represents the number of additional sections still required beyond existingSections"), true);
+  assertEquals(system.includes("minimum is a floor for dramatic coverage, not a target or maximum"), false);
   assertEquals(system.includes("targetSections"), false);
   assertEquals(system.includes("maxSections"), false);
 });
@@ -755,7 +797,7 @@ Deno.test("primary outline prompt has no arbitrary section-count instruction", (
     ["beat-2", { minSections: 1, rationale: "closure" }],
   ])).system;
   assertEquals(/\b\d+[-–]\d+\s+distinct sections\b/i.test(prompt), false);
-  assertEquals(prompt.includes("minimum is a floor for dramatic coverage, not a target or maximum"), true);
+  assertEquals(prompt.includes("Allocate the available word budget across the Story Arc beats before choosing sections."), true);
   assertEquals(prompt.includes("Selected motifs are supporting material, not a quota"), true);
   assertEquals(prompt.includes("do not repeat a motif merely to prove that the outline remembers it"), true);
   assertEquals(prompt.includes("MAX_PLANNED_SECTIONS"), false);
@@ -807,12 +849,12 @@ Deno.test("global buildPrompt communicates whole-outline dramatic comparison and
   );
   // Differentiation guidance must preserve length/allocation.
   assertEquals(
-    system.includes("Do NOT solve redundant dramatic work by reducing the planned novel"),
+    system.includes("Do not solve redundant dramatic work by adding sections"),
     true,
     "allocation and novel length must remain authoritative",
   );
   assertEquals(
-    system.includes("Allocation, minimum section coverage, and target novel length remain authoritative"),
+    system.includes("Allocation, minimum section coverage, and the novel length policy remain authoritative"),
     true,
   );
   // Earned place principle.
@@ -1229,7 +1271,7 @@ Deno.test("outline section contract assigns canonical plot decisions to the plan
 Deno.test("novel planning exposes container semantics and projected-size expansion", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
-  assertEquals(allocationPrompt.includes("70,000-90,000 word"), true);
+  assertEquals(allocationPrompt.includes("plan toward 90,000 words"), true);
   assertEquals(allocationPrompt.includes("minimum number of NEW dramatic sections still required"), true);
   assertEquals(allocationPrompt.includes("floor, not a target or maximum"), true);
   assertEquals(source.includes("targetSections"), false);
@@ -1246,6 +1288,10 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
     ["beat-1", { minSections: 1, rationale: "setup" }],
     ["beat-2", { minSections: 1, rationale: "escalation" }],
   ])).system;
+  assertEquals(outlinePrompt.includes("Novel length policy"), true);
+  assertEquals(outlinePrompt.includes("120,000-word hard cap"), true);
+  assertEquals(outlinePrompt.includes("Fit the complete story package into the budget"), true);
+  assertEquals(outlinePrompt.includes("do not drop story material"), true);
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
   assertEquals(outlinePrompt.includes("Recipe realization priority"), true);
   assertEquals(outlinePrompt.includes("governing creative brief"), true);
@@ -1404,7 +1450,7 @@ Deno.test("beat-local expansion prompt carries the target beat contract", () => 
     round: 1,
     projectedTokens: 2600,
     projectedWords: 2000,
-    desiredWords: [70000, 90000],
+    desiredWords: [90000, 120000],
     remainingDeficitTokens: 88400,
     beat: {
       beatID: "beat-1",
@@ -1723,13 +1769,13 @@ Deno.test("retry resumes from the persisted expansion checkpoint without repeati
     new Set(["beat-1"]),
     async (_current, context) => {
       calls.push(context.round);
-      return Array.from({ length: 20 }, (_, i) => expansionSection(`Retry round ${i + 1}`, "chapter"));
+      return Array.from({ length: 18 }, (_, i) => expansionSection(`Retry round ${i + 1}`, "chapter"));
     },
     undefined,
     { startRound: resumed!.startRound, priorDiagnostics: resumed!.priorDiagnostics },
   );
   assertEquals(calls, [2]);
-  assertEquals(result.suggestions.length, 57);
+  assertEquals(result.suggestions.length, 55);
 });
 
 Deno.test("a ~34K projected novel cannot terminate as completed below the 70K minimum", async () => {
@@ -1803,7 +1849,7 @@ Deno.test("existing sections survive progressive expansion and global cap fails 
 });
 
 Deno.test("expansion prompt includes round projection, broad range, and remaining deficit", () => {
-  const prompt = buildExpansionPrompt(sparseRequest as any, sceneOutline(27) as any, { round: 2, projectedTokens: 35100, projectedWords: 27000, desiredWords: [70000, 90000], remainingDeficitTokens: 22700 });
+  const prompt = buildExpansionPrompt(sparseRequest as any, sceneOutline(27) as any, { round: 2, projectedTokens: 35100, projectedWords: 27000, desiredWords: [90000, 120000], remainingDeficitTokens: 22700 });
   assertEquals(prompt.system.includes("progressive expansion round 2 of 3"), true);
   assertEquals(prompt.system.includes("remaining estimated deficit"), true);
   assertEquals(prompt.user.includes("remainingDeficitTokens"), true);
@@ -3011,7 +3057,7 @@ Deno.test("PR3 expansion schema and parser enforce beat-local semantic functions
 
 Deno.test("PR3 expansion prompt carries the complete target semantic contract", () => {
   const template = { ...sparseRequest, arcTemplate: { name: "Freytag's Pyramid", id: "f", beats: freytagFixture.beats } } as any;
-  const prompt = buildExpansionPrompt(template, [], { round: 1, projectedTokens: 1, projectedWords: 1, desiredWords: [70000, 90000], remainingDeficitTokens: 100, beat: { beatID: "fall", beatLabel: "Falling Action", currentSections: [], projectedTokens: 0, projectedWords: 0 } } as any);
+  const prompt = buildExpansionPrompt(template, [], { round: 1, projectedTokens: 1, projectedWords: 1, desiredWords: [90000, 120000], remainingDeficitTokens: 100, beat: { beatID: "fall", beatLabel: "Falling Action", currentSections: [], projectedTokens: 0, projectedWords: 0 } } as any);
   assertEquals(prompt.system.includes("allowedFunctions="), true);
   assertEquals(prompt.system.includes("forbidsNewPrimaryConflict=true"), true);
   assertEquals(prompt.system.includes("phaseDirection=resolve"), true);
@@ -3947,7 +3993,7 @@ Deno.test("expansion prompt stays bounded as global outline grows", () => {
   const target = { beatID: "beat-1", beatLabel: "Opening", beatDescription: "Begin", projectedWords: 1200, currentSections: [{ id: "target", title: "Target", summary: "Current target", storyArcBeatID: "beat-1", container: "scene" }] };
   const sizes = [10, 50, 100].map((count) => {
     const current = Array.from({ length: count }, (_, i) => ({ id: `s-${i}`, title: `Section ${i}`, summary: `Summary ${i}`, storyArcBeatID: "beat-1", container: "scene" }));
-    const prompt = buildExpansionPrompt(sparseRequest as any, current as any, { round: 1, projectedTokens: 1200, projectedWords: 300, desiredWords: [70000, 90000], remainingDeficitTokens: 1000, beat: target as any }, []);
+    const prompt = buildExpansionPrompt(sparseRequest as any, current as any, { round: 1, projectedTokens: 1200, projectedWords: 300, desiredWords: [90000, 120000], remainingDeficitTokens: 1000, beat: target as any }, []);
     return JSON.stringify(prompt).length;
   });
   assertEquals(sizes[2] <= sizes[0] * 1.5, true);

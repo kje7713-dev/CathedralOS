@@ -643,10 +643,12 @@ const CONTAINER_EXPECTED_RANGES: Record<string, [number, number]> = {
   setPiece: [2000, 5000], sceneSequence: [3000, 7000], shortStory: [2500, 8000],
   chapter: [3000, 8000], episode: [5000, 15000],
 };
-const NOVEL_TARGET_WORDS: [number, number] = [70000, 90000];
+export const NOVEL_TARGET_WORDS: [number, number] = [90000, 120000];
 export const NOVEL_PREFERRED_MIN_WORDS = 80000;
+export const NOVEL_MAX_WORDS = 120000;
 const TOKENS_PER_WORD = 1.3;
 const NOVEL_MIN_PROJECTED_TOKENS = NOVEL_PREFERRED_MIN_WORDS * TOKENS_PER_WORD;
+const NOVEL_MAX_PROJECTED_TOKENS = NOVEL_MAX_WORDS * TOKENS_PER_WORD;
 const MAX_PLANNED_SECTIONS = 200;
 export const MAX_EXPANSION_ROUNDS = 3;
 
@@ -1869,9 +1871,11 @@ export interface NovelScaleEvaluation {
   projectedWords: number;
   minimumWords: number;
   preferredMinimumWords: number;
+  maximumWords: number;
   deficitTokens: number;
   meetsMinimum: boolean;
   meetsPreferredMinimum: boolean;
+  exceedsMaximum: boolean;
 }
 
 /**
@@ -1891,9 +1895,11 @@ export function evaluateNovelScale(
     projectedWords: projectedTokens / TOKENS_PER_WORD,
     minimumWords: NOVEL_PREFERRED_MIN_WORDS,
     preferredMinimumWords: NOVEL_PREFERRED_MIN_WORDS,
+    maximumWords: NOVEL_MAX_WORDS,
     deficitTokens,
     meetsMinimum: deficitTokens === 0,
     meetsPreferredMinimum: projectedTokens / TOKENS_PER_WORD >= NOVEL_PREFERRED_MIN_WORDS,
+    exceedsMaximum: projectedTokens > NOVEL_MAX_PROJECTED_TOKENS,
   };
 }
 
@@ -1972,7 +1978,7 @@ export type ExpansionAddition = Suggestion & { insertAfterTitle: string | null }
 
 export class ExpansionValidationError extends Error {}
 
-export type NovelPlanningFailureCode = "failed_under_target" | "failed_expansion";
+export type NovelPlanningFailureCode = "failed_under_target" | "failed_over_target" | "failed_expansion";
 
 export class RecipeObligationValidationError extends Error {
   readonly code = "missing_recipe_obligations";
@@ -2197,6 +2203,20 @@ export interface ExpansionResumeState {
  * expansion checkpoint proves earlier paid stages are complete, so retrying
  * this identity does not replay or double-charge them.
  */
+export function isRetryableInsufficientCreditFailure(run: {
+  status?: unknown;
+  error_code?: unknown;
+  credit_cost_charged?: unknown;
+  planning_state?: unknown;
+}): boolean {
+  if (run.status !== "failed" || run.error_code !== "insufficient_credits") return false;
+  if (!(Number(run.credit_cost_charged ?? 0) > 0)) return false;
+  const planningState = run.planning_state;
+  if (!planningState || typeof planningState !== "object" || Array.isArray(planningState)) return false;
+  const nextAction = (planningState as { nextAction?: unknown }).nextAction;
+  return typeof nextAction === "string" && nextAction.length > 0;
+}
+
 export function isRetryableExpansionFailure(run: {
   status?: unknown;
   error_code?: unknown;
@@ -2249,8 +2269,10 @@ export async function progressivelyExpandOutline(
   const diagnostics: ExpansionRoundDiagnostic[] = [...(options.priorDiagnostics ?? [])];
   const warnings: string[] = [];
   const startRound = Math.max(1, options.startRound ?? 1);
-  const shouldContinueDevelopment = (current: Suggestion[]) =>
-    needsNovelExpansion(current, existingSections) || options.qualityGate?.(current) === true;
+  const shouldContinueDevelopment = (current: Suggestion[]) => {
+    const scale = evaluateNovelScale(current, existingSections);
+    return !scale.exceedsMaximum && (needsNovelExpansion(current, existingSections) || options.qualityGate?.(current) === true);
+  };
   for (let round = startRound; round <= MAX_EXPANSION_ROUNDS && shouldContinueDevelopment(suggestions); round++) {
     const projectedTokensBefore = evaluateNovelScale(suggestions, existingSections).projectedTokens;
     const before: ExpansionPromptContext = {
@@ -2291,7 +2313,7 @@ export async function progressivelyExpandOutline(
           throw new ExpansionValidationError(`beat-local expansion returned a section for another beat; expected ${beatContext.beatID}`);
         }
         const merged = mergeExpansionAdditions(roundSuggestions, additions);
-        if (merged.length > MAX_PLANNED_SECTIONS) {
+        if (merged.length > MAX_PLANNED_SECTIONS || evaluateNovelScale(merged, existingSections).exceedsMaximum) {
           hitCap = true;
           break;
         }
@@ -2346,6 +2368,12 @@ export async function progressivelyExpandOutline(
     throw new NovelScalePlanningError(
       "failed_under_target",
       `Novel outline remains below the ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word preferred planning floor after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
+    );
+  }
+  if (finalScale.exceedsMaximum) {
+    throw new NovelScalePlanningError(
+      "failed_over_target",
+      `Novel outline exceeds the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
     );
   }
   return { suggestions, warnings: [...new Set(warnings)], diagnostics };
@@ -2623,6 +2651,9 @@ export function buildPrompt(
 
 Every section must commit to one canonical event. Never use unresolved alternatives such as "X or Y", "someone", "a friend", "somewhere", or multiple possible versions of the event. Choose the specific person, place, object, and action.
 
+## Novel length policy
+For a novel, plan toward 90,000 words, with an 80,000-word minimum and a 120,000-word hard cap. The cap applies to the complete outline projection, not only to later expansion. Allocate the available word budget across the Story Arc beats before choosing sections. Cover every authored obligation, essential character arc, major conflict, reversal, consequence, and ending commitment within that budget. Combine related events into fuller sections; do not create one section per enrichment item. Fit the complete story package into the budget. When material competes for space, combine related events into fuller sections, deepen shared sections, and adjust the level of detail; do not drop story material merely to meet the cap. Never treat the length policy as permission to omit a required story element. Use the chapter container for substantial units and the server's expected container ranges as planning estimates; keep the complete projected outline at or below 120,000 words.
+
 Selected motifs are supporting material, not a quota. Use a motif in a section only when the section contract, causality, physical continuity, or a meaningful transformation requires it; do not repeat a motif merely to prove that the outline remembers it. Prefer concrete scene-specific images when no selected motif is needed.
 
 Each section must produce a materially new resulting state. Do not create another section merely to restate or reconfirm a relationship change, realization, warning, or trust shift already achieved. Revisit an arc only when a new event escalates, reverses, costs, or transforms it.
@@ -2634,7 +2665,7 @@ Evaluate the WHOLE proposed novel — including sections in other Story Arc beat
 
 Avoid redundant patterns such as: the group pushes the same threat back twice as two separate victories; the same breach or conflict is effectively closed twice; a character resolves the same belonging or identity question twice; the same relationship realization receives another "final" resolution; or a later climax restages the earlier climax with greater spectacle but substantially the same result.
 
-Do NOT solve redundant dramatic work by reducing the planned novel. Allocation, minimum section coverage, and target novel length remain authoritative. When multiple planned sections would otherwise perform similar dramatic work, redesign the LATER section to create a different change while still fulfilling its Story Arc role, recipe obligations, allocation, and expected length contribution. The amount of story should be preserved; the amount of distinct story should grow.
+Do not solve redundant dramatic work by adding sections. Allocation, minimum section coverage, and the novel length policy remain authoritative. When multiple planned sections would otherwise perform similar dramatic work, combine or redesign them so the complete outline remains within the 120,000-word cap while still fulfilling its Story Arc role and recipe obligations. Preserve required story content; remove padding and optional repetition.
 
 A later section may revisit the same characters, antagonist, conflict, location, or thematic question, but must advance it through a genuinely new development: a new consequence; an increased or different cost; a reversal; changed knowledge; changed power; transferred agency; a harder decision; resolution of a different thread; a changed relationship; a transformed meaning of the earlier event; or a materially different tactical state. Each section should earn its place by changing something the previous sections have not already changed.
 
@@ -2670,7 +2701,7 @@ Use the deterministic, provenance-preserving planning view below. Items marked s
 
 ## Use the minimum-only allocation
 
-For each beat, generate at least the stated minimum number of distinct sections. The minimum is a floor for dramatic coverage, not a target or maximum: generate additional sections whenever the material supports distinct events, consequences, decisions, or revelations. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.
+For each beat, generate at least the stated minimum number of distinct sections while respecting the novel length policy. The minimum is a coverage floor, not permission to exceed the 120,000-word cap: add sections only when the required story cannot be covered by combining material. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.
 
 ## Character arc and plot integration
 Whenever practical, relationship and character-arc turns should cause or complicate plot events rather than occurring as isolated character-development scenes.
@@ -2749,6 +2780,58 @@ type Allocation = {
   minSections: number;
   rationale: string;
 };
+
+const MIN_CHAPTER_TOKENS = CONTAINER_EXPECTED_RANGES.chapter?.[0] ?? 3000;
+
+export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): number {
+  if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
+  const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
+  return Math.max(
+    req.arcTemplate.beats.length,
+    Math.min(
+      MAX_PLANNED_SECTIONS,
+      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / MIN_CHAPTER_TOKENS),
+    ),
+  );
+}
+
+/** Keep every beat's coverage floor, but never let allocator floors make the
+ * novel cap mathematically impossible. Relative allocation priority is
+ * preserved through largest-remainder scaling; later stages can still combine
+ * events inside each fuller section. */
+export function fitAllocationToNovelBudget(
+  allocation: Map<string, Allocation>,
+  req: OutlineFromRecipeRequest,
+): Map<string, Allocation> {
+  const budget = maximumBudgetedNewSections(req);
+  const total = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
+  if (requestedStoryMaterialFormat(req) !== "novel" || total <= budget) return allocation;
+
+  const positive = Array.from(allocation.entries()).filter(([, plan]) => plan.minSections > 0);
+  const baseFloor = positive.length <= budget ? 1 : 0;
+  const remaining = Math.max(0, budget - baseFloor * positive.length);
+  const weights = positive.map(([beatID, plan]) => ({ beatID, plan, raw: plan.minSections }));
+  const weightTotal = weights.reduce((sum, item) => sum + item.raw, 0) || 1;
+  const scaled = weights.map((item) => {
+    const exact = remaining * item.raw / weightTotal;
+    return { ...item, exact, value: Math.floor(exact) + baseFloor, fraction: exact - Math.floor(exact) };
+  });
+  let assigned = scaled.reduce((sum, item) => sum + item.value, 0);
+  for (const item of [...scaled].sort((left, right) => right.fraction - left.fraction)) {
+    if (assigned >= budget) break;
+    item.value++;
+    assigned++;
+  }
+  const byBeat = new Map(scaled.map((item) => [item.beatID, item]));
+  return new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
+    const scaledPlan = byBeat.get(beatID);
+    if (!scaledPlan || scaledPlan.value === plan.minSections) return [beatID, plan];
+    return [beatID, {
+      minSections: scaledPlan.value,
+      rationale: `${plan.rationale} Budget-normalized from ${plan.minSections} to ${scaledPlan.value} sections so the complete novel can remain within ${NOVEL_MAX_WORDS.toLocaleString()} words.`,
+    }];
+  }));
+}
 
 export class AllocationRetryRequired extends Error {
   constructor(public readonly reason: string) {
@@ -2926,10 +3009,11 @@ export function buildAllocationPrompt(
   req: OutlineFromRecipeRequest,
   obligations: RecipeObligation[] = [],
 ): { system: string; user: string } {
+  const maxBudgetedSections = maximumBudgetedNewSections(req);
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan enough for a plausible 70,000-90,000 word work when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. This is a broad scale target, not an exact word count. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes.
+This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan toward 90,000 words, with an 80,000-word minimum and a 120,000-word hard cap when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. Treat 120,000 words as an absolute ceiling, not a normal target. This is a budget constraint, not permission to add sections indefinitely. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes. The server budget for NEW sections in this request is at most ${maxBudgetedSections}; the sum of all minSections values must fit inside that budget. Combine related events within a section instead of creating an allocation floor that would exceed it.
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
@@ -3016,9 +3100,9 @@ export async function planSectionAllocation(
   const corrections = options.retryOnly ? [true] : [false, true];
   for (const correction of corrections) {
     try {
-      return parseAndValidateAllocation(
-        await call(correction),
-        req.arcTemplate.beats,
+      return fitAllocationToNovelBudget(
+        parseAndValidateAllocation(await call(correction), req.arcTemplate.beats),
+        req,
       );
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
@@ -4974,6 +5058,11 @@ export async function runSuggestionJob(
                   `outline expansion exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`,
                 );
               }
+              if (evaluateNovelScale(merged, body.existingSections ?? []).exceedsMaximum) {
+                throw new ExpansionValidationError(
+                  `outline expansion exceeded the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`,
+                );
+              }
               return additions;
             },
           );
@@ -5072,6 +5161,12 @@ export async function runSuggestionJob(
           "outline expansion did not reach plausible novel scale",
         );
       }
+      if (requestedStoryMaterialFormat(body) === "novel" && finalScale.exceedsMaximum) {
+        throw new NovelScalePlanningError(
+          "failed_over_target",
+          `Novel outline exceeds the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`,
+        );
+      }
       const remainingAllocationDeficits = sectionAllocationDeficits(completedSuggestions);
       const finalWarnings = remainingAllocationDeficits.length > 0
         ? [...completionWarnings, `Completed after the bounded three-round repair pass with ${remainingAllocationDeficits.reduce((sum, entry) => sum + entry.missing, 0)} allocation section deficit${remainingAllocationDeficits.reduce((sum, entry) => sum + entry.missing, 0) === 1 ? "" : "s"} remaining.`]
@@ -5107,6 +5202,12 @@ export async function runSuggestionJob(
       let completedSuggestions = initialSuggestions;
       let completionWarnings = initialWarnings;
       const initialScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
+      if (requestedStoryMaterialFormat(body) === "novel" && initialScale.exceedsMaximum) {
+        throw new NovelScalePlanningError(
+          "failed_over_target",
+          `Novel outline exceeds the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap before expansion.`,
+        );
+      }
       const initialQuality = collectAdvisoryOutlineQuality(
         completedSuggestions,
         body.storyMaterialEnrichment,
@@ -6181,6 +6282,22 @@ Deno.serve(async (req: Request) => {
         }),
         { status: 200 },
       );
+    }
+    if (isRetryableInsufficientCreditFailure(existing)) {
+      const { error: retryError } = await db.from("outline_suggestion_runs").update({
+        status: "pending",
+        error_code: null,
+        error: null,
+        completed_at: null,
+        lease_owner: null,
+        lease_expires_at: null,
+        attempt_count: (existing.attempt_count ?? 0) + 1,
+      }).eq("id", existing.id).eq("status", "failed");
+      if (retryError) return errorResponse("db_error", retryError.message ?? "Could not resume after adding credits", 500);
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
+      // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      return corsResponse(JSON.stringify({ ...suggestionRunResponse(existing), status: "pending", errorCode: null, error: null }), { status: 200 });
     }
     if (isRetryableExpansionFailure(existing)) {
       const { error: retryError } = await db.from("outline_suggestion_runs").update({
