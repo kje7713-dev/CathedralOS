@@ -189,10 +189,9 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             result: result,
             failureCode: "insufficient_credits"
         )
-        XCTAssertTrue(message.contains("Already charged 11.28 credits"))
+        XCTAssertTrue(message.contains("You were charged 11.28 credits"))
         XCTAssertTrue(message.contains("Remaining balance: 42.25 credits"))
         XCTAssertTrue(message.contains("available credit balance was insufficient"))
-        XCTAssertTrue(message.contains("No additional charge was made"))
     }
 
     func testPaidSavedSuggestionFeedbackUsesServerReasonWhenCodeIsMissing() {

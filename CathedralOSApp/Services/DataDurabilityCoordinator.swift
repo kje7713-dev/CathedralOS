@@ -514,6 +514,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var isAcceptRunInitiating: Bool = false
     internal var acceptPollingTask: Task<Void, Never>?
     private static let acceptRunKey = "cathedralos.acceptOutline.activeRun"
+    private var failedAcceptRefreshIdentity: (projectID: UUID, lineageID: UUID)?
 
     /// Starts the server-owned Accept All job. The task and all completion work
     /// belong to this coordinator, so dismissing the review sheet cannot cancel
@@ -811,6 +812,7 @@ final class DataDurabilityCoordinator: ObservableObject {
         let serverAccepted = metadata.typedStatus == .completed &&
             metadata.sectionsFailed == 0 &&
             metadata.error == nil
+        var refreshSucceeded = false
         if serverAccepted {
             do {
                 // Pass both the local project id and the canonical lineage id so
@@ -831,8 +833,11 @@ final class DataDurabilityCoordinator: ObservableObject {
                 // screen replace its object reference immediately, rather than
                 // continuing to render the pre-restore SwiftData object.
                 onProjectRefreshed?(metadata.projectID, metadata.projectLineageID)
+                failedAcceptRefreshIdentity = nil
+                refreshSucceeded = true
             } catch {
                 acceptRunError = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
+                failedAcceptRefreshIdentity = (metadata.projectID, metadata.projectLineageID)
             }
         } else {
             acceptRunError = metadata.error ??
@@ -845,11 +850,45 @@ final class DataDurabilityCoordinator: ObservableObject {
         acceptRunRevision &+= 1
         outputRefreshRevision &+= 1
         NotificationCenter.default.post(name: .cathedralOSGenerationOutputsChanged, object: nil)
-        // The server result is authoritative even when this device cannot
-        // refresh its local snapshot. Clear the paid suggestion draft so a
-        // completed Accept All cannot resurrect the old Resume affordance.
-        if serverAccepted {
+        // The server result is authoritative, but keep the paid suggestion
+        // draft until this device has refreshed successfully so the parent
+        // screen can offer a recovery path instead of losing the review state.
+        if serverAccepted && refreshSucceeded {
             onAcceptAllCompleted?()
+        }
+    }
+
+    /// Retry only the device refresh after the server has already accepted the
+    /// sections. This never starts another Accept All job or charges again.
+    @MainActor
+    func retryAcceptAllRefresh(
+        context: ModelContext,
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
+        onAcceptAllCompleted: (() -> Void)? = nil
+    ) {
+        guard let identity = failedAcceptRefreshIdentity else { return }
+        acceptRunError = nil
+        acceptRunRevision &+= 1
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let report = try await self.projectSyncService.restoreProject(
+                    localProjectID: identity.projectID,
+                    projectLineageID: identity.lineageID,
+                    into: context,
+                    includeTombstoned: false
+                )
+                self.logger.log("Accept All refresh retry complete: \(report.summaryMessage, privacy: .public)")
+                onProjectRefreshed?(identity.projectID, identity.lineageID)
+                self.failedAcceptRefreshIdentity = nil
+                self.acceptRunRevision &+= 1
+                self.outputRefreshRevision &+= 1
+                NotificationCenter.default.post(name: .cathedralOSGenerationOutputsChanged, object: nil)
+                onAcceptAllCompleted?()
+            } catch {
+                self.acceptRunError = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
+                self.acceptRunRevision &+= 1
+            }
         }
     }
 

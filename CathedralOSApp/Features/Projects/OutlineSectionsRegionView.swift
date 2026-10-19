@@ -495,6 +495,15 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // be rendered here. The review sheet can disappear during reconciliation;
         // without this fallback the shared coordinator's error is silent.
         .alert("Accept All Failed", isPresented: acceptAllFailurePresented) {
+            if durabilityCoordinator.acceptRunError?.hasPrefix("Accept All completed, but refreshing") == true {
+                Button("Retry Sync") {
+                    durabilityCoordinator.retryAcceptAllRefresh(
+                        context: modelContext,
+                        onProjectRefreshed: handleProjectRefreshed,
+                        onAcceptAllCompleted: handleAcceptAllCompleted
+                    )
+                }
+            }
             Button("OK", role: .cancel) { durabilityCoordinator.dismissAcceptRunError() }
         } message: {
             Text(durabilityCoordinator.acceptRunError ?? "Accept All failed.")

@@ -167,6 +167,12 @@ struct OutlineSuggestionsReviewView: View {
             NSLog("[accept_all] revision_changed revision=%u hasError=%d", durabilityCoordinator.acceptRunRevision, durabilityCoordinator.acceptRunError == nil ? 0 : 1)
             if hasStartedAcceptance && durabilityCoordinator.acceptRunError == nil {
                 dismiss()
+            } else if hasStartedAcceptance,
+                      durabilityCoordinator.acceptRunError?.hasPrefix("Accept All completed, but refreshing") == true {
+                // The server accepted the sections, but this sheet must get
+                // out of the way so the parent project screen can present the
+                // retry-sync action without hiding it behind this alert.
+                dismiss()
             }
         }
         .onChange(of: durabilityCoordinator.acceptRunInitiationRevision) { _, _ in

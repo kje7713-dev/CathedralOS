@@ -603,7 +603,10 @@ export function buildSuggestionResponseSchema(
       // unbounded number of full chapter sections. Optional scale expansion
       // happens later through the budget-aware progressive expansion path.
       minItems: minimum,
-      maxItems: minimum,
+      // Only novels use the allocation as an exact first-pass budget. Other
+      // formats have no novel expansion stage, so their allocation is a floor
+      // and must not silently cap the provider's format-appropriate coverage.
+      maxItems: requestedFormat === "novel" ? minimum : MAX_PLANNED_SECTIONS,
       items: beatSectionSchema,
     };
     required.push(beat.id);
@@ -2156,6 +2159,8 @@ export interface ProgressiveExpansionOptions {
   startRound?: number;
   startBeatIndex?: number;
   priorDiagnostics?: ExpansionRoundDiagnostic[];
+  /** Required structural coverage is a hard gate, not optional quality work. */
+  coverageGate?: (suggestions: Suggestion[]) => boolean;
   qualityGate?: (suggestions: Suggestion[]) => boolean;
   beats?: Array<{ id: string; label?: string; description?: string }>;
   onBeat?: (
@@ -2275,7 +2280,11 @@ export async function progressivelyExpandOutline(
   const startRound = Math.max(1, options.startRound ?? 1);
   const shouldContinueDevelopment = (current: Suggestion[]) => {
     const scale = evaluateNovelScale(current, existingSections);
-    return !scale.exceedsMaximum && (needsNovelExpansion(current, existingSections) || options.qualityGate?.(current) === true);
+    return !scale.exceedsMaximum && (
+      needsNovelExpansion(current, existingSections) ||
+      options.coverageGate?.(current) === true ||
+      options.qualityGate?.(current) === true
+    );
   };
   for (let round = startRound; round <= MAX_EXPANSION_ROUNDS && shouldContinueDevelopment(suggestions); round++) {
     const projectedTokensBefore = evaluateNovelScale(suggestions, existingSections).projectedTokens;
@@ -2782,8 +2791,19 @@ const ALLOCATION_SCHEMA = {
 
 type Allocation = {
   minSections: number;
+  /** At least one new section is required for every previously uncovered beat. */
+  coverageMinimum?: number;
   rationale: string;
 };
+
+export class AllocationBudgetConstraintError extends Error {
+  readonly code = "allocation_budget_constraint";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "AllocationBudgetConstraintError";
+  }
+}
 
 // Novel scale is evaluated using the midpoint of a container's literary
 // range, not its floor. Budgeting against only the chapter minimum lets a
@@ -2816,6 +2836,11 @@ export function fitAllocationToNovelBudget(
   if (requestedStoryMaterialFormat(req) !== "novel" || total <= budget) return allocation;
 
   const positive = Array.from(allocation.entries()).filter(([, plan]) => plan.minSections > 0);
+  if (positive.length > budget) {
+    throw new AllocationBudgetConstraintError(
+      `Novel budget permits ${budget} new chapter section${budget === 1 ? "" : "s"}, but ${positive.length} previously uncovered Story Arc beats require coverage. Preserve the draft and revise the arc or existing outline before retrying.`,
+    );
+  }
   const baseFloor = positive.length <= budget ? 1 : 0;
   const remaining = Math.max(0, budget - baseFloor * positive.length);
   const weights = positive.map(([beatID, plan]) => ({ beatID, plan, raw: plan.minSections }));
@@ -2836,6 +2861,7 @@ export function fitAllocationToNovelBudget(
     if (!scaledPlan || scaledPlan.value === plan.minSections) return [beatID, plan];
     return [beatID, {
       minSections: scaledPlan.value,
+      coverageMinimum: plan.coverageMinimum ?? 1,
       rationale: `${plan.rationale} Budget-normalized from ${plan.minSections} to ${scaledPlan.value} sections so the complete novel can remain within ${NOVEL_MAX_WORDS.toLocaleString()} words.`,
     }];
   }));
@@ -3001,6 +3027,7 @@ export function parseAndValidateAllocation(
     seen.add(beatID);
     out.set(beatID, {
       minSections: Number(minSections),
+      coverageMinimum: Number(minSections) > 0 ? 1 : 0,
       rationale,
     });
   }
@@ -3285,9 +3312,17 @@ export function allocationDeficits(
   return Array.from(allocation.entries())
     .map(([beatID, plan]) => {
       const actual = counts[beatID] ?? 0;
-      return { beatID, required: plan.minSections, actual, missing: Math.max(0, plan.minSections - actual) };
+      const required = plan.coverageMinimum ?? plan.minSections;
+      return { beatID, required, actual, missing: Math.max(0, required - actual) };
     })
     .filter((entry) => entry.missing > 0);
+}
+
+export function allocationRepairExhausted(
+  deficits: Array<{ beatID: string; required: number; actual: number; missing: number }>,
+  rounds: ExpansionRoundDiagnostic[] = [],
+): boolean {
+  return deficits.length > 0 && rounds.some((round) => round.round >= MAX_EXPANSION_ROUNDS);
 }
 
 export function assertAllocationCoverage(
@@ -5120,18 +5155,17 @@ export async function runSuggestionJob(
           startBeatIndex,
           priorDiagnostics,
           beats: body.arcTemplate.beats,
+          coverageGate: (current) => requestedStoryMaterialFormat(body) === "novel" && sectionAllocationDeficits(current).length > 0,
           qualityGate: (current) => {
             if (requestedStoryMaterialFormat(body) !== "novel") return false;
             const scale = evaluateNovelScale(current, body.existingSections ?? []);
-            const hasAllocationDeficit = sectionAllocationDeficits(current).length > 0;
             const quality = collectAdvisoryOutlineQuality(
               current,
               body.storyMaterialEnrichment,
               requestedStoryMaterialFormat(body),
               body.arcTemplate,
             );
-            return hasAllocationDeficit ||
-              !scale.meetsPreferredMinimum ||
+            return !scale.meetsPreferredMinimum ||
               quality.causalScaleIssues.length > 0 ||
               quality.unusedStoryMaterialItems > 0;
           },
@@ -5192,6 +5226,29 @@ export async function runSuggestionJob(
       const remainingAllocationDeficits = sectionAllocationDeficits(completedSuggestions);
       if (remainingAllocationDeficits.length > 0) {
         const checkpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? []);
+        const expansionRounds = diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [];
+        if (allocationRepairExhausted(remainingAllocationDeficits, expansionRounds)) {
+          // A resumed checkpoint can start at round four. Do not yield the
+          // same checkpoint forever when the bounded expansion budget is gone:
+          // fail recoverably and keep the paid draft available for review.
+          planningState = {
+            ...planningState,
+            phase: "failed",
+            nextAction: "review-suggestions",
+            expansionCheckpoint: checkpoint,
+          };
+          diagnostics = markMeaningfulProgress({
+            ...diagnostics,
+            stage: "allocation_repair_exhausted",
+            allocationDeficits: remainingAllocationDeficits,
+            expansionCheckpoint: checkpoint,
+          }, `allocation_repair_exhausted:${stableJSONStringify(remainingAllocationDeficits)}`);
+          latestValidSuggestions = completedSuggestions;
+          throw new NovelScalePlanningError(
+            "failed_expansion",
+            `Outline allocation still lacks coverage for ${remainingAllocationDeficits.map((entry) => entry.beatID).join(", ")} after ${MAX_EXPANSION_ROUNDS} expansion rounds. The saved draft is preserved for review.`,
+          );
+        }
         planningState = { ...planningState, phase: "expansion", nextAction: "expansion", expansionCheckpoint: checkpoint };
         diagnostics = markMeaningfulProgress({
           ...diagnostics,
