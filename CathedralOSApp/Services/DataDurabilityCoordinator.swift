@@ -509,6 +509,7 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var activeAcceptRun: AcceptRunMetadata?
     @Published private(set) var acceptRunError: String?
     @Published private(set) var acceptRefreshRecoveryAvailable = false
+    @Published private(set) var isAcceptRefreshRetrying = false
     @Published private(set) var acceptRunRevision: UInt = 0
     /// Bumped immediately when Accept All is tapped so the UI can show a busy
     /// state during syncArc()/POST before the server returns a run ID. Pair
@@ -530,6 +531,19 @@ final class DataDurabilityCoordinator: ObservableObject {
     }
 
     private var acceptRefreshRecovery: AcceptRefreshRecovery? = nil
+
+    var acceptRefreshRecoveryProjectIdentity: (projectID: UUID, lineageID: UUID)? {
+        guard let recovery = acceptRefreshRecovery else { return nil }
+        return (recovery.projectID, recovery.lineageID)
+    }
+
+    func acceptRefreshRecoveryMatches(projectID _: UUID, lineageID: UUID) -> Bool {
+        guard let recovery = acceptRefreshRecovery else { return false }
+        // The stable lineage is the canonical project identity across local
+        // UUID drift. A matching local UUID alone is not enough to authorize
+        // a view's callback for this recovery checkpoint.
+        return recovery.lineageID == lineageID
+    }
 
     /// Starts the server-owned Accept All job. The task and all completion work
     /// belong to this coordinator, so dismissing the review sheet cannot cancel
@@ -886,10 +900,18 @@ final class DataDurabilityCoordinator: ObservableObject {
     @MainActor
     func retryAcceptAllRefresh(
         context: ModelContext,
+        projectID: UUID? = nil,
+        lineageID: UUID? = nil,
         onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
         onAcceptAllCompleted: (() -> Void)? = nil
     ) {
         guard let recovery = acceptRefreshRecovery else { return }
+        if let projectID, let lineageID,
+           !acceptRefreshRecoveryMatches(projectID: projectID, lineageID: lineageID) {
+            return
+        }
+        guard !isAcceptRefreshRetrying else { return }
+        isAcceptRefreshRetrying = true
         acceptRunError = nil
         acceptRunRevision &+= 1
         Task { @MainActor [weak self] in
@@ -914,6 +936,7 @@ final class DataDurabilityCoordinator: ObservableObject {
                 self.persistAcceptRefreshRecovery(.init(projectID: recovery.projectID, lineageID: recovery.lineageID, message: message))
                 self.acceptRunRevision &+= 1
             }
+            self.isAcceptRefreshRetrying = false
         }
     }
 

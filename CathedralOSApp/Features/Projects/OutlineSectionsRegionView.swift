@@ -315,7 +315,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 )
             }
             header
-            if durabilityCoordinator.acceptRefreshRecoveryAvailable {
+            if let recoveryIdentity = durabilityCoordinator.acceptRefreshRecoveryProjectIdentity,
+               recoveryIdentity.lineageID == project.stableLineageID {
                 HStack(spacing: CathedralTheme.Spacing.sm) {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .foregroundStyle(CathedralTheme.Colors.accent)
@@ -324,6 +325,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                     Spacer(minLength: 0)
                     Button("Retry Sync") { retryAcceptAllRefresh() }
+                        .disabled(durabilityCoordinator.isAcceptRefreshRetrying)
                         .font(CathedralTheme.Typography.caption(12, weight: .semibold))
                 }
                 .padding(.horizontal, CathedralTheme.Spacing.sm)
@@ -508,7 +510,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // be rendered here. The review sheet can disappear during reconciliation;
         // without this fallback the shared coordinator's error is silent.
         .alert("Accept All Failed", isPresented: acceptAllFailurePresented) {
-            if durabilityCoordinator.acceptRunError?.hasPrefix("Accept All completed, but refreshing") == true {
+            if durabilityCoordinator.acceptRunError?.hasPrefix("Accept All completed, but refreshing") == true,
+               durabilityCoordinator.acceptRefreshRecoveryProjectIdentity?.lineageID == project.stableLineageID {
                 Button("Retry Sync") { retryAcceptAllRefresh() }
             }
             Button("OK", role: .cancel) { durabilityCoordinator.dismissAcceptRunError() }
@@ -571,10 +574,18 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private func retryAcceptAllRefresh() {
+        let expectedProjectID = project.id
+        let expectedLineageID = project.stableLineageID
         durabilityCoordinator.retryAcceptAllRefresh(
             context: modelContext,
+            projectID: expectedProjectID,
+            lineageID: expectedLineageID,
             onProjectRefreshed: handleProjectRefreshed,
-            onAcceptAllCompleted: handleAcceptAllCompleted
+            onAcceptAllCompleted: {
+                guard self.project.id == expectedProjectID ||
+                    self.project.stableLineageID == expectedLineageID else { return }
+                self.handleAcceptAllCompleted()
+            }
         )
     }
 
@@ -583,6 +594,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     /// the rendered section state from a root fetch and consume the completed
     /// suggestion result so the UI does not offer Resume after acceptance.
     private func handleProjectRefreshed(_ localProjectID: UUID, _ lineageID: UUID?) {
+        guard localProjectID == project.id || lineageID == project.stableLineageID else { return }
         let outlineID = currentOutline?.id
         onProjectRefreshed?(localProjectID, lineageID)
         recoverableSuggestions = nil

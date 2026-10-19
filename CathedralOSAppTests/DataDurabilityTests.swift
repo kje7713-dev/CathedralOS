@@ -309,15 +309,35 @@ final class DataDurabilityTests: XCTestCase {
         )
         XCTAssertTrue(relaunched.acceptRefreshRecoveryAvailable)
         projectSpy.restoreError = nil
+        projectSpy.restoreDelayNanoseconds = 50_000_000
         let retryCompleted = AcceptCompletionFlag()
         relaunched.retryAcceptAllRefresh(
             context: context,
+            projectID: UUID(),
+            lineageID: UUID()
+        )
+        XCTAssertEqual(projectSpy.targetedRestoreLineageIDs.count, 1,
+                       "A view for another project must not invoke this recovery retry.")
+        relaunched.retryAcceptAllRefresh(
+            context: context,
+            projectID: projectID,
+            lineageID: lineageID,
             onAcceptAllCompleted: { retryCompleted.value = true }
         )
-        for _ in 0..<100 where !retryCompleted.value {
-            await Task.yield()
+        relaunched.retryAcceptAllRefresh(
+            context: context,
+            projectID: projectID,
+            lineageID: lineageID
+        )
+        XCTAssertTrue(relaunched.isAcceptRefreshRetrying,
+                      "Retry Sync must remain busy while the targeted restore is in flight.")
+        for _ in 0..<20 where !retryCompleted.value {
+            try await Task.sleep(nanoseconds: 10_000_000)
         }
         XCTAssertTrue(retryCompleted.value, "A relaunch must retain a working Retry Sync path.")
+        XCTAssertEqual(projectSpy.targetedRestoreLineageIDs.count, 2,
+                       "Concurrent Retry Sync taps must share one active restore.")
+        XCTAssertFalse(relaunched.isAcceptRefreshRetrying)
         XCTAssertFalse(relaunched.acceptRefreshRecoveryAvailable)
         XCTAssertNil(defaults.data(forKey: "cathedralos.acceptOutline.refreshRecovery"))
     }
