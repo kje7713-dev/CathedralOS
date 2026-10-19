@@ -599,7 +599,14 @@ export function buildSuggestionResponseSchema(
     };
     properties[beat.id] = {
       type: "array",
+      // The first pass must realize the bounded allocation, not invent an
+      // unbounded number of full chapter sections. Optional scale expansion
+      // happens later through the budget-aware progressive expansion path.
       minItems: minimum,
+      // Only novels use the allocation as an exact first-pass budget. Other
+      // formats have no novel expansion stage, so their allocation is a floor
+      // and must not silently cap the provider's format-appropriate coverage.
+      maxItems: requestedFormat === "novel" ? minimum : MAX_PLANNED_SECTIONS,
       items: beatSectionSchema,
     };
     required.push(beat.id);
@@ -2152,6 +2159,8 @@ export interface ProgressiveExpansionOptions {
   startRound?: number;
   startBeatIndex?: number;
   priorDiagnostics?: ExpansionRoundDiagnostic[];
+  /** Required structural coverage is a hard gate, not optional quality work. */
+  coverageGate?: (suggestions: Suggestion[]) => boolean;
   qualityGate?: (suggestions: Suggestion[]) => boolean;
   beats?: Array<{ id: string; label?: string; description?: string }>;
   onBeat?: (
@@ -2222,7 +2231,14 @@ export function isRetryableExpansionFailure(run: {
   error_code?: unknown;
   suggestions?: unknown;
   diagnostics?: unknown;
+  planning_state?: unknown;
 }): boolean {
+  const planningState = run.planning_state;
+  if (planningState && typeof planningState === "object" &&
+      (planningState as { phase?: unknown; nextAction?: unknown }).phase === "failed" &&
+      (planningState as { nextAction?: unknown }).nextAction === "allocation-repair-exhausted") return false;
+  if (run.diagnostics && typeof run.diagnostics === "object" &&
+      (run.diagnostics as { failureStage?: unknown }).failureStage === "allocation_repair_exhausted") return false;
   return run.status === "failed" &&
     (run.error_code === "failed_expansion" || run.error_code === "insufficient_credits") &&
     Array.isArray(run.suggestions) && run.suggestions.length > 0 &&
@@ -2271,7 +2287,11 @@ export async function progressivelyExpandOutline(
   const startRound = Math.max(1, options.startRound ?? 1);
   const shouldContinueDevelopment = (current: Suggestion[]) => {
     const scale = evaluateNovelScale(current, existingSections);
-    return !scale.exceedsMaximum && (needsNovelExpansion(current, existingSections) || options.qualityGate?.(current) === true);
+    return !scale.exceedsMaximum && (
+      needsNovelExpansion(current, existingSections) ||
+      options.coverageGate?.(current) === true ||
+      options.qualityGate?.(current) === true
+    );
   };
   for (let round = startRound; round <= MAX_EXPANSION_ROUNDS && shouldContinueDevelopment(suggestions); round++) {
     const projectedTokensBefore = evaluateNovelScale(suggestions, existingSections).projectedTokens;
@@ -2778,19 +2798,36 @@ const ALLOCATION_SCHEMA = {
 
 type Allocation = {
   minSections: number;
+  /** At least one new section is required for every previously uncovered beat. */
+  coverageMinimum?: number;
+  /** The planner's requested minimum, retained when budgeting scales extras. */
+  allocationMinimum?: number;
   rationale: string;
 };
 
-const MIN_CHAPTER_TOKENS = CONTAINER_EXPECTED_RANGES.chapter?.[0] ?? 3000;
+export class AllocationBudgetConstraintError extends Error {
+  readonly code = "allocation_budget_constraint";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "AllocationBudgetConstraintError";
+  }
+}
+
+// Novel scale is evaluated using the midpoint of a container's literary
+// range, not its floor. Budgeting against only the chapter minimum lets a
+// 52-section allocation pass preflight while the same sections project well
+// above the 120,000-word hard cap.
+const PROJECTED_CHAPTER_TOKENS = projectedExpectedTokens([{ container: "chapter" }]);
 
 export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): number {
   if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
   const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
   return Math.max(
-    req.arcTemplate.beats.length,
+    0,
     Math.min(
       MAX_PLANNED_SECTIONS,
-      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / MIN_CHAPTER_TOKENS),
+      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / PROJECTED_CHAPTER_TOKENS),
     ),
   );
 }
@@ -2808,6 +2845,11 @@ export function fitAllocationToNovelBudget(
   if (requestedStoryMaterialFormat(req) !== "novel" || total <= budget) return allocation;
 
   const positive = Array.from(allocation.entries()).filter(([, plan]) => plan.minSections > 0);
+  if (positive.length > budget) {
+    throw new AllocationBudgetConstraintError(
+      `Novel budget permits ${budget} new chapter section${budget === 1 ? "" : "s"}, but ${positive.length} previously uncovered Story Arc beats require coverage. Preserve the draft and revise the arc or existing outline before retrying.`,
+    );
+  }
   const baseFloor = positive.length <= budget ? 1 : 0;
   const remaining = Math.max(0, budget - baseFloor * positive.length);
   const weights = positive.map(([beatID, plan]) => ({ beatID, plan, raw: plan.minSections }));
@@ -2828,6 +2870,8 @@ export function fitAllocationToNovelBudget(
     if (!scaledPlan || scaledPlan.value === plan.minSections) return [beatID, plan];
     return [beatID, {
       minSections: scaledPlan.value,
+      coverageMinimum: plan.coverageMinimum ?? 1,
+      allocationMinimum: plan.allocationMinimum ?? plan.minSections,
       rationale: `${plan.rationale} Budget-normalized from ${plan.minSections} to ${scaledPlan.value} sections so the complete novel can remain within ${NOVEL_MAX_WORDS.toLocaleString()} words.`,
     }];
   }));
@@ -2993,6 +3037,8 @@ export function parseAndValidateAllocation(
     seen.add(beatID);
     out.set(beatID, {
       minSections: Number(minSections),
+      coverageMinimum: Number(minSections) > 0 ? 1 : 0,
+      allocationMinimum: Number(minSections),
       rationale,
     });
   }
@@ -3107,6 +3153,7 @@ export async function planSectionAllocation(
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
       if (error instanceof OutlineOutputExhaustedError) throw error;
+      if (error instanceof AllocationBudgetConstraintError) throw error;
       if (isProviderBillingUnavailable(error)) throw error;
       if (!(error instanceof Error)) throw error;
       firstError = error;
@@ -3265,6 +3312,60 @@ export function countSuggestionsByBeat(suggestions: Suggestion[]): Record<string
   }, {});
 }
 
+export class AllocationCoverageValidationError extends Error {
+  readonly code = "missing_story_arc_coverage";
+}
+
+export function allocationDeficits(
+  suggestions: Suggestion[],
+  allocation: Map<string, Allocation>,
+): Array<{ beatID: string; required: number; actual: number; missing: number }> {
+  const counts = countSuggestionsByBeat(suggestions);
+  return Array.from(allocation.entries())
+    .map(([beatID, plan]) => {
+      const actual = counts[beatID] ?? 0;
+      // `minSections` is the budget-normalized hard floor for new sections.
+      // `allocationMinimum` retains the planner's original advisory request.
+      const required = plan.minSections;
+      return { beatID, required, actual, missing: Math.max(0, required - actual) };
+    })
+    .filter((entry) => entry.missing > 0);
+}
+
+export function allocationShortfalls(
+  suggestions: Suggestion[],
+  allocation: Map<string, Allocation>,
+): Array<{ beatID: string; intended: number; actual: number; shortfall: number }> {
+  const counts = countSuggestionsByBeat(suggestions);
+  return Array.from(allocation.entries())
+    .map(([beatID, plan]) => {
+      const intended = plan.allocationMinimum ?? plan.minSections;
+      const actual = counts[beatID] ?? 0;
+      return { beatID, intended, actual, shortfall: Math.max(0, intended - actual) };
+    })
+    .filter((entry) => entry.shortfall > 0);
+}
+
+export function allocationRepairExhausted(
+  deficits: Array<{ beatID: string; required: number; actual: number; missing: number }>,
+  rounds: ExpansionRoundDiagnostic[] = [],
+): boolean {
+  return deficits.length > 0 && rounds.some((round) => round.round >= MAX_EXPANSION_ROUNDS);
+}
+
+export function assertAllocationCoverage(
+  suggestions: Suggestion[],
+  allocation: Map<string, Allocation>,
+  phase = "outline",
+): void {
+  const deficits = allocationDeficits(suggestions, allocation);
+  if (deficits.length > 0) {
+    throw new AllocationCoverageValidationError(
+      `${phase}: ${deficits.map((entry) => `beat ${entry.beatID} returned ${entry.actual} section${entry.actual === 1 ? "" : "s"}; minimum is ${entry.required}`).join("; ")}`,
+    );
+  }
+}
+
 export function validateSuggestions(
   parsed: any,
   beatIds: Set<string>,
@@ -3359,21 +3460,7 @@ export function validateSuggestions(
     used.add(s.storyArcBeatID);
   }
   if (allocation) {
-    const counts = new Map<string, number>();
-    for (const suggestion of valid) {
-      counts.set(
-        suggestion.storyArcBeatID,
-        (counts.get(suggestion.storyArcBeatID) ?? 0) + 1,
-      );
-    }
-    for (const [beatID, plan] of allocation) {
-      const actual = counts.get(beatID) ?? 0;
-      if (actual < plan.minSections) {
-        throw new Error(
-          `beat ${beatID} returned ${actual} section${actual === 1 ? "" : "s"}; minimum is ${plan.minSections}`,
-        );
-      }
-    }
+    assertAllocationCoverage(valid, allocation, "provider outline");
   } else {
     // Backward-compatible validation for callers that do not have a plan.
     for (const bid of beatIds) {
@@ -5009,15 +5096,13 @@ export async function runSuggestionJob(
 
     let allocation: Map<string, Allocation> | undefined;
     const sectionAllocationDeficits = (suggestions: Suggestion[]) => {
-      const counts = new Map<string, number>();
       const effectiveAllocation = allocation ?? new Map<string, Allocation>(
         Array.isArray(planningState.allocationEntries) ? planningState.allocationEntries as Array<[string, Allocation]> : [],
       );
-      for (const suggestion of suggestions) counts.set(suggestion.storyArcBeatID, (counts.get(suggestion.storyArcBeatID) ?? 0) + 1);
-      return body.arcTemplate.beats
-        .map((beat) => ({ beatID: beat.id, label: beat.label, required: effectiveAllocation.get(beat.id)?.minSections ?? 0, actual: counts.get(beat.id) ?? 0 }))
-        .filter((entry) => entry.actual < entry.required)
-        .map((entry) => ({ ...entry, missing: entry.required - entry.actual }));
+      return allocationDeficits(suggestions, effectiveAllocation).map((entry) => ({
+        ...entry,
+        label: body.arcTemplate.beats.find((beat) => beat.id === entry.beatID)?.label ?? entry.beatID,
+      }));
     };
 
     const expandNovel = async (
@@ -5098,18 +5183,17 @@ export async function runSuggestionJob(
           startBeatIndex,
           priorDiagnostics,
           beats: body.arcTemplate.beats,
+          coverageGate: (current) => requestedStoryMaterialFormat(body) === "novel" && sectionAllocationDeficits(current).length > 0,
           qualityGate: (current) => {
             if (requestedStoryMaterialFormat(body) !== "novel") return false;
             const scale = evaluateNovelScale(current, body.existingSections ?? []);
-            const hasAllocationDeficit = sectionAllocationDeficits(current).length > 0;
             const quality = collectAdvisoryOutlineQuality(
               current,
               body.storyMaterialEnrichment,
               requestedStoryMaterialFormat(body),
               body.arcTemplate,
             );
-            return hasAllocationDeficit ||
-              !scale.meetsPreferredMinimum ||
+            return !scale.meetsPreferredMinimum ||
               quality.causalScaleIssues.length > 0 ||
               quality.unusedStoryMaterialItems > 0;
           },
@@ -5168,9 +5252,49 @@ export async function runSuggestionJob(
         );
       }
       const remainingAllocationDeficits = sectionAllocationDeficits(completedSuggestions);
-      const finalWarnings = remainingAllocationDeficits.length > 0
-        ? [...completionWarnings, `Completed after the bounded three-round repair pass with ${remainingAllocationDeficits.reduce((sum, entry) => sum + entry.missing, 0)} allocation section deficit${remainingAllocationDeficits.reduce((sum, entry) => sum + entry.missing, 0) === 1 ? "" : "s"} remaining.`]
-        : completionWarnings;
+      const effectiveAllocation = allocation ?? new Map<string, Allocation>(
+        Array.isArray(planningState.allocationEntries)
+          ? planningState.allocationEntries as Array<[string, Allocation]>
+          : [],
+      );
+      const allocationShortfallReport = allocationShortfalls(completedSuggestions, effectiveAllocation);
+      diagnostics = { ...diagnostics, allocationShortfalls: allocationShortfallReport };
+      if (remainingAllocationDeficits.length > 0) {
+        const checkpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? []);
+        const expansionRounds = diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [];
+        if (allocationRepairExhausted(remainingAllocationDeficits, expansionRounds)) {
+          // A resumed checkpoint can start at round four. Do not yield the
+          // same checkpoint forever when the bounded expansion budget is gone:
+          // fail recoverably and keep the paid draft available for review.
+          planningState = {
+            ...planningState,
+            phase: "failed",
+            nextAction: "allocation-repair-exhausted",
+            expansionCheckpoint: checkpoint,
+          };
+          diagnostics = markMeaningfulProgress({
+            ...diagnostics,
+            stage: "allocation_repair_exhausted",
+            allocationDeficits: remainingAllocationDeficits,
+            expansionCheckpoint: checkpoint,
+          }, `allocation_repair_exhausted:${stableJSONStringify(remainingAllocationDeficits)}`);
+          latestValidSuggestions = completedSuggestions;
+          throw new NovelScalePlanningError(
+            "failed_expansion",
+            `Outline allocation still lacks coverage for ${remainingAllocationDeficits.map((entry) => entry.beatID).join(", ")} after ${MAX_EXPANSION_ROUNDS} expansion rounds. The saved draft is preserved for review.`,
+          );
+        }
+        planningState = { ...planningState, phase: "expansion", nextAction: "expansion", expansionCheckpoint: checkpoint };
+        diagnostics = markMeaningfulProgress({
+          ...diagnostics,
+          stage: "allocation_repair_pending",
+          allocationDeficits: remainingAllocationDeficits,
+          expansionCheckpoint: checkpoint,
+        }, `allocation_repair_pending:${stableJSONStringify(remainingAllocationDeficits)}`);
+        await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
+        throw new SuggestionWorkerYield();
+      }
+      const finalWarnings = completionWarnings;
       await updateRun({
         status: "completed",
         suggestions: completedSuggestions,
@@ -5215,7 +5339,8 @@ export async function runSuggestionJob(
         body.arcTemplate,
       );
       const outlineNeedsExpansion = requestedStoryMaterialFormat(body) === "novel" &&
-        (needsNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
+        (sectionAllocationDeficits(completedSuggestions).length > 0 ||
+          needsNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
           !initialScale.meetsPreferredMinimum ||
           initialQuality.causalScaleIssues.length > 0 ||
           initialQuality.unusedStoryMaterialItems > 0);
@@ -5683,7 +5808,7 @@ export async function runSuggestionJob(
         (content, finishReason) => {
           const flattened = flattenSuggestionResponse(parseOutlineJSON(content, finishReason), body.arcTemplate.beats);
           diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
-          const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
+          const validated = validateSuggestions(flattened, beatIds, undefined, recipeObligations, body.arcTemplate);
           const deduped = removeDuplicateOutlineSections(validated.suggestions);
           validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
           const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true);
@@ -5697,7 +5822,7 @@ export async function runSuggestionJob(
         parseOutlineJSON(rawResponse.content, rawResponse.finishReason),
         body.arcTemplate.beats,
       );
-      const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
+      const validated = validateSuggestions(flattened, beatIds, undefined, recipeObligations, body.arcTemplate);
       const deduped = removeDuplicateOutlineSections(validated.suggestions);
       validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true), warnings: validated.warnings };
@@ -5733,7 +5858,7 @@ export async function runSuggestionJob(
     };
 
     const authoredSemanticBeatCount = body.arcTemplate.beats.filter((beat) => arcRoleContract(beat, body.arcTemplate.name).semanticObligations.length > 0).length;
-    if (authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null) {
+    if ((authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null) && sectionAllocationDeficits(result.suggestions).length === 0) {
       // Semantic verification is its own durable provider stage. Persist the
       // validated outline before yielding so a one-dispatch worker slice never
       // replays the paid outline call or loses the verifier checkpoint.
@@ -5866,6 +5991,7 @@ export async function runSuggestionJob(
     await updateRun({
       status: "failed",
       suggestions: latestValidSuggestions,
+      planning_state: planningState,
       error_code: errorCode,
       error: publicError,
       diagnostics: failedDiagnostics,

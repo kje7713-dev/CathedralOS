@@ -49,6 +49,7 @@ struct OutlineSuggestionsReviewView: View {
     let project: StoryProject
     let modelContext: ModelContext
     let onProjectRefreshed: ((UUID, UUID?) -> Void)?
+    let onAcceptAllCompleted: (() -> Void)?
 
     init(
         outline: Outline,
@@ -56,7 +57,8 @@ struct OutlineSuggestionsReviewView: View {
         sourceRecipe: PromptPackExportPayload,
         project: StoryProject,
         modelContext: ModelContext,
-        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
+        onAcceptAllCompleted: (() -> Void)? = nil
     ) {
         self.outline = outline
         self.suggestions = suggestions
@@ -64,6 +66,7 @@ struct OutlineSuggestionsReviewView: View {
         self.project = project
         self.modelContext = modelContext
         self.onProjectRefreshed = onProjectRefreshed
+        self.onAcceptAllCompleted = onAcceptAllCompleted
     }
 
     private var activeAcceptRun: DataDurabilityCoordinator.AcceptRunMetadata? {
@@ -153,7 +156,8 @@ struct OutlineSuggestionsReviewView: View {
         .task {
             durabilityCoordinator.resumeAcceptAllIfNeeded(
                 context: modelContext,
-                onProjectRefreshed: onProjectRefreshed
+                onProjectRefreshed: onProjectRefreshed,
+                onAcceptAllCompleted: acceptAllCompleted
             )
             hasStartedAcceptance = activeAcceptRun != nil
         }
@@ -162,6 +166,12 @@ struct OutlineSuggestionsReviewView: View {
             // stale state cleared, or explicit error reported).
             NSLog("[accept_all] revision_changed revision=%u hasError=%d", durabilityCoordinator.acceptRunRevision, durabilityCoordinator.acceptRunError == nil ? 0 : 1)
             if hasStartedAcceptance && durabilityCoordinator.acceptRunError == nil {
+                dismiss()
+            } else if hasStartedAcceptance,
+                      durabilityCoordinator.acceptRunError?.hasPrefix("Accept All completed, but refreshing") == true {
+                // The server accepted the sections, but this sheet must get
+                // out of the way so the parent project screen can present the
+                // retry-sync action without hiding it behind this alert.
                 dismiss()
             }
         }
@@ -179,6 +189,14 @@ struct OutlineSuggestionsReviewView: View {
         } message: {
             Text(acceptErrorMessage ?? "An unknown error occurred.")
         }
+    }
+
+    private func acceptAllCompleted() {
+        // The server has committed the sections even if this device's targeted
+        // refresh failed. Close the review sheet and let the parent clear the
+        // paid draft so Resume Suggestions cannot reappear.
+        dismiss()
+        onAcceptAllCompleted?()
     }
 
     private func acceptAll() {
@@ -310,7 +328,8 @@ struct OutlineSuggestionsReviewView: View {
             idempotencyKey: requestBuilder.idempotencyKey,
             sourceRecipe: sourceRecipe,
             context: modelContext,
-            onProjectRefreshed: onProjectRefreshed
+            onProjectRefreshed: onProjectRefreshed,
+            onAcceptAllCompleted: acceptAllCompleted
         )
     }
 

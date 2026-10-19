@@ -39,6 +39,12 @@ import {
   isRetryableInsufficientCreditFailure,
   fitAllocationToNovelBudget,
   maximumBudgetedNewSections,
+  allocationDeficits,
+  allocationShortfalls,
+  allocationRepairExhausted,
+  AllocationBudgetConstraintError,
+  assertAllocationCoverage,
+  AllocationCoverageValidationError,
   outlineLogicalStageFamily,
   buildPrompt,
   assertDistinctOutlineTitles,
@@ -415,7 +421,7 @@ Deno.test("allocator floors are scaled to the novel word budget", () => {
       })),
     },
   } as any;
-  const allocation = new Map(req.arcTemplate.beats.map((beat: any) => [beat.id, {
+  const allocation = new Map<string, any>(req.arcTemplate.beats.map((beat: any) => [beat.id, {
     minSections: 20,
     rationale: "material-rich movement",
   }]));
@@ -423,6 +429,75 @@ Deno.test("allocator floors are scaled to the novel word budget", () => {
   const total = Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0);
   assertEquals(total <= maximumBudgetedNewSections(req), true);
   assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
+  assertEquals(maximumBudgetedNewSections(req), 28);
+});
+
+Deno.test("budget normalization preserves one-section coverage per uncovered beat", () => {
+  const req = {
+    ...sparseRequest,
+    arcTemplate: {
+      ...sparseRequest.arcTemplate,
+      beats: Array.from({ length: 3 }, (_, index) => ({ id: `beat-${index + 1}`, label: `Beat ${index + 1}` })),
+    },
+  } as any;
+  const allocation = new Map<string, any>(req.arcTemplate.beats.map((beat: any) => [beat.id, {
+    minSections: 20,
+    rationale: "material-rich movement",
+  }]));
+  const fitted = fitAllocationToNovelBudget(allocation, req);
+  assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
+  assertEquals(Array.from(fitted.values()).every((plan) => plan.coverageMinimum === 1), true);
+  assertEquals(allocationShortfalls([], fitted).every((entry) => entry.intended === 20 && entry.shortfall === 20), true);
+  assertEquals(
+    allocationDeficits([], fitted).map(({ beatID, required, actual, missing }) => ({ beatID, required, actual, missing })),
+    Array.from(fitted.entries()).map(([beatID, plan]) => ({
+      beatID, required: plan.minSections, actual: 0, missing: plan.minSections,
+    })),
+  );
+});
+
+Deno.test("budget normalization fails explicitly when uncovered beats cannot fit", () => {
+  const req = { ...sparseRequest, existingSections: Array.from({ length: 28 }, () => ({ container: "chapter" })) } as any;
+  const allocation = new Map([
+    ["beat-1", { minSections: 1, rationale: "opening" }],
+    ["beat-2", { minSections: 1, rationale: "ending" }],
+  ]);
+  let failure: unknown;
+  try { fitAllocationToNovelBudget(allocation, req); } catch (error) { failure = error; }
+  assertEquals(failure instanceof AllocationBudgetConstraintError, true);
+  assertStringIncludes((failure as Error).message, "previously uncovered Story Arc beats require coverage");
+});
+
+Deno.test("allocation repair is terminal when a resumed checkpoint starts after round three", () => {
+  const deficits = [{ beatID: "beat-2", required: 1, actual: 0, missing: 1 }];
+  assertEquals(allocationRepairExhausted(deficits, [{ round: MAX_EXPANSION_ROUNDS, status: "completed" } as any]), true);
+  assertEquals(allocationRepairExhausted(deficits, [{ round: MAX_EXPANSION_ROUNDS - 1, status: "completed" } as any]), false);
+});
+
+Deno.test("final allocation coverage enforces the budget-normalized allocation floor", () => {
+  const allocation = new Map([
+    ["beat-1", { minSections: 5, allocationMinimum: 5, coverageMinimum: 1, rationale: "opening" }],
+  ]);
+  const suggestions = [{ storyArcBeatID: "beat-1" }] as any;
+  assertEquals(allocationDeficits(suggestions, allocation), [{
+    beatID: "beat-1", required: 5, actual: 1, missing: 4,
+  }]);
+});
+
+Deno.test("final allocation coverage reports a repair deficit when a beat is omitted", () => {
+  const allocation = new Map([
+    ["beat-1", { minSections: 1, rationale: "opening" }],
+    ["beat-2", { minSections: 1, rationale: "ending" }],
+  ]);
+  const suggestions = [{ storyArcBeatID: "beat-1" }] as any;
+  assertEquals(allocationDeficits(suggestions, allocation), [{
+    beatID: "beat-2", required: 1, actual: 0, missing: 1,
+  }]);
+  assertThrows(
+    () => assertAllocationCoverage(suggestions, allocation, "final outline"),
+    AllocationCoverageValidationError,
+    "final outline: beat beat-2 returned 0 sections; minimum is 1",
+  );
 });
 
 Deno.test("planner prompt groups one existing section onto its linked beat", () => {
@@ -818,6 +893,26 @@ Deno.test("allocation planner propagates worker yield instead of converting it t
     () => planSectionAllocation(sparseRequest as any, "test-key", billable as any),
     SuggestionWorkerYield,
   );
+});
+
+Deno.test("deterministic allocation budget constraints do not trigger a paid retry", async () => {
+  let calls = 0;
+  const req = {
+    ...sparseRequest,
+    requestedFormat: "novel",
+    existingSections: Array.from({ length: 28 }, () => ({ container: "chapter" })),
+  } as any;
+  await assertRejects(
+    () => planSectionAllocation(req, "test-key", (async () => {
+      calls++;
+      return { content: JSON.stringify({ allocations: [
+        { beatIndex: 0, minSections: 1, rationale: "opening" },
+        { beatIndex: 1, minSections: 1, rationale: "closure" },
+      ] }), creditCostCharged: 1, remainingCredits: 1 };
+    }) as any),
+    AllocationBudgetConstraintError,
+  );
+  assertEquals(calls, 1);
 });
 
 Deno.test("global buildPrompt includes the requested concrete-event guardrails", () => {
@@ -1536,8 +1631,9 @@ Deno.test("dynamic suggestion schema enforces every beat minimum and flattening 
 
 Deno.test("dynamic response contract removes model-owned beat IDs and target/max allocation semantics", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  const schema = buildSuggestionResponseSchema([{ id: "beat-1" }], new Map([["beat-1", { minSections: 2, rationale: "coverage" }]])) as any;
+  const schema = buildSuggestionResponseSchema([{ id: "beat-1" }], new Map([["beat-1", { minSections: 2, rationale: "coverage" }]]), [], "", "novel") as any;
   assertEquals(schema.properties.beats.properties["beat-1"].items.properties.storyArcBeatID, undefined);
+  assertEquals(schema.properties.beats.properties["beat-1"].maxItems, schema.properties.beats.properties["beat-1"].minItems);
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
@@ -1551,6 +1647,17 @@ Deno.test("dynamic response contract removes model-owned beat IDs and target/max
   assertEquals(source.includes("outline failed Story Arc semantic validation"), false);
 });
 
+Deno.test("non-novel response schema treats allocation as a minimum", () => {
+  const schema = buildSuggestionResponseSchema(
+    [{ id: "beat-1" }],
+    new Map([["beat-1", { minSections: 2, rationale: "coverage" }]]),
+    [],
+    "",
+    "shortStory",
+  ) as any;
+  assertEquals(schema.properties.beats.properties["beat-1"].minItems, 2);
+  assertEquals(schema.properties.beats.properties["beat-1"].maxItems > 2, true);
+});
 
 function expansionSection(title: string, container = "scene", beat = "beat-1", insertAfterTitle: string | null = null): any {
   return { title, summary: `${title} summary`, container, pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: [], insertAfterTitle };
@@ -1580,6 +1687,23 @@ Deno.test("progressive expansion runs round 2 after a short round 1 and succeeds
   assertEquals(result.diagnostics[1].sectionCountBefore, 70);
   assertEquals(result.diagnostics[1].sectionCountAfter, 80);
   assertEquals(result.warnings, []);
+});
+
+Deno.test("required allocation coverage expands even when novel scale is already sufficient", async () => {
+  const initial = sceneOutline(80);
+  let calls = 0;
+  const result = await progressivelyExpandOutline(
+    initial as any,
+    new Set(["beat-1"]),
+    async () => {
+      calls++;
+      return [expansionSection("Coverage repair", "scene")];
+    },
+    undefined,
+    { coverageGate: (current) => current.length < 81 },
+  );
+  assertEquals(calls, 1);
+  assertEquals(result.suggestions.length, 81);
 });
 
 Deno.test("Test3-shaped undersized outline fails closed after bounded expansion", async () => {
@@ -1731,6 +1855,20 @@ Deno.test("insufficient-credit expansion failures are resumable from their durab
     },
   };
   assertEquals(isRetryableExpansionFailure(run), true);
+  const exhaustedFailedRun = {
+    ...run,
+    planning_state: {
+      phase: "failed",
+      nextAction: "allocation-repair-exhausted",
+      expansionCheckpoint: run.diagnostics.expansionCheckpoint,
+    },
+    diagnostics: {
+      ...run.diagnostics,
+      stage: "failed",
+      failureStage: "allocation_repair_exhausted",
+    },
+  };
+  assertEquals(isRetryableExpansionFailure(exhaustedFailedRun), false);
   assertEquals(isRetryableExpansionFailure({ ...run, error_code: "server_error" }), false);
   assertEquals(isRetryableExpansionFailure({ ...run, suggestions: [] }), false);
 });

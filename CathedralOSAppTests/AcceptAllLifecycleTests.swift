@@ -54,6 +54,7 @@ private final class StubAuthSignedInForLifecycle: AuthService {
 /// tests never trigger a real cloud sync.
 private final class StubProjectSyncServiceForLifecycle: ProjectCloudSyncServiceProtocol {
     var restoredProject: StoryProject?
+    var restoreError: Error?
     @MainActor func syncProject(_ project: StoryProject, modelContext: ModelContext) async throws {}
     func syncProjectSnapshot(localProjectID: String, payload: ProjectImportExportPayload) async throws {}
     @MainActor func syncAllProjects(in context: ModelContext) async throws {}
@@ -72,6 +73,7 @@ private final class StubProjectSyncServiceForLifecycle: ProjectCloudSyncServiceP
         into context: ModelContext,
         includeTombstoned: Bool
     ) async throws -> ProjectRestoreReport {
+        if let restoreError { throw restoreError }
         if let restoredProject {
             context.insert(restoredProject)
             try context.save()
@@ -514,6 +516,62 @@ final class AcceptAllLifecycleTests: XCTestCase {
         XCTAssertEqual(refreshedProject?.outlines.first?.sections.count, 56,
                        "The section view must see all 56 restored sections immediately.")
         XCTAssertNil(coordinator.activeAcceptRun)
+    }
+
+    func testCompletedAccept_RefreshFailureKeepsRetryPathUntilSyncSucceeds() async throws {
+        let projectSync = StubProjectSyncServiceForLifecycle()
+        projectSync.restoreError = NSError(domain: "AcceptAllLifecycleTests", code: 1)
+        let defaults = UserDefaults(suiteName: "AcceptAllRefreshFailureTests.\(UUID().uuidString)")!
+        let coordinator = DataDurabilityCoordinator(
+            authService: StubAuthSignedInForLifecycle(),
+            projectSyncService: projectSync,
+            outputSyncService: StubOutputSyncServiceForLifecycle(),
+            defaults: defaults
+        )
+        let service = FakeAcceptAllService()
+        service.statusResponse = .success(AcceptOutlineSectionsResult(
+            runID: "77777777-7777-7777-7777-777777777777", status: "completed",
+            sectionsTotal: 1, sectionsDone: 1, sectionsFailed: 0, error: nil
+        ))
+        let context = try makeInMemoryContext()
+        let projectID = UUID()
+        var completedCallbackCount = 0
+        coordinator.beginAcceptAll(
+            edgeFunctionURL: URL(string: "https://example.test/functions/v1/accept-outline-sections")!,
+            outlineID: UUID(), projectID: projectID, projectLineageID: projectID,
+            suggestions: [makeSuggestion()], startingPosition: 0,
+            idempotencyKey: "key-refresh-retry", sourceRecipe: makeRecipe(),
+            context: context, service: service,
+            onAcceptAllCompleted: { completedCallbackCount += 1 }
+        )
+        for _ in 0..<40 where coordinator.acceptRunError == nil {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertTrue(coordinator.acceptRunError?.contains("refreshing this project failed") == true)
+        XCTAssertEqual(completedCallbackCount, 0, "A failed local refresh must not clear the saved review draft.")
+
+        let callsBeforeBlockedProject = service.startCallCount
+        coordinator.beginAcceptAll(
+            edgeFunctionURL: URL(string: "https://example.test/functions/v1/accept-outline-sections")!,
+            outlineID: UUID(), projectID: UUID(), projectLineageID: UUID(),
+            suggestions: [makeSuggestion()], startingPosition: 0,
+            idempotencyKey: "key-blocked-by-refresh-recovery", sourceRecipe: makeRecipe(),
+            context: context, service: service
+        )
+        XCTAssertEqual(service.startCallCount, callsBeforeBlockedProject,
+                       "A second project must not overwrite another project's pending refresh recovery.")
+        XCTAssertTrue(coordinator.acceptRunError?.contains("Retry Sync") == true)
+
+        projectSync.restoreError = nil
+        coordinator.retryAcceptAllRefresh(
+            context: context,
+            onAcceptAllCompleted: { completedCallbackCount += 1 }
+        )
+        for _ in 0..<40 where completedCallbackCount == 0 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(completedCallbackCount, 1)
+        XCTAssertNil(coordinator.acceptRunError)
     }
 
     // 4. Terminal persisted run: terminal state must reconcile/clear and must

@@ -315,6 +315,21 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 )
             }
             header
+            if let recoveryIdentity = durabilityCoordinator.acceptRefreshRecoveryProjectIdentity,
+               recoveryIdentity.lineageID == project.stableLineageID {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+                    Text("Accept All succeeded, but this device still needs to sync the accepted sections.")
+                        .font(CathedralTheme.Typography.caption(12))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    Spacer(minLength: 0)
+                    Button("Retry Sync") { retryAcceptAllRefresh() }
+                        .disabled(durabilityCoordinator.isAcceptRefreshRetrying)
+                        .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                }
+                .padding(.horizontal, CathedralTheme.Spacing.sm)
+            }
             if currentOutline != nil {
                 sectionsList
             } else {
@@ -454,7 +469,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 runOutlineError = nil
             }
         }
-        .alert("Suggestions Ready", isPresented: suggestionsFeedbackPresented) {
+        .alert(suggestionsFeedbackTitle, isPresented: suggestionsFeedbackPresented) {
             if recoverableSuggestionFailureCode == "insufficient_credits" ||
                 recoverableSuggestionFailureCode == "story_arc_semantic_unresolved" {
                 Button(recoverableSuggestionFailureCode == "insufficient_credits" ? "Resume After Adding Credits" : "Retry Final Check") {
@@ -495,6 +510,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // be rendered here. The review sheet can disappear during reconciliation;
         // without this fallback the shared coordinator's error is silent.
         .alert("Accept All Failed", isPresented: acceptAllFailurePresented) {
+            if durabilityCoordinator.acceptRunError?.hasPrefix("Accept All completed, but refreshing") == true,
+               durabilityCoordinator.acceptRefreshRecoveryProjectIdentity?.lineageID == project.stableLineageID {
+                Button("Retry Sync") { retryAcceptAllRefresh() }
+            }
             Button("OK", role: .cancel) { durabilityCoordinator.dismissAcceptRunError() }
         } message: {
             Text(durabilityCoordinator.acceptRunError ?? "Accept All failed.")
@@ -538,9 +557,36 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 sourceRecipe: sourceRecipe,
                 project: project,
                 modelContext: modelContext,
-                onProjectRefreshed: handleProjectRefreshed
+                onProjectRefreshed: handleProjectRefreshed,
+                onAcceptAllCompleted: handleAcceptAllCompleted
             )
         }
+    }
+
+    /// Accept All is server-authoritative. If the terminal job succeeded but
+    /// targeted local refresh failed, still consume the paid draft so the old
+    /// Resume Suggestions action cannot reappear on the next render.
+    private func handleAcceptAllCompleted() {
+        recoverableSuggestions = nil
+        suggestions = []
+        suggestionSourceRecipe = nil
+        recoverableSuggestionFailureCode = nil
+    }
+
+    private func retryAcceptAllRefresh() {
+        let expectedProjectID = project.id
+        let expectedLineageID = project.stableLineageID
+        durabilityCoordinator.retryAcceptAllRefresh(
+            context: modelContext,
+            projectID: expectedProjectID,
+            lineageID: expectedLineageID,
+            onProjectRefreshed: handleProjectRefreshed,
+            onAcceptAllCompleted: {
+                guard self.project.id == expectedProjectID ||
+                    self.project.stableLineageID == expectedLineageID else { return }
+                self.handleAcceptAllCompleted()
+            }
+        )
     }
 
     /// Accept All restores the canonical project in the shared SwiftData context,
@@ -548,6 +594,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     /// the rendered section state from a root fetch and consume the completed
     /// suggestion result so the UI does not offer Resume after acceptance.
     private func handleProjectRefreshed(_ localProjectID: UUID, _ lineageID: UUID?) {
+        guard localProjectID == project.id || lineageID == project.stableLineageID else { return }
         let outlineID = currentOutline?.id
         onProjectRefreshed?(localProjectID, lineageID)
         recoverableSuggestions = nil
@@ -608,8 +655,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     private var acceptAllFailurePresented: Binding<Bool> {
         Binding(
             get: {
-                self.durabilityCoordinator.activeAcceptRun == nil
+                let isRefreshFailure = self.durabilityCoordinator.acceptRunError?.hasPrefix("Accept All completed, but refreshing") == true
+                return self.durabilityCoordinator.activeAcceptRun == nil
                     && self.durabilityCoordinator.acceptRunError != nil
+                    && (!isRefreshFailure
+                        || self.durabilityCoordinator.acceptRefreshRecoveryProjectIdentity?.lineageID == self.project.stableLineageID)
             },
             set: { if !$0 { self.durabilityCoordinator.dismissAcceptRunError() } }
         )
@@ -683,6 +733,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         )
     }
 
+    private var suggestionsFeedbackTitle: String {
+        recoverableSuggestionFailureCode != nil ? "Suggestions Saved — Review Required" : "Suggestions Ready"
+    }
+
     private var suggestionsReady: Bool {
         // PR 1: explicit recipe selection. Never fall back to promptPacks.first.
         guard recipeSelection?.isReadyForSuggestSections == true else { return false }
@@ -719,7 +773,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 } else {
                     feedback = DataDurabilityCoordinator.paidSavedSuggestionFeedback(
                         result: result,
-                        failureCode: completed.failureCode
+                        failureCode: completed.failureCode,
+                        failureMessage: completed.failureMessage
                     )
                 }
             } else {

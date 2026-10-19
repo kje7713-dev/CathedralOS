@@ -90,6 +90,7 @@ struct CompletedSuggestionRun {
     /// Server failure classification retained so the UI can explain why a
     /// saved draft stopped without implying that no charge occurred.
     let failureCode: String?
+    let failureMessage: String?
 }
 
 struct SuggestionRunFailure: Equatable {
@@ -272,6 +273,12 @@ final class DataDurabilityCoordinator: ObservableObject {
         self.runStatusDefaults = defaults
         self.acceptRunDefaults = defaults
         self.suggestionRunDefaults = defaults
+        if let data = defaults.data(forKey: Self.acceptRefreshRecoveryKey),
+           let recovery = try? JSONDecoder().decode(AcceptRefreshRecovery.self, from: data) {
+            self.acceptRefreshRecovery = recovery
+            self.acceptRefreshRecoveryAvailable = true
+            self.acceptRunError = recovery.message
+        }
     }
 
     // MARK: - Lifecycle entry-points
@@ -501,6 +508,8 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     @Published private(set) var activeAcceptRun: AcceptRunMetadata?
     @Published private(set) var acceptRunError: String?
+    @Published private(set) var acceptRefreshRecoveryAvailable = false
+    @Published private(set) var isAcceptRefreshRetrying = false
     @Published private(set) var acceptRunRevision: UInt = 0
     /// Bumped immediately when Accept All is tapped so the UI can show a busy
     /// state during syncArc()/POST before the server returns a run ID. Pair
@@ -513,6 +522,28 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var isAcceptRunInitiating: Bool = false
     internal var acceptPollingTask: Task<Void, Never>?
     private static let acceptRunKey = "cathedralos.acceptOutline.activeRun"
+    private static let acceptRefreshRecoveryKey = "cathedralos.acceptOutline.refreshRecovery"
+
+    private struct AcceptRefreshRecovery: Codable {
+        let projectID: UUID
+        let lineageID: UUID
+        var message: String
+    }
+
+    private var acceptRefreshRecovery: AcceptRefreshRecovery? = nil
+
+    var acceptRefreshRecoveryProjectIdentity: (projectID: UUID, lineageID: UUID)? {
+        guard let recovery = acceptRefreshRecovery else { return nil }
+        return (recovery.projectID, recovery.lineageID)
+    }
+
+    func acceptRefreshRecoveryMatches(projectID _: UUID, lineageID: UUID) -> Bool {
+        guard let recovery = acceptRefreshRecovery else { return false }
+        // The stable lineage is the canonical project identity across local
+        // UUID drift. A matching local UUID alone is not enough to authorize
+        // a view's callback for this recovery checkpoint.
+        return recovery.lineageID == lineageID
+    }
 
     /// Starts the server-owned Accept All job. The task and all completion work
     /// belong to this coordinator, so dismissing the review sheet cannot cancel
@@ -538,7 +569,8 @@ final class DataDurabilityCoordinator: ObservableObject {
         sourceRecipe: PromptPackExportPayload,
         context: ModelContext,
         service: any SectionEmbedServicing = SectionEmbedService(),
-        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
+        onAcceptAllCompleted: (() -> Void)? = nil
     ) {
         // Checkpoint 1: Accept All tapped.
         logger.log("accept_all: tapped outline=\(outlineID.uuidString, privacy: .public) project=\(projectID.uuidString, privacy: .public)")
@@ -568,6 +600,13 @@ final class DataDurabilityCoordinator: ObservableObject {
            existing.projectLineageID == projectLineageID, existing.outlineID == outlineID {
             logger.log("accept_all: refused due to same-outline active run run=\(existing.runID, privacy: .public) status=\(existing.status, privacy: .public)")
             reportAcceptRunError("Accept All is already in progress for this outline.")
+            return
+        }
+        // A completed server Accept All may still have a device-refresh
+        // checkpoint. Do not let another project replace that single durable
+        // recovery record before the user retries the targeted refresh.
+        if acceptRefreshRecovery != nil {
+            reportAcceptRunError("Accept All refresh recovery is pending. Retry Sync before accepting another project.")
             return
         }
         // Stale-state reconciliation: if a terminal run is held in memory or
@@ -639,7 +678,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                 await self.pollAcceptRun(
                     context: context,
                     service: service,
-                    onProjectRefreshed: onProjectRefreshed
+                    onProjectRefreshed: onProjectRefreshed,
+                    onAcceptAllCompleted: onAcceptAllCompleted
                 )
             } catch {
                 // Checkpoint 4: POST or run attach failed.
@@ -673,7 +713,8 @@ final class DataDurabilityCoordinator: ObservableObject {
     func resumeAcceptAllIfNeeded(
         context: ModelContext,
         service: any SectionEmbedServicing = SectionEmbedService(),
-        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
+        onAcceptAllCompleted: (() -> Void)? = nil
     ) {
         guard isRecoveryReadyForUploads else { return }
         guard acceptPollingTask == nil else { return }
@@ -691,7 +732,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                 await self.finishAcceptRun(
                     metadata,
                     context: context,
-                    onProjectRefreshed: onProjectRefreshed
+                    onProjectRefreshed: onProjectRefreshed,
+                    onAcceptAllCompleted: onAcceptAllCompleted
                 )
                 // finishAcceptRun already clears state; ensure no stale
                 // marker remains.
@@ -704,7 +746,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                 await self.pollAcceptRun(
                     context: context,
                     service: service,
-                    onProjectRefreshed: onProjectRefreshed
+                    onProjectRefreshed: onProjectRefreshed,
+                    onAcceptAllCompleted: onAcceptAllCompleted
                 )
             }
         }
@@ -713,7 +756,8 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func pollAcceptRun(
         context: ModelContext,
         service: any SectionEmbedServicing,
-        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
+        onAcceptAllCompleted: (() -> Void)? = nil
     ) async {
         guard var metadata = activeAcceptRun else { return }
         while !Task.isCancelled {
@@ -731,7 +775,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                     await finishAcceptRun(
                         metadata,
                         context: context,
-                        onProjectRefreshed: onProjectRefreshed
+                        onProjectRefreshed: onProjectRefreshed,
+                        onAcceptAllCompleted: onAcceptAllCompleted
                     )
                     return
                 }
@@ -797,9 +842,14 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func finishAcceptRun(
         _ metadata: AcceptRunMetadata,
         context: ModelContext,
-        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
+        onAcceptAllCompleted: (() -> Void)? = nil
     ) async {
-        if metadata.typedStatus == .completed && metadata.sectionsFailed == 0 && metadata.error == nil {
+        let serverAccepted = metadata.typedStatus == .completed &&
+            metadata.sectionsFailed == 0 &&
+            metadata.error == nil
+        var refreshSucceeded = false
+        if serverAccepted {
             do {
                 // Pass both the local project id and the canonical lineage id so
                 // the targeted restore can resolve a drifted/historical
@@ -819,8 +869,12 @@ final class DataDurabilityCoordinator: ObservableObject {
                 // screen replace its object reference immediately, rather than
                 // continuing to render the pre-restore SwiftData object.
                 onProjectRefreshed?(metadata.projectID, metadata.projectLineageID)
+                clearAcceptRefreshRecovery()
+                refreshSucceeded = true
             } catch {
-                acceptRunError = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
+                let message = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
+                acceptRunError = message
+                persistAcceptRefreshRecovery(.init(projectID: metadata.projectID, lineageID: metadata.projectLineageID, message: message))
             }
         } else {
             acceptRunError = metadata.error ??
@@ -833,6 +887,57 @@ final class DataDurabilityCoordinator: ObservableObject {
         acceptRunRevision &+= 1
         outputRefreshRevision &+= 1
         NotificationCenter.default.post(name: .cathedralOSGenerationOutputsChanged, object: nil)
+        // The server result is authoritative, but keep the paid suggestion
+        // draft until this device has refreshed successfully so the parent
+        // screen can offer a recovery path instead of losing the review state.
+        if serverAccepted && refreshSucceeded {
+            onAcceptAllCompleted?()
+        }
+    }
+
+    /// Retry only the device refresh after the server has already accepted the
+    /// sections. This never starts another Accept All job or charges again.
+    @MainActor
+    func retryAcceptAllRefresh(
+        context: ModelContext,
+        projectID: UUID? = nil,
+        lineageID: UUID? = nil,
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
+        onAcceptAllCompleted: (() -> Void)? = nil
+    ) {
+        guard let recovery = acceptRefreshRecovery else { return }
+        if let projectID, let lineageID,
+           !acceptRefreshRecoveryMatches(projectID: projectID, lineageID: lineageID) {
+            return
+        }
+        guard !isAcceptRefreshRetrying else { return }
+        isAcceptRefreshRetrying = true
+        acceptRunError = nil
+        acceptRunRevision &+= 1
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let report = try await self.projectSyncService.restoreProject(
+                    localProjectID: recovery.projectID,
+                    projectLineageID: recovery.lineageID,
+                    into: context,
+                    includeTombstoned: false
+                )
+                self.logger.log("Accept All refresh retry complete: \(report.summaryMessage, privacy: .public)")
+                onProjectRefreshed?(recovery.projectID, recovery.lineageID)
+                self.clearAcceptRefreshRecovery()
+                self.acceptRunRevision &+= 1
+                self.outputRefreshRevision &+= 1
+                NotificationCenter.default.post(name: .cathedralOSGenerationOutputsChanged, object: nil)
+                onAcceptAllCompleted?()
+            } catch {
+                let message = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
+                self.acceptRunError = message
+                self.persistAcceptRefreshRecovery(.init(projectID: recovery.projectID, lineageID: recovery.lineageID, message: message))
+                self.acceptRunRevision &+= 1
+            }
+            self.isAcceptRefreshRetrying = false
+        }
     }
 
     func dismissAcceptRunError() {
@@ -851,6 +956,20 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func persistAcceptRun(_ metadata: AcceptRunMetadata) {
         guard let data = try? JSONEncoder().encode(metadata) else { return }
         acceptRunDefaults.set(data, forKey: Self.acceptRunKey)
+    }
+
+    private func persistAcceptRefreshRecovery(_ recovery: AcceptRefreshRecovery) {
+        acceptRefreshRecovery = recovery
+        acceptRefreshRecoveryAvailable = true
+        if let data = try? JSONEncoder().encode(recovery) {
+            acceptRunDefaults.set(data, forKey: Self.acceptRefreshRecoveryKey)
+        }
+    }
+
+    private func clearAcceptRefreshRecovery() {
+        acceptRefreshRecovery = nil
+        acceptRefreshRecoveryAvailable = false
+        acceptRunDefaults.removeObject(forKey: Self.acceptRefreshRecoveryKey)
     }
 
     // MARK: - Suggestion generation identity
@@ -909,21 +1028,34 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     static func paidSavedSuggestionFeedback(
         result: OutlineSuggestionResult,
-        failureCode: String?
+        failureCode: String?,
+        failureMessage: String? = nil
     ) -> String {
-        var message = "Your paid suggestions were saved, but the final check did not complete."
+        let normalizedFailureMessage = failureMessage?.lowercased() ?? ""
+        let exceededNovelCap = failureCode == "failed_over_target" ||
+            normalizedFailureMessage.contains("120,000-word hard cap") ||
+            normalizedFailureMessage.contains("exceeds the 120,000")
+        var message = "Your suggestions were saved and are ready to review. The final validation did not pass."
+        if exceededNovelCap {
+            message = "Your suggestions were saved, but the draft exceeded the novel-length limit, so the final outline check stopped."
+        } else if failureCode == "failed_under_target" {
+            message = "Your suggestions were saved, but the draft was still below the required novel length, so the final outline check stopped."
+        } else if failureCode == "failed_expansion" {
+            message = "Your suggestions were saved, but the outline could not be expanded to the required length."
+        }
         if let charged = result.creditCostCharged, charged > 0 {
-            message += " Already charged \(String(format: "%.2f", charged)) credits for completed stages."
+            message += " You were charged \(String(format: "%.2f", charged)) credits for the completed stages."
         }
         if let remaining = result.remainingCredits {
             message += " Remaining balance: \(String(format: "%.2f", remaining)) credits."
         }
         if failureCode == "insufficient_credits" {
-            message += " The next stage was not started because the available credit balance was insufficient."
+            message += " The next stage could not start because your balance was too low. Add credits and choose Resume After Adding Credits, or choose Review Suggestions to use the saved output."
         } else if failureCode == "story_arc_semantic_unresolved" {
-            message += " The final Story Arc check still found one or more authored requirements unmet after repair. Review the sections for the story non-negotiable before accepting them."
+            message += " The final Story Arc check still found an authored requirement that needs attention. Review the saved sections before accepting them."
+        } else {
+            message += " No additional charge was made. Choose Review Suggestions to decide what to keep."
         }
-        message += " No additional generation charge was made. Review and accept them below."
         return message
     }
 
@@ -1296,7 +1428,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                         modelID: metadata.request.modelID,
                         reasoningEffort: metadata.request.reasoningEffort,
                         isRecoverableDraft: false,
-                        failureCode: nil
+                        failureCode: nil,
+                        failureMessage: nil
                     )
                     suggestionRunRevision &+= 1
                     suggestionPollingTasks[metadata.projectID] = nil
@@ -1328,7 +1461,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                             modelID: metadata.request.modelID,
                             reasoningEffort: metadata.request.reasoningEffort,
                             isRecoverableDraft: true,
-                            failureCode: job.errorCode
+                            failureCode: job.errorCode,
+                            failureMessage: job.error
                         )
                         suggestionRunRevision &+= 1
                         suggestionPollingTasks[metadata.projectID] = nil
