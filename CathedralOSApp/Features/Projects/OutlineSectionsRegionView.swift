@@ -468,9 +468,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     )
                 }
             }
-            Button("Review Suggestions") {
-                suggestionsFeedback = nil
-                showingSuggestionSheet = true
+            if !(recoverableSuggestions?.suggestions.isEmpty ?? true) {
+                Button("Review Suggestions") {
+                    suggestionsFeedback = nil
+                    showingSuggestionSheet = true
+                }
             }
             Button("OK", role: .cancel) { suggestionsFeedback = nil }
         } message: {
@@ -712,10 +714,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             recoverableSuggestionFailureCode = completed.failureCode
             var feedback: String
             if isRecoverableDraft {
-                feedback = DataDurabilityCoordinator.paidSavedSuggestionFeedback(
-                    result: result,
-                    failureCode: completed.failureCode
-                )
+                if result.suggestions.isEmpty && completed.failureCode == "insufficient_credits" {
+                    feedback = "This outline run paused because the next stage needs more credits. Add credits, then tap Resume After Adding Credits. Completed stages will not be repeated or charged again."
+                } else {
+                    feedback = DataDurabilityCoordinator.paidSavedSuggestionFeedback(
+                        result: result,
+                        failureCode: completed.failureCode
+                    )
+                }
             } else {
                 feedback = "Suggestions generated. Charged \(String(format: "%.2f", result.creditCostCharged ?? 0)) credits."
             }

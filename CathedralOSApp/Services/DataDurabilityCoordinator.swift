@@ -894,6 +894,19 @@ final class DataDurabilityCoordinator: ObservableObject {
             !(job.suggestions ?? []).isEmpty
     }
 
+    /// A charged run can fail before suggestions exist when a later planned
+    /// stage needs more credits. The server checkpoint is still resumable;
+    /// keep it visible so the user can add credits and resume the same run.
+    static func hasRecoverableSuggestionCheckpoint(_ job: OutlineSuggestionJob) -> Bool {
+        if hasPaidSavedSuggestionWork(job) { return true }
+        guard job.status == "failed",
+              job.errorCode == "insufficient_credits",
+              (job.creditCostCharged ?? 0) > 0,
+              let planningState = job.planningState,
+              case let .string(nextAction)? = planningState["nextAction"] else { return false }
+        return !nextAction.isEmpty
+    }
+
     static func paidSavedSuggestionFeedback(
         result: OutlineSuggestionResult,
         failureCode: String?
@@ -1298,7 +1311,7 @@ final class DataDurabilityCoordinator: ObservableObject {
                         persistSuggestionRun(metadata)
                         continue
                     }
-                    if Self.hasPaidSavedSuggestionWork(job) {
+                    if Self.hasRecoverableSuggestionCheckpoint(job) {
                         let result = OutlineSuggestionResult(
                             suggestions: job.suggestions ?? [],
                             warnings: job.warnings ?? [],

@@ -2203,6 +2203,20 @@ export interface ExpansionResumeState {
  * expansion checkpoint proves earlier paid stages are complete, so retrying
  * this identity does not replay or double-charge them.
  */
+export function isRetryableInsufficientCreditFailure(run: {
+  status?: unknown;
+  error_code?: unknown;
+  credit_cost_charged?: unknown;
+  planning_state?: unknown;
+}): boolean {
+  if (run.status !== "failed" || run.error_code !== "insufficient_credits") return false;
+  if (!(Number(run.credit_cost_charged ?? 0) > 0)) return false;
+  const planningState = run.planning_state;
+  if (!planningState || typeof planningState !== "object" || Array.isArray(planningState)) return false;
+  const nextAction = (planningState as { nextAction?: unknown }).nextAction;
+  return typeof nextAction === "string" && nextAction.length > 0;
+}
+
 export function isRetryableExpansionFailure(run: {
   status?: unknown;
   error_code?: unknown;
@@ -6268,6 +6282,22 @@ Deno.serve(async (req: Request) => {
         }),
         { status: 200 },
       );
+    }
+    if (isRetryableInsufficientCreditFailure(existing)) {
+      const { error: retryError } = await db.from("outline_suggestion_runs").update({
+        status: "pending",
+        error_code: null,
+        error: null,
+        completed_at: null,
+        lease_owner: null,
+        lease_expires_at: null,
+        attempt_count: (existing.attempt_count ?? 0) + 1,
+      }).eq("id", existing.id).eq("status", "failed");
+      if (retryError) return errorResponse("db_error", retryError.message ?? "Could not resume after adding credits", 500);
+      const recoveredBody = await recoverPersistedPlanningBody(db, existing);
+      // @ts-ignore - EdgeRuntime is globally available in Supabase Edge Runtime
+      EdgeRuntime.waitUntil(runSuggestionJob(existing.id, recoveredBody, user.id, openaiKey, existing.attempt_count ?? 0, authHeader));
+      return corsResponse(JSON.stringify({ ...suggestionRunResponse(existing), status: "pending", errorCode: null, error: null }), { status: 200 });
     }
     if (isRetryableExpansionFailure(existing)) {
       const { error: retryError } = await db.from("outline_suggestion_runs").update({

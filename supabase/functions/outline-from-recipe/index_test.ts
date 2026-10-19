@@ -36,6 +36,7 @@ Deno.test("outline suggestion polling contract preserves structured failures and
 import {
   buildAllocationPrompt,
   buildExpansionPrompt,
+  isRetryableInsufficientCreditFailure,
   fitAllocationToNovelBudget,
   maximumBudgetedNewSections,
   outlineLogicalStageFamily,
@@ -384,6 +385,21 @@ Deno.test("planner prompt passes empty existingSectionsByBeat when no existing s
     assertEquals(parsed.existingSectionsByBeat[sparseRequest.arcTemplate.beats[beatIndex].id], []);
   }
   assertEquals(parsed.existingUnlinkedSections, []);
+});
+
+Deno.test("charged insufficient-credit runs with a planning checkpoint are resumable", () => {
+  assertEquals(isRetryableInsufficientCreditFailure({
+    status: "failed",
+    error_code: "insufficient_credits",
+    credit_cost_charged: 3.67,
+    planning_state: { phase: "allocation_complete", nextAction: "outline-suggestions" },
+  }), true);
+  assertEquals(isRetryableInsufficientCreditFailure({
+    status: "failed",
+    error_code: "insufficient_credits",
+    credit_cost_charged: 0,
+    planning_state: { phase: "allocation_complete", nextAction: "outline-suggestions" },
+  }), false);
 });
 
 Deno.test("allocator floors are scaled to the novel word budget", () => {
