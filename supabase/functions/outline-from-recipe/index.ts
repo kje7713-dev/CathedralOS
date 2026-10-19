@@ -2231,7 +2231,13 @@ export function isRetryableExpansionFailure(run: {
   error_code?: unknown;
   suggestions?: unknown;
   diagnostics?: unknown;
+  planning_state?: unknown;
 }): boolean {
+  const planningState = run.planning_state;
+  if (planningState && typeof planningState === "object" &&
+      (planningState as { nextAction?: unknown }).nextAction === "allocation-repair-exhausted") return false;
+  if (run.diagnostics && typeof run.diagnostics === "object" &&
+      (run.diagnostics as { stage?: unknown }).stage === "allocation_repair_exhausted") return false;
   return run.status === "failed" &&
     (run.error_code === "failed_expansion" || run.error_code === "insufficient_credits") &&
     Array.isArray(run.suggestions) && run.suggestions.length > 0 &&
@@ -2793,6 +2799,8 @@ type Allocation = {
   minSections: number;
   /** At least one new section is required for every previously uncovered beat. */
   coverageMinimum?: number;
+  /** The planner's requested minimum, retained when budgeting scales extras. */
+  allocationMinimum?: number;
   rationale: string;
 };
 
@@ -2862,6 +2870,7 @@ export function fitAllocationToNovelBudget(
     return [beatID, {
       minSections: scaledPlan.value,
       coverageMinimum: plan.coverageMinimum ?? 1,
+      allocationMinimum: plan.allocationMinimum ?? plan.minSections,
       rationale: `${plan.rationale} Budget-normalized from ${plan.minSections} to ${scaledPlan.value} sections so the complete novel can remain within ${NOVEL_MAX_WORDS.toLocaleString()} words.`,
     }];
   }));
@@ -3028,6 +3037,7 @@ export function parseAndValidateAllocation(
     out.set(beatID, {
       minSections: Number(minSections),
       coverageMinimum: Number(minSections) > 0 ? 1 : 0,
+      allocationMinimum: Number(minSections),
       rationale,
     });
   }
@@ -3142,6 +3152,7 @@ export async function planSectionAllocation(
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
       if (error instanceof OutlineOutputExhaustedError) throw error;
+      if (error instanceof AllocationBudgetConstraintError) throw error;
       if (isProviderBillingUnavailable(error)) throw error;
       if (!(error instanceof Error)) throw error;
       firstError = error;
@@ -3312,10 +3323,24 @@ export function allocationDeficits(
   return Array.from(allocation.entries())
     .map(([beatID, plan]) => {
       const actual = counts[beatID] ?? 0;
-      const required = plan.coverageMinimum ?? plan.minSections;
+      const required = plan.coverageMinimum ?? plan.allocationMinimum ?? plan.minSections;
       return { beatID, required, actual, missing: Math.max(0, required - actual) };
     })
     .filter((entry) => entry.missing > 0);
+}
+
+export function allocationShortfalls(
+  suggestions: Suggestion[],
+  allocation: Map<string, Allocation>,
+): Array<{ beatID: string; intended: number; actual: number; shortfall: number }> {
+  const counts = countSuggestionsByBeat(suggestions);
+  return Array.from(allocation.entries())
+    .map(([beatID, plan]) => {
+      const intended = plan.allocationMinimum ?? plan.minSections;
+      const actual = counts[beatID] ?? 0;
+      return { beatID, intended, actual, shortfall: Math.max(0, intended - actual) };
+    })
+    .filter((entry) => entry.shortfall > 0);
 }
 
 export function allocationRepairExhausted(
@@ -5224,6 +5249,8 @@ export async function runSuggestionJob(
         );
       }
       const remainingAllocationDeficits = sectionAllocationDeficits(completedSuggestions);
+      const allocationShortfallReport = allocationShortfalls(completedSuggestions, allocation ?? new Map());
+      diagnostics = { ...diagnostics, allocationShortfalls: allocationShortfallReport };
       if (remainingAllocationDeficits.length > 0) {
         const checkpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? []);
         const expansionRounds = diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [];
@@ -5956,6 +5983,7 @@ export async function runSuggestionJob(
     await updateRun({
       status: "failed",
       suggestions: latestValidSuggestions,
+      planning_state: planningState,
       error_code: errorCode,
       error: publicError,
       diagnostics: failedDiagnostics,

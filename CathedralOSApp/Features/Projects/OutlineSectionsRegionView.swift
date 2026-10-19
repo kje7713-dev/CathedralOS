@@ -315,6 +315,19 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 )
             }
             header
+            if durabilityCoordinator.acceptRefreshRecoveryAvailable {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+                    Text("Accept All succeeded, but this device still needs to sync the accepted sections.")
+                        .font(CathedralTheme.Typography.caption(12))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    Spacer(minLength: 0)
+                    Button("Retry Sync") { retryAcceptAllRefresh() }
+                        .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                }
+                .padding(.horizontal, CathedralTheme.Spacing.sm)
+            }
             if currentOutline != nil {
                 sectionsList
             } else {
@@ -496,13 +509,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         // without this fallback the shared coordinator's error is silent.
         .alert("Accept All Failed", isPresented: acceptAllFailurePresented) {
             if durabilityCoordinator.acceptRunError?.hasPrefix("Accept All completed, but refreshing") == true {
-                Button("Retry Sync") {
-                    durabilityCoordinator.retryAcceptAllRefresh(
-                        context: modelContext,
-                        onProjectRefreshed: handleProjectRefreshed,
-                        onAcceptAllCompleted: handleAcceptAllCompleted
-                    )
-                }
+                Button("Retry Sync") { retryAcceptAllRefresh() }
             }
             Button("OK", role: .cancel) { durabilityCoordinator.dismissAcceptRunError() }
         } message: {
@@ -561,6 +568,14 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         suggestions = []
         suggestionSourceRecipe = nil
         recoverableSuggestionFailureCode = nil
+    }
+
+    private func retryAcceptAllRefresh() {
+        durabilityCoordinator.retryAcceptAllRefresh(
+            context: modelContext,
+            onProjectRefreshed: handleProjectRefreshed,
+            onAcceptAllCompleted: handleAcceptAllCompleted
+        )
     }
 
     /// Accept All restores the canonical project in the shared SwiftData context,

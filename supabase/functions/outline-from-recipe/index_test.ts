@@ -40,6 +40,7 @@ import {
   fitAllocationToNovelBudget,
   maximumBudgetedNewSections,
   allocationDeficits,
+  allocationShortfalls,
   allocationRepairExhausted,
   AllocationBudgetConstraintError,
   assertAllocationCoverage,
@@ -446,6 +447,7 @@ Deno.test("budget normalization preserves one-section coverage per uncovered bea
   const fitted = fitAllocationToNovelBudget(allocation, req);
   assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
   assertEquals(Array.from(fitted.values()).every((plan) => plan.coverageMinimum === 1), true);
+  assertEquals(allocationShortfalls([], fitted).every((entry) => entry.intended === 20 && entry.shortfall === 20), true);
   assertEquals(allocationDeficits([], fitted), req.arcTemplate.beats.map((beat: any) => ({
     beatID: beat.id, required: 1, actual: 0, missing: 1,
   })));
@@ -878,6 +880,26 @@ Deno.test("allocation planner propagates worker yield instead of converting it t
     () => planSectionAllocation(sparseRequest as any, "test-key", billable as any),
     SuggestionWorkerYield,
   );
+});
+
+Deno.test("deterministic allocation budget constraints do not trigger a paid retry", async () => {
+  let calls = 0;
+  const req = {
+    ...sparseRequest,
+    requestedFormat: "novel",
+    existingSections: Array.from({ length: 28 }, () => ({ container: "chapter" })),
+  } as any;
+  await assertRejects(
+    () => planSectionAllocation(req, "test-key", (async () => {
+      calls++;
+      return { content: JSON.stringify({ allocations: [
+        { beatIndex: 0, minSections: 1, rationale: "opening" },
+        { beatIndex: 1, minSections: 1, rationale: "closure" },
+      ] }), creditCostCharged: 1, remainingCredits: 1 };
+    }) as any),
+    AllocationBudgetConstraintError,
+  );
+  assertEquals(calls, 1);
 });
 
 Deno.test("global buildPrompt includes the requested concrete-event guardrails", () => {
@@ -1820,6 +1842,8 @@ Deno.test("insufficient-credit expansion failures are resumable from their durab
     },
   };
   assertEquals(isRetryableExpansionFailure(run), true);
+  assertEquals(isRetryableExpansionFailure({ ...run, planning_state: { nextAction: "allocation-repair-exhausted" } }), false);
+  assertEquals(isRetryableExpansionFailure({ ...run, diagnostics: { stage: "allocation_repair_exhausted", expansionCheckpoint: run.diagnostics.expansionCheckpoint } }), false);
   assertEquals(isRetryableExpansionFailure({ ...run, error_code: "server_error" }), false);
   assertEquals(isRetryableExpansionFailure({ ...run, suggestions: [] }), false);
 });

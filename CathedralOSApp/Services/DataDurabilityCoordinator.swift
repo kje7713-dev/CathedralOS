@@ -273,6 +273,12 @@ final class DataDurabilityCoordinator: ObservableObject {
         self.runStatusDefaults = defaults
         self.acceptRunDefaults = defaults
         self.suggestionRunDefaults = defaults
+        if let data = defaults.data(forKey: Self.acceptRefreshRecoveryKey),
+           let recovery = try? JSONDecoder().decode(AcceptRefreshRecovery.self, from: data) {
+            self.acceptRefreshRecovery = recovery
+            self.acceptRefreshRecoveryAvailable = true
+            self.acceptRunError = recovery.message
+        }
     }
 
     // MARK: - Lifecycle entry-points
@@ -502,6 +508,7 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     @Published private(set) var activeAcceptRun: AcceptRunMetadata?
     @Published private(set) var acceptRunError: String?
+    @Published private(set) var acceptRefreshRecoveryAvailable = false
     @Published private(set) var acceptRunRevision: UInt = 0
     /// Bumped immediately when Accept All is tapped so the UI can show a busy
     /// state during syncArc()/POST before the server returns a run ID. Pair
@@ -514,7 +521,15 @@ final class DataDurabilityCoordinator: ObservableObject {
     @Published private(set) var isAcceptRunInitiating: Bool = false
     internal var acceptPollingTask: Task<Void, Never>?
     private static let acceptRunKey = "cathedralos.acceptOutline.activeRun"
-    private var failedAcceptRefreshIdentity: (projectID: UUID, lineageID: UUID)?
+    private static let acceptRefreshRecoveryKey = "cathedralos.acceptOutline.refreshRecovery"
+
+    private struct AcceptRefreshRecovery: Codable {
+        let projectID: UUID
+        let lineageID: UUID
+        var message: String
+    }
+
+    private var acceptRefreshRecovery: AcceptRefreshRecovery? = nil
 
     /// Starts the server-owned Accept All job. The task and all completion work
     /// belong to this coordinator, so dismissing the review sheet cannot cancel
@@ -833,11 +848,12 @@ final class DataDurabilityCoordinator: ObservableObject {
                 // screen replace its object reference immediately, rather than
                 // continuing to render the pre-restore SwiftData object.
                 onProjectRefreshed?(metadata.projectID, metadata.projectLineageID)
-                failedAcceptRefreshIdentity = nil
+                clearAcceptRefreshRecovery()
                 refreshSucceeded = true
             } catch {
-                acceptRunError = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
-                failedAcceptRefreshIdentity = (metadata.projectID, metadata.projectLineageID)
+                let message = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
+                acceptRunError = message
+                persistAcceptRefreshRecovery(.init(projectID: metadata.projectID, lineageID: metadata.projectLineageID, message: message))
             }
         } else {
             acceptRunError = metadata.error ??
@@ -866,27 +882,29 @@ final class DataDurabilityCoordinator: ObservableObject {
         onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
         onAcceptAllCompleted: (() -> Void)? = nil
     ) {
-        guard let identity = failedAcceptRefreshIdentity else { return }
+        guard let recovery = acceptRefreshRecovery else { return }
         acceptRunError = nil
         acceptRunRevision &+= 1
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let report = try await self.projectSyncService.restoreProject(
-                    localProjectID: identity.projectID,
-                    projectLineageID: identity.lineageID,
+                    localProjectID: recovery.projectID,
+                    projectLineageID: recovery.lineageID,
                     into: context,
                     includeTombstoned: false
                 )
                 self.logger.log("Accept All refresh retry complete: \(report.summaryMessage, privacy: .public)")
-                onProjectRefreshed?(identity.projectID, identity.lineageID)
-                self.failedAcceptRefreshIdentity = nil
+                onProjectRefreshed?(recovery.projectID, recovery.lineageID)
+                self.clearAcceptRefreshRecovery()
                 self.acceptRunRevision &+= 1
                 self.outputRefreshRevision &+= 1
                 NotificationCenter.default.post(name: .cathedralOSGenerationOutputsChanged, object: nil)
                 onAcceptAllCompleted?()
             } catch {
-                self.acceptRunError = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
+                let message = "Accept All completed, but refreshing this project failed: \(error.localizedDescription)"
+                self.acceptRunError = message
+                self.persistAcceptRefreshRecovery(.init(projectID: recovery.projectID, lineageID: recovery.lineageID, message: message))
                 self.acceptRunRevision &+= 1
             }
         }
@@ -908,6 +926,20 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func persistAcceptRun(_ metadata: AcceptRunMetadata) {
         guard let data = try? JSONEncoder().encode(metadata) else { return }
         acceptRunDefaults.set(data, forKey: Self.acceptRunKey)
+    }
+
+    private func persistAcceptRefreshRecovery(_ recovery: AcceptRefreshRecovery) {
+        acceptRefreshRecovery = recovery
+        acceptRefreshRecoveryAvailable = true
+        if let data = try? JSONEncoder().encode(recovery) {
+            acceptRunDefaults.set(data, forKey: Self.acceptRefreshRecoveryKey)
+        }
+    }
+
+    private func clearAcceptRefreshRecovery() {
+        acceptRefreshRecovery = nil
+        acceptRefreshRecoveryAvailable = false
+        acceptRunDefaults.removeObject(forKey: Self.acceptRefreshRecoveryKey)
     }
 
     // MARK: - Suggestion generation identity

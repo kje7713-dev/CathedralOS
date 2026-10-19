@@ -293,12 +293,33 @@ final class DataDurabilityTests: XCTestCase {
             coordinator.acceptRunError?.contains("refreshing this project failed") == true,
             "Refresh failure must name the refresh as the failing step. Got: \(coordinator.acceptRunError ?? "nil")"
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             acceptCompleted.value,
-            "A completed server Accept All must clear the local paid draft even when targeted refresh fails."
+            "The completion callback must wait until the device refresh succeeds so the paid draft remains recoverable."
         )
-        XCTAssertNil(coordinator.activeAcceptRun, "Terminal cleanup removes the persisted metadata after reconciliation finishes.")
-        XCTAssertNil(defaults.data(forKey: "cathedralos.acceptOutline.activeRun"), "Persisted metadata must be cleared once terminal reconciliation finishes.")
+        XCTAssertNil(coordinator.activeAcceptRun, "Terminal cleanup removes the active server-run metadata after reconciliation finishes.")
+        XCTAssertNil(defaults.data(forKey: "cathedralos.acceptOutline.activeRun"), "Active-run metadata must be cleared after terminal reconciliation.")
+        XCTAssertNotNil(defaults.data(forKey: "cathedralos.acceptOutline.refreshRecovery"), "The accepted-but-unrefreshed checkpoint must survive app restart.")
+
+        let relaunched = DataDurabilityCoordinator(
+            authService: StubAuthSignedIn(),
+            projectSyncService: projectSpy,
+            outputSyncService: SpyOutputSyncService(),
+            defaults: defaults
+        )
+        XCTAssertTrue(relaunched.acceptRefreshRecoveryAvailable)
+        projectSpy.restoreError = nil
+        let retryCompleted = AcceptCompletionFlag()
+        relaunched.retryAcceptAllRefresh(
+            context: context,
+            onAcceptAllCompleted: { retryCompleted.value = true }
+        )
+        for _ in 0..<100 where !retryCompleted.value {
+            await Task.yield()
+        }
+        XCTAssertTrue(retryCompleted.value, "A relaunch must retain a working Retry Sync path.")
+        XCTAssertFalse(relaunched.acceptRefreshRecoveryAvailable)
+        XCTAssertNil(defaults.data(forKey: "cathedralos.acceptOutline.refreshRecovery"))
     }
 
     func testSignOutDoesNotDeleteLocalProjects() async throws {
