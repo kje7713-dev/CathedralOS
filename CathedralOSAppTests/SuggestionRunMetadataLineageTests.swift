@@ -251,7 +251,7 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         )
         XCTAssertTrue(message.contains("final Story Arc check"))
         XCTAssertTrue(message.contains("authored requirement"))
-        XCTAssertTrue(message.contains("No additional charge was made"))
+        XCTAssertTrue(message.contains("You were charged 15.21 credits"))
     }
 
     func testSuggestionStatusPollingHasARealSuccessInterval() {
