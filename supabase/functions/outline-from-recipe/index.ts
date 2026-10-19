@@ -1949,9 +1949,23 @@ const EXPANSION_SCHEMA = {
 } as const;
 
 /** Beat-local expansion uses the same server-owned contract as first-pass generation. */
-export function buildExpansionResponseSchema(contract?: ArcRoleContract, requestedFormat: StoryMaterialFormat = "other") {
+export function buildExpansionResponseSchema(
+  contract?: ArcRoleContract,
+  requestedFormat: StoryMaterialFormat = "other",
+  obligations: RecipeObligation[] = [],
+) {
   const dramaticFunction = contract?.allowedFunctions ?? [...DRAMATIC_FUNCTIONS];
   const allowedContainers = requestedFormat === "novel" ? [...NOVEL_LEAF_CONTAINERS] : EXPANSION_SCHEMA.properties.suggestions.items.properties.container.enum;
+  const recipeRequirementIDs = obligations.length > 0
+    ? {
+      ...EXPANSION_SCHEMA.properties.suggestions.items.properties.recipeRequirementIDs,
+      items: {
+        type: "string",
+        minLength: 1,
+        enum: obligations.map((obligation) => obligation.id),
+      },
+    }
+    : EXPANSION_SCHEMA.properties.suggestions.items.properties.recipeRequirementIDs;
   return {
     ...EXPANSION_SCHEMA,
     properties: {
@@ -1963,6 +1977,7 @@ export function buildExpansionResponseSchema(contract?: ArcRoleContract, request
             ...EXPANSION_SCHEMA.properties.suggestions.items.properties,
             dramaticFunction: { type: "string", enum: dramaticFunction },
             container: { type: "string", enum: allowedContainers },
+            recipeRequirementIDs,
             ...(contract?.semanticObligations.length ? {
               arcObligationEvidence: {
                 type: "object",
@@ -5132,7 +5147,7 @@ export async function runSuggestionJob(
             expansion.system,
             expansion.user,
             OUTLINE_OUTPUT_TOKEN_BUDGET,
-            { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: buildExpansionResponseSchema(beat ? arcRoleContract(body.arcTemplate.beats.find((candidate) => candidate.id === beat.beatID)!, body.arcTemplate.name) : undefined, requestedStoryMaterialFormat(body)) } },
+            { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: buildExpansionResponseSchema(beat ? arcRoleContract(body.arcTemplate.beats.find((candidate) => candidate.id === beat.beatID)!, body.arcTemplate.name) : undefined, requestedStoryMaterialFormat(body), recipeObligations) } },
             `outline-expansion-${context.round}-${beat?.beatID ?? "global"}`,
             (content, finishReason) => {
               const additions = parseExpansionResponse(content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, finishReason);

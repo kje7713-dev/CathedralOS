@@ -3193,6 +3193,18 @@ Deno.test("PR3 expansion schema and parser enforce beat-local semantic functions
   assertEquals(denFailed, true);
 });
 
+Deno.test("expansion schema restricts recipe requirement IDs to canonical obligations", () => {
+  const obligations = [
+    { id: "R1", label: "First requirement", description: "Canonical requirement" },
+    { id: "R2", label: "Second requirement", description: "Another canonical requirement" },
+  ];
+  const schema = buildExpansionResponseSchema(undefined, "novel", obligations as any) as any;
+  assertEquals(
+    schema.properties.suggestions.items.properties.recipeRequirementIDs.items.enum,
+    ["R1", "R2"],
+  );
+});
+
 Deno.test("PR3 expansion prompt carries the complete target semantic contract", () => {
   const template = { ...sparseRequest, arcTemplate: { name: "Freytag's Pyramid", id: "f", beats: freytagFixture.beats } } as any;
   const prompt = buildExpansionPrompt(template, [], { round: 1, projectedTokens: 1, projectedWords: 1, desiredWords: [90000, 120000], remainingDeficitTokens: 100, beat: { beatID: "fall", beatLabel: "Falling Action", currentSections: [], projectedTokens: 0, projectedWords: 0 } } as any);

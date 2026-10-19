@@ -783,9 +783,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             if let remaining = result.remainingCredits, !isRecoverableDraft {
                 feedback += " Remaining balance: \(String(format: "%.2f", remaining)) credits."
             }
-            if !result.warnings.isEmpty {
-                feedback += " \(result.warnings.count) suggestion warning\(result.warnings.count == 1 ? "" : "s") were reported."
-            }
             suggestionsFeedback = feedback
         } else if durabilityCoordinator.completedSuggestionRun?.projectID == project.id {
             // A completed server run may belong to the recipe snapshot that
