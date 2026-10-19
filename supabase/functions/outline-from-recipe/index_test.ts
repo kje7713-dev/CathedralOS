@@ -704,7 +704,8 @@ Deno.test("sparse recipe context is preserved for the single comprehensive outli
   assertEquals(user.includes("Douche"), true);
   assertEquals(system.includes("30-60"), false);
   assertEquals(system.includes("5-15"), false);
-  assertEquals(system.includes("minimum is a floor for dramatic coverage, not a target or maximum"), true);
+  assertEquals(plannerPrompt.system.includes("minSections represents the number of additional sections still required beyond existingSections"), true);
+  assertEquals(system.includes("minimum is a floor for dramatic coverage, not a target or maximum"), false);
   assertEquals(system.includes("targetSections"), false);
   assertEquals(system.includes("maxSections"), false);
 });
@@ -796,7 +797,7 @@ Deno.test("primary outline prompt has no arbitrary section-count instruction", (
     ["beat-2", { minSections: 1, rationale: "closure" }],
   ])).system;
   assertEquals(/\b\d+[-–]\d+\s+distinct sections\b/i.test(prompt), false);
-  assertEquals(prompt.includes("minimum is a floor for dramatic coverage, not a target or maximum"), true);
+  assertEquals(prompt.includes("Allocate the available word budget across the Story Arc beats before choosing sections."), true);
   assertEquals(prompt.includes("Selected motifs are supporting material, not a quota"), true);
   assertEquals(prompt.includes("do not repeat a motif merely to prove that the outline remembers it"), true);
   assertEquals(prompt.includes("MAX_PLANNED_SECTIONS"), false);
@@ -848,12 +849,12 @@ Deno.test("global buildPrompt communicates whole-outline dramatic comparison and
   );
   // Differentiation guidance must preserve length/allocation.
   assertEquals(
-    system.includes("Do NOT solve redundant dramatic work by reducing the planned novel"),
+    system.includes("Do not solve redundant dramatic work by adding sections"),
     true,
     "allocation and novel length must remain authoritative",
   );
   assertEquals(
-    system.includes("Allocation, minimum section coverage, and target novel length remain authoritative"),
+    system.includes("Allocation, minimum section coverage, and the novel length policy remain authoritative"),
     true,
   );
   // Earned place principle.
@@ -1768,13 +1769,13 @@ Deno.test("retry resumes from the persisted expansion checkpoint without repeati
     new Set(["beat-1"]),
     async (_current, context) => {
       calls.push(context.round);
-      return Array.from({ length: 20 }, (_, i) => expansionSection(`Retry round ${i + 1}`, "chapter"));
+      return Array.from({ length: 18 }, (_, i) => expansionSection(`Retry round ${i + 1}`, "chapter"));
     },
     undefined,
     { startRound: resumed!.startRound, priorDiagnostics: resumed!.priorDiagnostics },
   );
   assertEquals(calls, [2]);
-  assertEquals(result.suggestions.length, 57);
+  assertEquals(result.suggestions.length, 55);
 });
 
 Deno.test("a ~34K projected novel cannot terminate as completed below the 70K minimum", async () => {
