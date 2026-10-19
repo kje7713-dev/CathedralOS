@@ -90,6 +90,7 @@ struct CompletedSuggestionRun {
     /// Server failure classification retained so the UI can explain why a
     /// saved draft stopped without implying that no charge occurred.
     let failureCode: String?
+    let failureMessage: String?
 }
 
 struct SuggestionRunFailure: Equatable {
@@ -538,7 +539,8 @@ final class DataDurabilityCoordinator: ObservableObject {
         sourceRecipe: PromptPackExportPayload,
         context: ModelContext,
         service: any SectionEmbedServicing = SectionEmbedService(),
-        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
+        onAcceptAllCompleted: (() -> Void)? = nil
     ) {
         // Checkpoint 1: Accept All tapped.
         logger.log("accept_all: tapped outline=\(outlineID.uuidString, privacy: .public) project=\(projectID.uuidString, privacy: .public)")
@@ -639,7 +641,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                 await self.pollAcceptRun(
                     context: context,
                     service: service,
-                    onProjectRefreshed: onProjectRefreshed
+                    onProjectRefreshed: onProjectRefreshed,
+                    onAcceptAllCompleted: onAcceptAllCompleted
                 )
             } catch {
                 // Checkpoint 4: POST or run attach failed.
@@ -673,7 +676,8 @@ final class DataDurabilityCoordinator: ObservableObject {
     func resumeAcceptAllIfNeeded(
         context: ModelContext,
         service: any SectionEmbedServicing = SectionEmbedService(),
-        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
+        onAcceptAllCompleted: (() -> Void)? = nil
     ) {
         guard isRecoveryReadyForUploads else { return }
         guard acceptPollingTask == nil else { return }
@@ -691,7 +695,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                 await self.finishAcceptRun(
                     metadata,
                     context: context,
-                    onProjectRefreshed: onProjectRefreshed
+                    onProjectRefreshed: onProjectRefreshed,
+                    onAcceptAllCompleted: onAcceptAllCompleted
                 )
                 // finishAcceptRun already clears state; ensure no stale
                 // marker remains.
@@ -704,7 +709,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                 await self.pollAcceptRun(
                     context: context,
                     service: service,
-                    onProjectRefreshed: onProjectRefreshed
+                    onProjectRefreshed: onProjectRefreshed,
+                    onAcceptAllCompleted: onAcceptAllCompleted
                 )
             }
         }
@@ -713,7 +719,8 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func pollAcceptRun(
         context: ModelContext,
         service: any SectionEmbedServicing,
-        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
+        onAcceptAllCompleted: (() -> Void)? = nil
     ) async {
         guard var metadata = activeAcceptRun else { return }
         while !Task.isCancelled {
@@ -731,7 +738,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                     await finishAcceptRun(
                         metadata,
                         context: context,
-                        onProjectRefreshed: onProjectRefreshed
+                        onProjectRefreshed: onProjectRefreshed,
+                        onAcceptAllCompleted: onAcceptAllCompleted
                     )
                     return
                 }
@@ -797,9 +805,13 @@ final class DataDurabilityCoordinator: ObservableObject {
     private func finishAcceptRun(
         _ metadata: AcceptRunMetadata,
         context: ModelContext,
-        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil
+        onProjectRefreshed: ((UUID, UUID?) -> Void)? = nil,
+        onAcceptAllCompleted: (() -> Void)? = nil
     ) async {
-        if metadata.typedStatus == .completed && metadata.sectionsFailed == 0 && metadata.error == nil {
+        let serverAccepted = metadata.typedStatus == .completed &&
+            metadata.sectionsFailed == 0 &&
+            metadata.error == nil
+        if serverAccepted {
             do {
                 // Pass both the local project id and the canonical lineage id so
                 // the targeted restore can resolve a drifted/historical
@@ -833,6 +845,12 @@ final class DataDurabilityCoordinator: ObservableObject {
         acceptRunRevision &+= 1
         outputRefreshRevision &+= 1
         NotificationCenter.default.post(name: .cathedralOSGenerationOutputsChanged, object: nil)
+        // The server result is authoritative even when this device cannot
+        // refresh its local snapshot. Clear the paid suggestion draft so a
+        // completed Accept All cannot resurrect the old Resume affordance.
+        if serverAccepted {
+            onAcceptAllCompleted?()
+        }
     }
 
     func dismissAcceptRunError() {
@@ -909,21 +927,34 @@ final class DataDurabilityCoordinator: ObservableObject {
 
     static func paidSavedSuggestionFeedback(
         result: OutlineSuggestionResult,
-        failureCode: String?
+        failureCode: String?,
+        failureMessage: String? = nil
     ) -> String {
-        var message = "Your paid suggestions were saved, but the final check did not complete."
+        let normalizedFailureMessage = failureMessage?.lowercased() ?? ""
+        let exceededNovelCap = failureCode == "failed_over_target" ||
+            normalizedFailureMessage.contains("120,000-word hard cap") ||
+            normalizedFailureMessage.contains("exceeds the 120,000")
+        var message = "Your suggestions were saved and are ready to review. The final validation did not pass."
+        if exceededNovelCap {
+            message = "Your suggestions were saved, but the draft exceeded the novel-length limit, so the final outline check stopped."
+        } else if failureCode == "failed_under_target" {
+            message = "Your suggestions were saved, but the draft was still below the required novel length, so the final outline check stopped."
+        } else if failureCode == "failed_expansion" {
+            message = "Your suggestions were saved, but the outline could not be expanded to the required length."
+        }
         if let charged = result.creditCostCharged, charged > 0 {
-            message += " Already charged \(String(format: "%.2f", charged)) credits for completed stages."
+            message += " You were charged \(String(format: "%.2f", charged)) credits for the completed stages."
         }
         if let remaining = result.remainingCredits {
             message += " Remaining balance: \(String(format: "%.2f", remaining)) credits."
         }
         if failureCode == "insufficient_credits" {
-            message += " The next stage was not started because the available credit balance was insufficient."
+            message += " The next stage could not start because your balance was too low. Add credits and choose Resume After Adding Credits, or choose Review Suggestions to use the saved output."
         } else if failureCode == "story_arc_semantic_unresolved" {
-            message += " The final Story Arc check still found one or more authored requirements unmet after repair. Review the sections for the story non-negotiable before accepting them."
+            message += " The final Story Arc check still found an authored requirement that needs attention. Review the saved sections before accepting them."
+        } else {
+            message += " No additional charge was made. Choose Review Suggestions to decide what to keep."
         }
-        message += " No additional generation charge was made. Review and accept them below."
         return message
     }
 
@@ -1296,7 +1327,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                         modelID: metadata.request.modelID,
                         reasoningEffort: metadata.request.reasoningEffort,
                         isRecoverableDraft: false,
-                        failureCode: nil
+                        failureCode: nil,
+                        failureMessage: nil
                     )
                     suggestionRunRevision &+= 1
                     suggestionPollingTasks[metadata.projectID] = nil
@@ -1328,7 +1360,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                             modelID: metadata.request.modelID,
                             reasoningEffort: metadata.request.reasoningEffort,
                             isRecoverableDraft: true,
-                            failureCode: job.errorCode
+                            failureCode: job.errorCode,
+                            failureMessage: job.error
                         )
                         suggestionRunRevision &+= 1
                         suggestionPollingTasks[metadata.projectID] = nil

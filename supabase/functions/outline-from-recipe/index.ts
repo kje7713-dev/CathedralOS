@@ -599,7 +599,11 @@ export function buildSuggestionResponseSchema(
     };
     properties[beat.id] = {
       type: "array",
+      // The first pass must realize the bounded allocation, not invent an
+      // unbounded number of full chapter sections. Optional scale expansion
+      // happens later through the budget-aware progressive expansion path.
       minItems: minimum,
+      maxItems: minimum,
       items: beatSectionSchema,
     };
     required.push(beat.id);
@@ -2781,16 +2785,20 @@ type Allocation = {
   rationale: string;
 };
 
-const MIN_CHAPTER_TOKENS = CONTAINER_EXPECTED_RANGES.chapter?.[0] ?? 3000;
+// Novel scale is evaluated using the midpoint of a container's literary
+// range, not its floor. Budgeting against only the chapter minimum lets a
+// 52-section allocation pass preflight while the same sections project well
+// above the 120,000-word hard cap.
+const PROJECTED_CHAPTER_TOKENS = projectedExpectedTokens([{ container: "chapter" }]);
 
 export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): number {
   if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
   const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
   return Math.max(
-    req.arcTemplate.beats.length,
+    0,
     Math.min(
       MAX_PLANNED_SECTIONS,
-      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / MIN_CHAPTER_TOKENS),
+      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / PROJECTED_CHAPTER_TOKENS),
     ),
   );
 }
@@ -3265,6 +3273,36 @@ export function countSuggestionsByBeat(suggestions: Suggestion[]): Record<string
   }, {});
 }
 
+export class AllocationCoverageValidationError extends Error {
+  readonly code = "missing_story_arc_coverage";
+}
+
+export function allocationDeficits(
+  suggestions: Suggestion[],
+  allocation: Map<string, Allocation>,
+): Array<{ beatID: string; required: number; actual: number; missing: number }> {
+  const counts = countSuggestionsByBeat(suggestions);
+  return Array.from(allocation.entries())
+    .map(([beatID, plan]) => {
+      const actual = counts[beatID] ?? 0;
+      return { beatID, required: plan.minSections, actual, missing: Math.max(0, plan.minSections - actual) };
+    })
+    .filter((entry) => entry.missing > 0);
+}
+
+export function assertAllocationCoverage(
+  suggestions: Suggestion[],
+  allocation: Map<string, Allocation>,
+  phase = "outline",
+): void {
+  const deficits = allocationDeficits(suggestions, allocation);
+  if (deficits.length > 0) {
+    throw new AllocationCoverageValidationError(
+      `${phase}: ${deficits.map((entry) => `beat ${entry.beatID} returned ${entry.actual} section${entry.actual === 1 ? "" : "s"}; minimum is ${entry.required}`).join("; ")}`,
+    );
+  }
+}
+
 export function validateSuggestions(
   parsed: any,
   beatIds: Set<string>,
@@ -3359,21 +3397,7 @@ export function validateSuggestions(
     used.add(s.storyArcBeatID);
   }
   if (allocation) {
-    const counts = new Map<string, number>();
-    for (const suggestion of valid) {
-      counts.set(
-        suggestion.storyArcBeatID,
-        (counts.get(suggestion.storyArcBeatID) ?? 0) + 1,
-      );
-    }
-    for (const [beatID, plan] of allocation) {
-      const actual = counts.get(beatID) ?? 0;
-      if (actual < plan.minSections) {
-        throw new Error(
-          `beat ${beatID} returned ${actual} section${actual === 1 ? "" : "s"}; minimum is ${plan.minSections}`,
-        );
-      }
-    }
+    assertAllocationCoverage(valid, allocation, "provider outline");
   } else {
     // Backward-compatible validation for callers that do not have a plan.
     for (const bid of beatIds) {
@@ -5009,15 +5033,13 @@ export async function runSuggestionJob(
 
     let allocation: Map<string, Allocation> | undefined;
     const sectionAllocationDeficits = (suggestions: Suggestion[]) => {
-      const counts = new Map<string, number>();
       const effectiveAllocation = allocation ?? new Map<string, Allocation>(
         Array.isArray(planningState.allocationEntries) ? planningState.allocationEntries as Array<[string, Allocation]> : [],
       );
-      for (const suggestion of suggestions) counts.set(suggestion.storyArcBeatID, (counts.get(suggestion.storyArcBeatID) ?? 0) + 1);
-      return body.arcTemplate.beats
-        .map((beat) => ({ beatID: beat.id, label: beat.label, required: effectiveAllocation.get(beat.id)?.minSections ?? 0, actual: counts.get(beat.id) ?? 0 }))
-        .filter((entry) => entry.actual < entry.required)
-        .map((entry) => ({ ...entry, missing: entry.required - entry.actual }));
+      return allocationDeficits(suggestions, effectiveAllocation).map((entry) => ({
+        ...entry,
+        label: body.arcTemplate.beats.find((beat) => beat.id === entry.beatID)?.label ?? entry.beatID,
+      }));
     };
 
     const expandNovel = async (
@@ -5168,9 +5190,19 @@ export async function runSuggestionJob(
         );
       }
       const remainingAllocationDeficits = sectionAllocationDeficits(completedSuggestions);
-      const finalWarnings = remainingAllocationDeficits.length > 0
-        ? [...completionWarnings, `Completed after the bounded three-round repair pass with ${remainingAllocationDeficits.reduce((sum, entry) => sum + entry.missing, 0)} allocation section deficit${remainingAllocationDeficits.reduce((sum, entry) => sum + entry.missing, 0) === 1 ? "" : "s"} remaining.`]
-        : completionWarnings;
+      if (remainingAllocationDeficits.length > 0) {
+        const checkpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? []);
+        planningState = { ...planningState, phase: "expansion", nextAction: "expansion", expansionCheckpoint: checkpoint };
+        diagnostics = markMeaningfulProgress({
+          ...diagnostics,
+          stage: "allocation_repair_pending",
+          allocationDeficits: remainingAllocationDeficits,
+          expansionCheckpoint: checkpoint,
+        }, `allocation_repair_pending:${stableJSONStringify(remainingAllocationDeficits)}`);
+        await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
+        throw new SuggestionWorkerYield();
+      }
+      const finalWarnings = completionWarnings;
       await updateRun({
         status: "completed",
         suggestions: completedSuggestions,
@@ -5215,7 +5247,8 @@ export async function runSuggestionJob(
         body.arcTemplate,
       );
       const outlineNeedsExpansion = requestedStoryMaterialFormat(body) === "novel" &&
-        (needsNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
+        (sectionAllocationDeficits(completedSuggestions).length > 0 ||
+          needsNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
           !initialScale.meetsPreferredMinimum ||
           initialQuality.causalScaleIssues.length > 0 ||
           initialQuality.unusedStoryMaterialItems > 0);
@@ -5683,7 +5716,7 @@ export async function runSuggestionJob(
         (content, finishReason) => {
           const flattened = flattenSuggestionResponse(parseOutlineJSON(content, finishReason), body.arcTemplate.beats);
           diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
-          const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
+          const validated = validateSuggestions(flattened, beatIds, undefined, recipeObligations, body.arcTemplate);
           const deduped = removeDuplicateOutlineSections(validated.suggestions);
           validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
           const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true);
@@ -5697,7 +5730,7 @@ export async function runSuggestionJob(
         parseOutlineJSON(rawResponse.content, rawResponse.finishReason),
         body.arcTemplate.beats,
       );
-      const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
+      const validated = validateSuggestions(flattened, beatIds, undefined, recipeObligations, body.arcTemplate);
       const deduped = removeDuplicateOutlineSections(validated.suggestions);
       validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true), warnings: validated.warnings };
@@ -5733,7 +5766,7 @@ export async function runSuggestionJob(
     };
 
     const authoredSemanticBeatCount = body.arcTemplate.beats.filter((beat) => arcRoleContract(beat, body.arcTemplate.name).semanticObligations.length > 0).length;
-    if (authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null) {
+    if ((authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null) && sectionAllocationDeficits(result.suggestions).length === 0) {
       // Semantic verification is its own durable provider stage. Persist the
       // validated outline before yielding so a one-dispatch worker slice never
       // replays the paid outline call or loses the verifier checkpoint.

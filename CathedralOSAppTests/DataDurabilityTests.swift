@@ -181,6 +181,10 @@ private func makeInMemoryContext() throws -> ModelContext {
 
 // MARK: - Tests
 
+private final class AcceptCompletionFlag: @unchecked Sendable {
+    var value = false
+}
+
 @MainActor
 final class DataDurabilityTests: XCTestCase {
 
@@ -263,7 +267,11 @@ final class DataDurabilityTests: XCTestCase {
             defaults: defaults
         )
         let context = try makeInMemoryContext()
-        coordinator.resumeAcceptAllIfNeeded(context: context)
+        let acceptCompleted = AcceptCompletionFlag()
+        coordinator.resumeAcceptAllIfNeeded(
+            context: context,
+            onAcceptAllCompleted: { acceptCompleted.value = true }
+        )
 
         for _ in 0..<100 where projectSpy.targetedRestoreLineageIDs.isEmpty {
             await Task.yield()
@@ -284,6 +292,10 @@ final class DataDurabilityTests: XCTestCase {
         XCTAssertTrue(
             coordinator.acceptRunError?.contains("refreshing this project failed") == true,
             "Refresh failure must name the refresh as the failing step. Got: \(coordinator.acceptRunError ?? "nil")"
+        )
+        XCTAssertTrue(
+            acceptCompleted.value,
+            "A completed server Accept All must clear the local paid draft even when targeted refresh fails."
         )
         XCTAssertNil(coordinator.activeAcceptRun, "Terminal cleanup removes the persisted metadata after reconciliation finishes.")
         XCTAssertNil(defaults.data(forKey: "cathedralos.acceptOutline.activeRun"), "Persisted metadata must be cleared once terminal reconciliation finishes.")

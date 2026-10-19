@@ -39,6 +39,9 @@ import {
   isRetryableInsufficientCreditFailure,
   fitAllocationToNovelBudget,
   maximumBudgetedNewSections,
+  allocationDeficits,
+  assertAllocationCoverage,
+  AllocationCoverageValidationError,
   outlineLogicalStageFamily,
   buildPrompt,
   assertDistinctOutlineTitles,
@@ -423,6 +426,23 @@ Deno.test("allocator floors are scaled to the novel word budget", () => {
   const total = Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0);
   assertEquals(total <= maximumBudgetedNewSections(req), true);
   assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
+  assertEquals(maximumBudgetedNewSections(req), 28);
+});
+
+Deno.test("final allocation coverage reports a repair deficit when a beat is omitted", () => {
+  const allocation = new Map([
+    ["beat-1", { minSections: 1, rationale: "opening" }],
+    ["beat-2", { minSections: 1, rationale: "ending" }],
+  ]);
+  const suggestions = [{ storyArcBeatID: "beat-1" }] as any;
+  assertEquals(allocationDeficits(suggestions, allocation), [{
+    beatID: "beat-2", required: 1, actual: 0, missing: 1,
+  }]);
+  assertThrows(
+    () => assertAllocationCoverage(suggestions, allocation, "final outline"),
+    AllocationCoverageValidationError,
+    "final outline: beat beat-2 returned 0 sections; minimum is 1",
+  );
 });
 
 Deno.test("planner prompt groups one existing section onto its linked beat", () => {
@@ -1538,6 +1558,7 @@ Deno.test("dynamic response contract removes model-owned beat IDs and target/max
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const schema = buildSuggestionResponseSchema([{ id: "beat-1" }], new Map([["beat-1", { minSections: 2, rationale: "coverage" }]])) as any;
   assertEquals(schema.properties.beats.properties["beat-1"].items.properties.storyArcBeatID, undefined);
+  assertEquals(schema.properties.beats.properties["beat-1"].maxItems, schema.properties.beats.properties["beat-1"].minItems);
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);

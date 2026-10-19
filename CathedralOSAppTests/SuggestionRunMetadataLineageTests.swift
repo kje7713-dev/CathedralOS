@@ -192,7 +192,41 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         XCTAssertTrue(message.contains("Already charged 11.28 credits"))
         XCTAssertTrue(message.contains("Remaining balance: 42.25 credits"))
         XCTAssertTrue(message.contains("available credit balance was insufficient"))
-        XCTAssertTrue(message.contains("No additional generation charge was made"))
+        XCTAssertTrue(message.contains("No additional charge was made"))
+    }
+
+    func testPaidSavedSuggestionFeedbackUsesServerReasonWhenCodeIsMissing() {
+        let result = OutlineSuggestionResult(
+            suggestions: [makeSuggestion()],
+            warnings: [],
+            creditCostCharged: 14.63,
+            remainingCredits: 117.94,
+            sourceRecipe: makeRequest().recipe
+        )
+        let message = DataDurabilityCoordinator.paidSavedSuggestionFeedback(
+            result: result,
+            failureCode: nil,
+            failureMessage: "Novel outline exceeds the 120,000-word hard cap before expansion."
+        )
+        XCTAssertTrue(message.contains("exceeded the novel-length limit"))
+        XCTAssertTrue(message.contains("Review Suggestions"))
+    }
+
+    func testPaidSavedSuggestionFeedbackExplainsLengthFailureAndNextAction() {
+        let result = OutlineSuggestionResult(
+            suggestions: [makeSuggestion()],
+            warnings: [],
+            creditCostCharged: 14.63,
+            remainingCredits: 20.0,
+            sourceRecipe: makeRequest().recipe
+        )
+        let message = DataDurabilityCoordinator.paidSavedSuggestionFeedback(
+            result: result,
+            failureCode: "failed_over_target"
+        )
+        XCTAssertTrue(message.contains("exceeded the novel-length limit"))
+        XCTAssertTrue(message.contains("Review Suggestions"))
+        XCTAssertTrue(message.contains("No additional charge was made"))
     }
 
     func testPaidSavedSuggestionFeedbackExplainsSemanticFailure() {
@@ -208,8 +242,8 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             failureCode: "story_arc_semantic_unresolved"
         )
         XCTAssertTrue(message.contains("final Story Arc check"))
-        XCTAssertTrue(message.contains("story non-negotiable"))
-        XCTAssertTrue(message.contains("No additional generation charge"))
+        XCTAssertTrue(message.contains("authored requirement"))
+        XCTAssertTrue(message.contains("No additional charge was made"))
     }
 
     func testSuggestionStatusPollingHasARealSuccessInterval() {

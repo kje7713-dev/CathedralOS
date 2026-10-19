@@ -454,7 +454,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 runOutlineError = nil
             }
         }
-        .alert("Suggestions Ready", isPresented: suggestionsFeedbackPresented) {
+        .alert(suggestionsFeedbackTitle, isPresented: suggestionsFeedbackPresented) {
             if recoverableSuggestionFailureCode == "insufficient_credits" ||
                 recoverableSuggestionFailureCode == "story_arc_semantic_unresolved" {
                 Button(recoverableSuggestionFailureCode == "insufficient_credits" ? "Resume After Adding Credits" : "Retry Final Check") {
@@ -538,9 +538,20 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 sourceRecipe: sourceRecipe,
                 project: project,
                 modelContext: modelContext,
-                onProjectRefreshed: handleProjectRefreshed
+                onProjectRefreshed: handleProjectRefreshed,
+                onAcceptAllCompleted: handleAcceptAllCompleted
             )
         }
+    }
+
+    /// Accept All is server-authoritative. If the terminal job succeeded but
+    /// targeted local refresh failed, still consume the paid draft so the old
+    /// Resume Suggestions action cannot reappear on the next render.
+    private func handleAcceptAllCompleted() {
+        recoverableSuggestions = nil
+        suggestions = []
+        suggestionSourceRecipe = nil
+        recoverableSuggestionFailureCode = nil
     }
 
     /// Accept All restores the canonical project in the shared SwiftData context,
@@ -683,6 +694,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         )
     }
 
+    private var suggestionsFeedbackTitle: String {
+        recoverableSuggestionFailureCode != nil ? "Suggestions Saved — Review Required" : "Suggestions Ready"
+    }
+
     private var suggestionsReady: Bool {
         // PR 1: explicit recipe selection. Never fall back to promptPacks.first.
         guard recipeSelection?.isReadyForSuggestSections == true else { return false }
@@ -719,7 +734,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 } else {
                     feedback = DataDurabilityCoordinator.paidSavedSuggestionFeedback(
                         result: result,
-                        failureCode: completed.failureCode
+                        failureCode: completed.failureCode,
+                        failureMessage: completed.failureMessage
                     )
                 }
             } else {
