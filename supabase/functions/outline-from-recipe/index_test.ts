@@ -3030,7 +3030,8 @@ Deno.test("semantic evidence schemas satisfy strict Structured Outputs for the 1
 
   const expansion: any = buildExpansionResponseSchema(arcRoleContract(beats[9], "Romance / HEA"));
   assertOpenAIStrictSchema(expansion);
-  assertEquals(expansion.properties.suggestions.items.required.includes("arcObligationEvidence"), true);
+  assertEquals(expansion.properties.suggestions.items.required.includes("arcObligationEvidence"), false);
+  assertEquals("arcObligationEvidence" in expansion.properties.suggestions.items.properties, false);
 });
 
 Deno.test("semantic beat obligations reject generic Romantic Suspense completion", () => {
@@ -3265,6 +3266,50 @@ Deno.test("optional expansion does not apply the first-pass beat semantic gate",
   );
   assertEquals(parsed.length, 1);
   assertEquals(parsed[0].title, "Sophie Vale’s Unscheduled Escort");
+});
+
+Deno.test("optional expansion does not apply the first-pass beat semantic gate", () => {
+  const template = { name: "Freytag's Pyramid", beats: [{ id: "fall", role: "falling_action", label: "Falling Action" }] };
+  const addition: any = semanticSection(
+    "fall",
+    "Sophie Vale’s Unscheduled Escort",
+    "Sophie arranges an unscheduled escort that gives Mira access to a restricted service route.",
+    "setup",
+  );
+  addition.insertAfterTitle = null;
+  const parsed = parseExpansionResponse(
+    JSON.stringify({ suggestions: [addition] }),
+    new Set(["fall"]),
+    [],
+    [],
+    template as any,
+  );
+  assertEquals(parsed.length, 1);
+  assertEquals(parsed[0].title, "Sophie Vale’s Unscheduled Escort");
+});
+
+Deno.test("optional expansion ignores provider obligation evidence metadata", () => {
+  const template = { name: "Freytag's Pyramid", beats: [{ id: "fall", role: "falling_action", label: "Falling Action" }] };
+  const addition: any = semanticSection(
+    "fall",
+    "Anika Voss and the Consent Fracture",
+    "Anika reveals how the system turned private desire into leverage.",
+    "setup",
+  );
+  addition.insertAfterTitle = null;
+  addition.arcObligationEvidence = {
+    romanticTension: [{ field: "dramaticEvent", quote: "Anika reveals how the system turned private desire into leverage." }],
+  };
+  const parsed = parseExpansionResponse(
+    JSON.stringify({ suggestions: [addition] }),
+    new Set(["fall"]),
+    [],
+    [],
+    template as any,
+  );
+  assertEquals(parsed.length, 1);
+  assertEquals(parsed[0].title, "Anika Voss and the Consent Fracture");
+  assertEquals("arcObligationEvidence" in parsed[0], false);
 });
 
 Deno.test("PR3 expansion prompt carries the complete target semantic contract", () => {
