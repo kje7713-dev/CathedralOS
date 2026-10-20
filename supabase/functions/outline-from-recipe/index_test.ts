@@ -3247,6 +3247,26 @@ Deno.test("expansion schema restricts recipe requirement IDs to canonical obliga
   );
 });
 
+Deno.test("optional expansion does not apply the first-pass beat semantic gate", () => {
+  const template = { name: "Freytag's Pyramid", beats: [{ id: "fall", role: "falling_action", label: "Falling Action" }] };
+  const addition: any = semanticSection(
+    "fall",
+    "Sophie Vale’s Unscheduled Escort",
+    "Sophie arranges an unscheduled escort that gives Mira access to a restricted service route.",
+    "setup",
+  );
+  addition.insertAfterTitle = null;
+  const parsed = parseExpansionResponse(
+    JSON.stringify({ suggestions: [addition] }),
+    new Set(["fall"]),
+    [],
+    [],
+    template as any,
+  );
+  assertEquals(parsed.length, 1);
+  assertEquals(parsed[0].title, "Sophie Vale’s Unscheduled Escort");
+});
+
 Deno.test("PR3 expansion prompt carries the complete target semantic contract", () => {
   const template = { ...sparseRequest, arcTemplate: { name: "Freytag's Pyramid", id: "f", beats: freytagFixture.beats } } as any;
   const prompt = buildExpansionPrompt(template, [], { round: 1, projectedTokens: 1, projectedWords: 1, desiredWords: [90000, 120000], remainingDeficitTokens: 100, beat: { beatID: "fall", beatLabel: "Falling Action", currentSections: [], projectedTokens: 0, projectedWords: 0 } } as any);

@@ -2519,7 +2519,11 @@ export function validateExpansionAdditions(
   const titles = new Set(original.map((s) => s.title.trim().replace(/\s+/g, " ").toLocaleLowerCase()));
   for (const raw of parsed.suggestions) {
     const { insertAfterTitle } = raw ?? {};
-    const validated = validateSuggestions({ suggestions: [raw] }, beatIds, undefined, obligations, template).suggestions[0];
+    // Optional expansion predates the Story Arc semantic-role contract. Keep
+    // its structural/duplicate/placement validation, but do not apply the
+    // first-pass beat-role gate here; that gate turned valid enrichment into
+    // a hard failure when a provider described an addition differently.
+    const validated = validateSuggestions({ suggestions: [raw] }, beatIds, undefined, obligations).suggestions[0];
     if (!validated) throw new Error("expansion returned an invalid addition");
     if (insertAfterTitle !== null && typeof insertAfterTitle !== "string") throw new Error("expansion placement must be a title or null");
     let resolvedInsertAfterTitle = insertAfterTitle;
