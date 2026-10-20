@@ -1966,6 +1966,8 @@ export function buildExpansionResponseSchema(
       },
     }
     : EXPANSION_SCHEMA.properties.suggestions.items.properties.recipeRequirementIDs;
+  const { arcObligationEvidence: _ignoredExpansionEvidence, ...expansionProperties } =
+    EXPANSION_SCHEMA.properties.suggestions.items.properties;
   return {
     ...EXPANSION_SCHEMA,
     properties: {
@@ -1974,22 +1976,12 @@ export function buildExpansionResponseSchema(
         items: {
           ...EXPANSION_SCHEMA.properties.suggestions.items,
           properties: {
-            ...EXPANSION_SCHEMA.properties.suggestions.items.properties,
+            ...expansionProperties,
             dramaticFunction: { type: "string", enum: dramaticFunction },
             container: { type: "string", enum: allowedContainers },
             recipeRequirementIDs,
-            ...(contract?.semanticObligations.length ? {
-              arcObligationEvidence: {
-                type: "object",
-                properties: Object.fromEntries(contract.semanticObligations.map((obligation) => [obligation.id, { type: "array", items: { type: "object", properties: { field: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] }, quote: { type: "string", minLength: 1, maxLength: 1200 } }, required: ["field", "quote"], additionalProperties: false } }])),
-                required: contract.semanticObligations.map((obligation) => obligation.id),
-                additionalProperties: false,
-              },
-            } : {}),
           },
-          required: contract?.semanticObligations.length
-            ? [...EXPANSION_SCHEMA.properties.suggestions.items.required, "arcObligationEvidence"]
-            : EXPANSION_SCHEMA.properties.suggestions.items.required,
+          required: EXPANSION_SCHEMA.properties.suggestions.items.required,
         },
       },
     },
@@ -2518,12 +2510,16 @@ export function validateExpansionAdditions(
   const fingerprints = new Set(original.map((s) => `${s.title}|${s.summary}|${s.storyArcBeatID}`));
   const titles = new Set(original.map((s) => s.title.trim().replace(/\s+/g, " ").toLocaleLowerCase()));
   for (const raw of parsed.suggestions) {
-    const { insertAfterTitle } = raw ?? {};
+    const { insertAfterTitle, arcObligationEvidence: _ignoredArcObligationEvidence, ...expansionSection } = raw ?? {};
     // Optional expansion predates the Story Arc semantic-role contract. Keep
     // its structural/duplicate/placement validation, but do not apply the
     // first-pass beat-role gate here; that gate turned valid enrichment into
     // a hard failure when a provider described an addition differently.
-    const validated = validateSuggestions({ suggestions: [raw] }, beatIds, undefined, obligations).suggestions[0];
+    // Expansion creates new story sections; it does not create or reassert
+    // Story Arc obligations. Ignore provider-supplied evidence metadata here
+    // so an invented obligation ID cannot invalidate an otherwise valid
+    // addition or the whole expansion round.
+    const validated = validateSuggestions({ suggestions: [expansionSection] }, beatIds, undefined, obligations).suggestions[0];
     if (!validated) throw new Error("expansion returned an invalid addition");
     if (insertAfterTitle !== null && typeof insertAfterTitle !== "string") throw new Error("expansion placement must be a title or null");
     let resolvedInsertAfterTitle = insertAfterTitle;
