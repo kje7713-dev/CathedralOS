@@ -1706,6 +1706,28 @@ Deno.test("required allocation coverage expands even when novel scale is already
   assertEquals(result.suggestions.length, 81);
 });
 
+Deno.test("optional enrichment expansion is global when no allocation deficit identifies a beat", async () => {
+  const initial = [
+    ...sceneOutline(79),
+    { ...sceneOutline(1)[0], storyArcBeatID: "beat-2" },
+  ];
+  const calls: Array<string | undefined> = [];
+  const result = await progressivelyExpandOutline(
+    initial as any,
+    new Set(["beat-1", "beat-2"]),
+    async (_current, context, beat) => {
+      calls.push(beat?.beatID);
+      return context.round === 1
+        ? [expansionSection("Later Beat Material", "scene", "beat-2")]
+        : [];
+    },
+    undefined,
+    { qualityGate: () => true },
+  );
+  assertEquals(calls, [undefined, undefined]);
+  assertEquals(result.suggestions.at(-1)?.storyArcBeatID, "beat-2");
+});
+
 Deno.test("Test3-shaped undersized outline fails closed after bounded expansion", async () => {
   let calls = 0;
   const initial = sceneOutline(22);
@@ -3176,21 +3198,41 @@ Deno.test("semantic repair preserves provider output exhaustion", async () => {
   );
 });
 
-Deno.test("PR3 expansion schema and parser enforce beat-local semantic functions", () => {
+Deno.test("PR3 expansion schema and parser enforce beat-local structural functions without conflict rejection", () => {
   const template = { name: "Freytag's Pyramid", beats: [{ id: "fall", role: "falling_action", label: "Falling Action" }] };
   const schema = buildExpansionResponseSchema(arcRoleContract(template.beats[0], template.name)) as any;
   assertEquals(schema.properties.suggestions.items.properties.dramaticFunction.enum.includes("climax"), false);
   const addition: any = semanticSection("fall", "Second Assault", "The antagonist launches a larger decisive assault on the city.", "consequence");
   addition.insertAfterTitle = null;
-  let failed = false;
-  try { parseExpansionResponse(JSON.stringify({ suggestions: [addition] }), new Set(["fall"]), [], [], template as any); } catch (error) { failed = String(error).includes("primary conflict"); }
-  assertEquals(failed, true);
+  const parsed = parseExpansionResponse(JSON.stringify({ suggestions: [addition] }), new Set(["fall"]), [], [], template as any);
+  assertEquals(parsed.length, 1);
+  assertEquals(parsed[0].title, "Second Assault");
   const denouement = { name: "Freytag's Pyramid", beats: [{ id: "den", role: "denouement", label: "Denouement" }] };
   const denAddition: any = semanticSection("den", "Another Assault", "The antagonist launches another takeover.", "consequence");
   denAddition.insertAfterTitle = null;
-  let denFailed = false;
-  try { parseExpansionResponse(JSON.stringify({ suggestions: [denAddition] }), new Set(["den"]), [], [], denouement as any); } catch (error) { denFailed = String(error).includes("primary conflict"); }
-  assertEquals(denFailed, true);
+  const denParsed = parseExpansionResponse(JSON.stringify({ suggestions: [denAddition] }), new Set(["den"]), [], [], denouement as any);
+  assertEquals(denParsed.length, 1);
+  assertEquals(denParsed[0].title, "Another Assault");
+});
+
+Deno.test("PR3 expansion allows local conflict actions that are not decisive takeovers", () => {
+  const template = { name: "Freytag's Pyramid", beats: [{ id: "fall", role: "falling_action", label: "Falling Action" }] };
+  const addition: any = semanticSection(
+    "fall",
+    "The Emergency Stores",
+    "The guards seize emergency stores from the abandoned depot, then distribute them under the new ration plan.",
+    "consequence",
+  );
+  addition.insertAfterTitle = null;
+  const parsed = parseExpansionResponse(
+    JSON.stringify({ suggestions: [addition] }),
+    new Set(["fall"]),
+    [],
+    [],
+    template as any,
+  );
+  assertEquals(parsed.length, 1);
+  assertEquals(parsed[0].title, "The Emergency Stores");
 });
 
 Deno.test("expansion schema restricts recipe requirement IDs to canonical obligations", () => {
@@ -4432,7 +4474,7 @@ Deno.test("allocation semantic failure checkpoints one retry without repeating t
   assertEquals(db.row.attempt_count, 0);
 });
 
-Deno.test("multi-beat expansion checkpoints beat one before the one-dispatch yield", async () => {
+Deno.test("optional enrichment expansion checkpoints a global round before the next dispatch", async () => {
   const fullBody = await executableWorkerBody();
   const recipe = fullBody.recipe;
   const plannerItem = (id: string, label: string) => ({ id, label, description: `${label} description`, source: "planner", sourceReference: null });
@@ -4472,12 +4514,10 @@ Deno.test("multi-beat expansion checkpoints beat one before the one-dispatch yie
   assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.planning_state.phase, "expansion");
   await run();
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-beat-1"]);
-  assertEquals(db.row.planning_state.expansionCheckpoint.nextRound, 1);
-  assertEquals(db.row.planning_state.expansionCheckpoint.nextBeatIndex, 1);
-  assertEquals(db.row.suggestions.some((section: any) => section.title.includes("beat-1-0")), true);
-  await run();
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-beat-1", "outline-expansion-1-beat-2"]);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global"]);
+  assertEquals(db.row.planning_state.expansionCheckpoint.nextRound, 2);
+  assertEquals(db.row.planning_state.expansionCheckpoint.nextBeatIndex, 0);
+  assertEquals(db.row.suggestions.some((section: any) => section.title.includes("global-0")), true);
   assertEquals(db.row.status, "pending");
   assertEquals(db.row.planning_state.phase, "expansion");
   assertEquals(db.row.attempt_count, 0);

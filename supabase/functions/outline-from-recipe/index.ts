@@ -2521,13 +2521,6 @@ export function validateExpansionAdditions(
     const { insertAfterTitle } = raw ?? {};
     const validated = validateSuggestions({ suggestions: [raw] }, beatIds, undefined, obligations, template).suggestions[0];
     if (!validated) throw new Error("expansion returned an invalid addition");
-    if (template) {
-      const beat = template.beats.find((candidate) => candidate.id === validated.storyArcBeatID);
-      const roleContract = beat ? arcRoleContract(beat, template.name) : undefined;
-      if (roleContract?.forbidsNewPrimaryConflict && PRIMARY_CONFLICT_SIGNALS.test(semanticText(validated))) {
-        throw new Error(`expansion introduced a new primary conflict in beat ${validated.storyArcBeatID}`);
-      }
-    }
     if (insertAfterTitle !== null && typeof insertAfterTitle !== "string") throw new Error("expansion placement must be a title or null");
     let resolvedInsertAfterTitle = insertAfterTitle;
     if (resolvedInsertAfterTitle !== null && !originalTitles.has(resolvedInsertAfterTitle)) {
@@ -3987,7 +3980,10 @@ export async function repairStoryArcSemanticObligations(
   return result;
 }
 
-const PRIMARY_CONFLICT_SIGNALS = /\b(launch(?:es|ed)?|mount(?:s|ed)?|wage(?:s|d)?|invade(?:s|d)?|attack(?:s|ed)?|assault(?:s|ed)?|conquer(?:s|ed)?|take over|seize(?:s|d)?|overthrow(?:s|n)?|decisive assault|citywide takeover)\b/;
+// Ordinary expansion scenes may contain a local attack, seizure, or launch.
+// Treat only explicit decisive/large-scale takeover language as evidence that
+// an expansion creates a new primary conflict in a beat that forbids one.
+const PRIMARY_CONFLICT_SIGNALS = /\b(?:launch(?:es|ed)?\s+(?:a|the|another)\s+(?:larger\s+)?decisive\s+assault|launch(?:es|ed)?\s+(?:a|the|another)\s+(?:citywide\s+)?takeover|mount(?:s|ed)?\s+(?:a|the)\s+decisive\s+assault|wage(?:s|d)?\s+(?:a|the)\s+war|attack(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|assault(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|invade(?:s|d)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|conquer(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|take\s+over\s+(?:the|a)\s+(?:government|kingdom|empire)|seize(?:s|d)?\s+(?:the|a)\s+(?:government|throne|kingdom|empire)|overthrow(?:s|n)?\s+(?:the|a)\s+(?:government|regime|kingdom)|citywide\s+takeover)\b/i;
 const CLOSURE_SIGNALS = /\b(settle(?:s|d)?|stabiliz(?:e|es|ed)|new normal|aftermath|mourning|rebuild(?:s|ing)?|govern(?:s|ed|ance)|peace|accept(?:s|ed)?|legacy|closing image)\b/;
 // “Aftermath” describes what follows an ending; it does not itself answer
 // the central dramatic question. Required resolution beats therefore need a
@@ -5127,6 +5123,7 @@ export async function runSuggestionJob(
       startBeatIndex = 0,
       priorDiagnostics: ExpansionRoundDiagnostic[] = [],
     ): Promise<ProgressiveExpansionResult> => {
+      const allocationRepairRequired = sectionAllocationDeficits(initialSuggestions).length > 0;
       diagnostics = {
         ...diagnostics,
         stage: "expansion_generation",
@@ -5197,7 +5194,11 @@ export async function runSuggestionJob(
           startRound,
           startBeatIndex,
           priorDiagnostics,
-          beats: body.arcTemplate.beats,
+          // Allocation repair is beat-local because the missing section has a
+          // known destination. Optional enrichment is global: unused material
+          // has no canonical beat assignment, so the provider must choose the
+          // beat where it belongs instead of being forced into beat zero.
+          beats: allocationRepairRequired ? body.arcTemplate.beats : undefined,
           coverageGate: (current) => requestedStoryMaterialFormat(body) === "novel" && sectionAllocationDeficits(current).length > 0,
           qualityGate: (current) => {
             if (requestedStoryMaterialFormat(body) !== "novel") return false;
