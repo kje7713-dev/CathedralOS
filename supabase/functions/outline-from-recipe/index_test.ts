@@ -56,6 +56,7 @@ import {
   STORY_MATERIAL_ENRICHMENT_SCHEMA,
   calculateRepairAllocation,
   ExpansionValidationError,
+  fitExpansionAdditionsToBudget,
   NovelScalePlanningError,
   MAX_EXPANSION_ROUNDS,
   progressivelyExpandOutline,
@@ -1785,6 +1786,77 @@ Deno.test("hard-valid novel preserves the outline when optional expansion valida
   assertEquals(result.suggestions.length, initial.length);
   assertEquals(result.diagnostics[0].status, "invalid");
   assertEquals(result.warnings.length, 1);
+});
+
+Deno.test("optional expansion persists rejected provider attempt diagnostics", async () => {
+  const initial = sceneOutline(88);
+  let diagnostic: any = null;
+  const attempt = {
+    round: 1,
+    beatID: "beat-1",
+    sectionCountBefore: initial.length,
+    projectedTokensBefore: 100_000,
+    returnedCount: 4,
+    acceptedCount: 0,
+    candidateTitles: ["Candidate A", "Candidate B"],
+    candidateContainers: ["chapter", "chapter"],
+    projectedTokensAfter: 170_000,
+    status: "rejected" as const,
+    error: "projected novel scale exceeded 120,000-word hard cap",
+  };
+  const result = await progressivelyExpandOutline(
+    initial as any,
+    new Set(["beat-1"]),
+    async () => { throw new ExpansionValidationError(attempt.error, attempt); },
+    async (roundDiagnostic) => { diagnostic = roundDiagnostic; },
+    { qualityGate: () => true },
+  );
+  assertEquals(result.suggestions.length, initial.length);
+  assertEquals(diagnostic.attempts, [attempt]);
+});
+
+Deno.test("budget fitting records partial acceptance and discarded candidates", () => {
+  const current = Array.from({ length: 20 }, (_, index) => expansionSection(`Current ${index + 1}`, "chapter"));
+  const additions = Array.from({ length: 10 }, (_, index) => expansionSection(`Candidate ${index + 1}`, "chapter"));
+  const fitted = fitExpansionAdditionsToBudget(current as any, additions as any, [], { round: 1 });
+  assertEquals(fitted.additions.length, 8);
+  assertEquals(fitted.attempt.returnedCount, 10);
+  assertEquals(fitted.attempt.acceptedCount, 8);
+  assertEquals(fitted.attempt.rejectedCount, 2);
+  assertEquals(fitted.attempt.budgetTruncated, true);
+});
+
+Deno.test("later-beat expansion failure preserves earlier accepted additions", async () => {
+  const initial = Array.from({ length: 19 }, (_, index) => expansionSection(`Current ${index + 1}`, "chapter", "beat-1"));
+  let checkpoint: any[] | null = null;
+  const result = await progressivelyExpandOutline(
+    initial as any,
+    new Set(["beat-1", "beat-2"]),
+    async (_current, context, beat) => {
+      if (beat?.beatID === "beat-1") return [expansionSection("Earlier accepted", "scene", "beat-1")];
+      throw new ExpansionValidationError("later beat rejected", {
+        round: context.round,
+        beatID: beat?.beatID,
+        sectionCountBefore: 20,
+        projectedTokensBefore: 90_000,
+        returnedCount: 3,
+        acceptedCount: 0,
+        rejectedCount: 3,
+        candidateTitles: ["Later A", "Later B", "Later C"],
+        candidateContainers: ["chapter", "chapter", "chapter"],
+        projectedTokensAfter: 110_000,
+        status: "rejected",
+        error: "later beat rejected",
+      });
+    },
+    async (_diagnostic, _all, current) => { checkpoint = current; },
+    { beats: [{ id: "beat-1" }, { id: "beat-2" }], qualityGate: () => true },
+  );
+  assertEquals(result.suggestions.length, 20);
+  assertEquals(result.suggestions.at(-1)?.title, "Earlier accepted");
+  assertEquals((checkpoint as any)?.[19]?.title, "Earlier accepted");
+  assertEquals(result.diagnostics.at(-1)?.sectionCountAfter, 20);
+  assertEquals(result.diagnostics.at(-1)?.attempts?.at(-1)?.rejectedCount, 3);
 });
 
 Deno.test("cross-beat expansion anchors append within the addition's validated beat", () => {

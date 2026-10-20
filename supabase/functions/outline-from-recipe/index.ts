@@ -1990,7 +1990,78 @@ export function buildExpansionResponseSchema(
 
 export type ExpansionAddition = Suggestion & { insertAfterTitle: string | null };
 
-export class ExpansionValidationError extends Error {}
+export interface ExpansionAttemptDiagnostic {
+  beatID?: string;
+  round: number;
+  sectionCountBefore: number;
+  projectedTokensBefore: number;
+  returnedCount: number;
+  acceptedCount?: number;
+  rejectedCount?: number;
+  candidateTitles: string[];
+  candidateContainers: string[];
+  projectedTokensAfter: number;
+  status: "accepted" | "rejected";
+  budgetTruncated?: boolean;
+  error?: string;
+}
+
+export class ExpansionValidationError extends Error {
+  readonly attempt?: ExpansionAttemptDiagnostic;
+
+  constructor(message: string, attempt?: ExpansionAttemptDiagnostic) {
+    super(message);
+    this.name = "ExpansionValidationError";
+    this.attempt = attempt;
+  }
+}
+
+export function fitExpansionAdditionsToBudget(
+  current: Suggestion[],
+  additions: ExpansionAddition[],
+  existingSections: PlannedSectionLike[],
+  context: { round: number; beatID?: string },
+): { additions: ExpansionAddition[]; attempt: ExpansionAttemptDiagnostic } {
+  let accepted: ExpansionAddition[] = [];
+  let merged = current;
+  for (const addition of additions) {
+    const candidate = mergeExpansionAdditions(merged, [addition]);
+    if (candidate.length > MAX_PLANNED_SECTIONS || evaluateNovelScale(candidate, existingSections).exceedsMaximum) break;
+    accepted = [...accepted, addition];
+    merged = candidate;
+  }
+  const rejectedCount = Math.max(0, additions.length - accepted.length);
+  const attempt: ExpansionAttemptDiagnostic = {
+    round: context.round,
+    beatID: context.beatID,
+    sectionCountBefore: current.length,
+    projectedTokensBefore: evaluateNovelScale(current, existingSections).projectedTokens,
+    returnedCount: additions.length,
+    acceptedCount: accepted.length,
+    rejectedCount,
+    candidateTitles: additions.slice(0, 50).map((addition) => addition.title),
+    candidateContainers: additions.slice(0, 50).map((addition) => addition.container),
+    projectedTokensAfter: evaluateNovelScale(merged, existingSections).projectedTokens,
+    status: accepted.length > 0 ? "accepted" : "rejected",
+    ...(rejectedCount > 0 ? {
+      budgetTruncated: true,
+      error: `budget truncated ${rejectedCount} expansion addition${rejectedCount === 1 ? "" : "s"} at the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`,
+    } : {}),
+  };
+  if (accepted.length === 0 && additions.length > 0) {
+    const fullMerged = mergeExpansionAdditions(current, additions);
+    const error = fullMerged.length > MAX_PLANNED_SECTIONS
+      ? `global ${MAX_PLANNED_SECTIONS}-section safety cap reached`
+      : `projected novel scale exceeded ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`;
+    throw new ExpansionValidationError(error, {
+      ...attempt,
+      rejectedCount: additions.length,
+      projectedTokensAfter: evaluateNovelScale(fullMerged, existingSections).projectedTokens,
+      error,
+    });
+  }
+  return { additions: accepted, attempt };
+}
 
 export type NovelPlanningFailureCode = "failed_under_target" | "failed_over_target" | "failed_expansion";
 
@@ -2144,12 +2215,18 @@ export interface ExpansionRoundDiagnostic {
   remainingEstimatedDeficitTokens: number;
   status: "completed" | "invalid" | "capped";
   error?: string;
+  attempts?: ExpansionAttemptDiagnostic[];
 }
 
 export interface ProgressiveExpansionResult {
   suggestions: Suggestion[];
   warnings: string[];
   diagnostics: ExpansionRoundDiagnostic[];
+}
+
+export interface ExpansionAdditionsResult {
+  additions: ExpansionAddition[];
+  attempt?: ExpansionAttemptDiagnostic;
 }
 
 export interface ExpansionBeatContext {
@@ -2283,7 +2360,7 @@ export function expansionResumeState(run: {
 export async function progressivelyExpandOutline(
   initial: Suggestion[],
   beatIds: Set<string>,
-  expand: (current: Suggestion[], context: ExpansionPromptContext, beat?: ExpansionBeatContext) => Promise<ExpansionAddition[]>,
+  expand: (current: Suggestion[], context: ExpansionPromptContext, beat?: ExpansionBeatContext) => Promise<ExpansionAddition[] | ExpansionAdditionsResult>,
   onRound?: (diagnostic: ExpansionRoundDiagnostic, all: ExpansionRoundDiagnostic[], current: Suggestion[]) => Promise<void> | void,
   options: ProgressiveExpansionOptions = {},
 ): Promise<ProgressiveExpansionResult> {
@@ -2309,13 +2386,15 @@ export async function progressivelyExpandOutline(
       desiredWords: NOVEL_TARGET_WORDS,
       remainingDeficitTokens: evaluateNovelScale(suggestions, existingSections).deficitTokens,
     };
+    let roundSuggestions = suggestions;
+    const roundStartSuggestions = suggestions;
+    let additionsReturned = 0;
+    let hitCap = false;
+    const attempts: ExpansionAttemptDiagnostic[] = [];
     try {
       const targetBeats = options.beats?.length
         ? options.beats
         : [undefined];
-      let roundSuggestions = suggestions;
-      let additionsReturned = 0;
-      let hitCap = false;
       const firstBeatIndex = round === startRound ? Math.max(0, options.startBeatIndex ?? 0) : 0;
       for (let beatIndex = firstBeatIndex; beatIndex < targetBeats.length; beatIndex++) {
         const beat = targetBeats[beatIndex];
@@ -2330,12 +2409,14 @@ export async function progressivelyExpandOutline(
             projectedWords: projectedExpectedTokens(roundSuggestions.filter((section) => section.storyArcBeatID === beat.id)) / TOKENS_PER_WORD,
           }
           : undefined;
-        const additions = await expand(roundSuggestions, {
+        const expansionResult = await expand(roundSuggestions, {
           ...before,
           projectedTokens: evaluateNovelScale(roundSuggestions, existingSections).projectedTokens,
           projectedWords: evaluateNovelScale(roundSuggestions, existingSections).projectedWords,
           remainingDeficitTokens: evaluateNovelScale(roundSuggestions, existingSections).deficitTokens,
         }, beatContext);
+        const additions = Array.isArray(expansionResult) ? expansionResult : expansionResult.additions;
+        if (!Array.isArray(expansionResult) && expansionResult.attempt) attempts.push(expansionResult.attempt);
         if (beatContext && additions.some((addition) => addition.storyArcBeatID !== beatContext.beatID)) {
           throw new ExpansionValidationError(`beat-local expansion returned a section for another beat; expected ${beatContext.beatID}`);
         }
@@ -2344,7 +2425,20 @@ export async function progressivelyExpandOutline(
           hitCap = true;
           break;
         }
+        if (Array.isArray(expansionResult)) attempts.push({
+          beatID: beat?.id,
+          round,
+          sectionCountBefore: roundSuggestions.length,
+          projectedTokensBefore: evaluateNovelScale(roundSuggestions, existingSections).projectedTokens,
+          returnedCount: additions.length,
+          acceptedCount: additions.length,
+          candidateTitles: additions.slice(0, 50).map((addition) => addition.title),
+          candidateContainers: additions.slice(0, 50).map((addition) => addition.container),
+          projectedTokensAfter: evaluateNovelScale(merged, existingSections).projectedTokens,
+          status: "accepted",
+        });
         roundSuggestions = merged;
+        suggestions = roundSuggestions;
         additionsReturned += additions.length;
         await options.onBeat?.(round, beatIndex + 1, roundSuggestions, diagnostics);
       }
@@ -2352,12 +2446,13 @@ export async function progressivelyExpandOutline(
       const accepted = overCap ? suggestions : roundSuggestions;
       const projectedTokensAfter = evaluateNovelScale(accepted, existingSections).projectedTokens;
       const diagnostic: ExpansionRoundDiagnostic = {
-        round, sectionCountBefore: suggestions.length, projectedTokensBefore,
+        round, sectionCountBefore: roundStartSuggestions.length, projectedTokensBefore,
         projectedWordsBefore: projectedTokensBefore / TOKENS_PER_WORD,
         additionsReturned: overCap ? 0 : additionsReturned, sectionCountAfter: accepted.length,
         projectedTokensAfter, projectedWordsAfter: projectedTokensAfter / TOKENS_PER_WORD,
         remainingEstimatedDeficitTokens: evaluateNovelScale(accepted, existingSections).deficitTokens,
         status: overCap || accepted.length >= MAX_PLANNED_SECTIONS ? "capped" : "completed",
+        attempts,
         ...(overCap ? { error: `global ${MAX_PLANNED_SECTIONS}-section safety cap reached` } : {}),
       };
       suggestions = accepted;
@@ -2370,14 +2465,22 @@ export async function progressivelyExpandOutline(
       if (additionsReturned === 0) break;
     } catch (error) {
       if (!(error instanceof ExpansionValidationError)) throw error;
+      const recordedAttempts = [
+        ...attempts,
+        ...(error.attempt ? [error.attempt] : []),
+      ];
       const diagnostic: ExpansionRoundDiagnostic = {
-        round, sectionCountBefore: suggestions.length, projectedTokensBefore,
-        projectedWordsBefore: projectedTokensBefore / TOKENS_PER_WORD, additionsReturned: 0,
-        sectionCountAfter: suggestions.length, projectedTokensAfter: projectedTokensBefore,
-        projectedWordsAfter: projectedTokensBefore / TOKENS_PER_WORD,
-        remainingEstimatedDeficitTokens: evaluateNovelScale(suggestions, existingSections).deficitTokens,
+        round, sectionCountBefore: roundStartSuggestions.length, projectedTokensBefore,
+        projectedWordsBefore: projectedTokensBefore / TOKENS_PER_WORD,
+        additionsReturned: recordedAttempts.reduce((total, attempt) => total + attempt.returnedCount, 0),
+        sectionCountAfter: roundSuggestions.length,
+        projectedTokensAfter: evaluateNovelScale(roundSuggestions, existingSections).projectedTokens,
+        projectedWordsAfter: evaluateNovelScale(roundSuggestions, existingSections).projectedWords,
+        remainingEstimatedDeficitTokens: evaluateNovelScale(roundSuggestions, existingSections).deficitTokens,
         status: "invalid", error: error.message.slice(0, 500),
+        attempts: recordedAttempts,
       };
+      suggestions = roundSuggestions;
       diagnostics.push(diagnostic);
       await onRound?.(diagnostic, diagnostics, suggestions);
       if (evaluateNovelScale(suggestions, existingSections).meetsMinimum) {
@@ -5149,23 +5252,18 @@ export async function runSuggestionJob(
             (content, finishReason) => {
               const additions = parseExpansionResponse(content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, finishReason);
               validateNovelLeafContainers(additions, requestedStoryMaterialFormat(body));
-              const merged = mergeExpansionAdditions(current, additions);
-              if (merged.length > MAX_PLANNED_SECTIONS) {
-                throw new ExpansionValidationError(
-                  `outline expansion exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`,
-                );
-              }
-              if (evaluateNovelScale(merged, body.existingSections ?? []).exceedsMaximum) {
-                throw new ExpansionValidationError(
-                  `outline expansion exceeded the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`,
-                );
-              }
-              return additions;
+              return fitExpansionAdditionsToBudget(current, additions, body.existingSections ?? [], {
+                round: context.round,
+                beatID: beat?.beatID,
+              });
             },
           );
-          const additions = parseExpansionResponse(expandedRaw.content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, expandedRaw.finishReason);
-          validateNovelLeafContainers(additions, requestedStoryMaterialFormat(body));
-          return additions;
+          const parsedAdditions = parseExpansionResponse(expandedRaw.content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, expandedRaw.finishReason);
+          validateNovelLeafContainers(parsedAdditions, requestedStoryMaterialFormat(body));
+          return fitExpansionAdditionsToBudget(current, parsedAdditions, body.existingSections ?? [], {
+            round: context.round,
+            beatID: beat?.beatID,
+          });
         },
         async (_roundDiagnostic, allDiagnostics, current) => {
           latestValidSuggestions = current;
