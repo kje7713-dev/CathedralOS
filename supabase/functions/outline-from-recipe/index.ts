@@ -4162,7 +4162,14 @@ const CLOSURE_SIGNALS = /\b(settle(?:s|d)?|stabiliz(?:e|es|ed)|new normal|afterm
 // the central dramatic question. Required resolution beats therefore need a
 // concrete settling/answering action in the state-change fields, not merely a
 // final-looking label or the word “aftermath”.
-const RESOLUTION_ACTION_SIGNALS = /\b(?<!un)(?:resolve(?:s|d)?|answer(?:s|ed)?|settle(?:s|d)?|stabiliz(?:e|es|ed)|ends?|ended|defeat(?:s|ed)?|disarm(?:s|ed)?|dismantle(?:s|d)?|restore(?:s|d)?|rebuild(?:s|ing)?|govern(?:s|ed|ance)|make(?:s|d)? peace|new normal|accept(?:s|ed)?|legacy|closing image)\b/;
+const RESOLUTION_ACTION_SIGNALS = /\b(?<!un)(?:resolve(?:s|d)?|answer(?:s|ed)?|settle(?:s|d)?|stabiliz(?:e|es|ed)?|end(?:s|ed)?\s+(?:the|its|a)\s+(?:central\s+)?(?:conflict|threat|war|crisis|cycle|reign|pursuit)|defeat(?:s|ed)?|disarm(?:s|ed)?|dismantle(?:s|d)?|restore(?:s|d)?|rebuild(?:s|ing)?|govern(?:s|ed|ance)|make(?:s|d)? peace)\b/;
+
+function resolutionEvidenceText(section: Suggestion): string {
+  return [section.dramaticEvent, section.resultingChange, section.terminalState]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
 
 function inferredFunction(suggestion: Suggestion): DramaticFunction | null {
   const text = semanticText(suggestion);
@@ -4213,7 +4220,7 @@ export function validateRequiredStoryArcFunctions(
       if (requiredSections.length === 0) {
         issues.push(`beat ${beat.label} (${beat.id}) is missing required dramatic function ${required}; present functions: ${present}`);
       } else if (required === "resolution" && !requiredSections.some((section) =>
-        RESOLUTION_ACTION_SIGNALS.test(semanticText(section))
+        RESOLUTION_ACTION_SIGNALS.test(resolutionEvidenceText(section))
       )) {
         issues.push(`beat ${beat.label} (${beat.id}) declares resolution but does not materially resolve the central dramatic question or conflict`);
       }
@@ -4244,6 +4251,7 @@ export async function repairRequiredStoryArcFunctions(
   template: Pick<ArcTemplateBlob, "name" | "beats">,
   billableCall: SuggestionLLMCall,
   obligations: RecipeObligation[] = [],
+  context: { premise?: string } = {},
 ): Promise<{ suggestions: Suggestion[]; repaired: string[]; unresolved: string[] }> {
   let result = suggestions.map((section) => ({ ...section }));
   const repaired: string[] = [];
@@ -4261,10 +4269,19 @@ export async function repairRequiredStoryArcFunctions(
         unresolved.push(beat.label);
         continue;
       }
-      const system = `You are repairing one outline section for the ${template.name} Story Arc. Rewrite the supplied section in place; do not add a new section, change its beat, or invent a new primary conflict. The beat requires the dramatic function ${required}. For resolution, the resultingChange and terminalState must show the central dramatic question or conflict being answered and settled on the page. An aftermath, mood, memorial, or continuing residue alone is not a resolution. Return only JSON matching the required repair schema.`;
+      const repairTargetIndex = result.indexOf(target);
+      const precedingClimax = result
+        .slice(0, repairTargetIndex)
+        .reverse()
+        .find((section) => section.dramaticFunction === "climax");
+      const system = `You are repairing one outline section for the ${template.name} Story Arc. Rewrite the supplied section in place; do not add a new section, change its beat, or invent a new primary conflict. The beat requires the dramatic function ${required}. For resolution, the resultingChange and terminalState must show the central dramatic question or conflict being answered and settled on the page. An aftermath, mood, memorial, or continuing residue alone is not a resolution. The premise and preceding climax below are read-only context: preserve their established facts and resolve the existing conflict rather than inventing a generic ending. Return only JSON matching the required repair schema.`;
       const user = JSON.stringify({
         beat: { id: beat.id, role: beat.role, label: beat.label, contract: roleContract },
         requiredFunction: required,
+        context: {
+          premise: context.premise ?? null,
+          precedingClimax: precedingClimax ?? null,
+        },
         section: target,
         instruction: "Preserve any applicable recipeRequirementIDs, but replace aftermath-only closure with a concrete resolution action and settled terminal state.",
       }, null, 2);
@@ -4305,11 +4322,12 @@ export async function repairRequiredStoryArcFunctions(
         continue;
       }
       const targetIndex = result.indexOf(target);
-      result[targetIndex] = repairedSection;
-      const remainingIssue = validateRequiredStoryArcFunctions(result, { ...template, beats: [beat] }).find((item) => item.includes(`(${beat.id})`));
+      const candidateResult = result.map((section, index) => index === targetIndex ? repairedSection : section);
+      const remainingIssue = validateRequiredStoryArcFunctions(candidateResult, { ...template, beats: [beat] }).find((item) => item.includes(`(${beat.id})`));
       if (remainingIssue) {
         unresolved.push(target.title);
       } else {
+        result[targetIndex] = repairedSection;
         repaired.push(`${target.title}: ${required}`);
       }
     }
@@ -5390,8 +5408,7 @@ export async function runSuggestionJob(
               body.arcTemplate,
             );
             return !scale.meetsPreferredMinimum ||
-              quality.causalScaleIssues.length > 0 ||
-              quality.unusedStoryMaterialItems > 0;
+              quality.causalScaleIssues.length > 0;
           },
           onBeat: async (round, nextBeatIndex, current, allDiagnostics) => {
             const expansionCheckpoint = buildExpansionCheckpoint(
@@ -5538,8 +5555,7 @@ export async function runSuggestionJob(
         (sectionAllocationDeficits(completedSuggestions).length > 0 ||
           needsNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
           !initialScale.meetsPreferredMinimum ||
-          initialQuality.causalScaleIssues.length > 0 ||
-          initialQuality.unusedStoryMaterialItems > 0);
+          initialQuality.causalScaleIssues.length > 0);
       planningState = {
         ...planningState,
         phase: outlineNeedsExpansion ? "expansion" : "outline_complete",
@@ -5586,7 +5602,24 @@ export async function runSuggestionJob(
       const previous = Array.isArray(diagnostics.semanticWarnings) ? diagnostics.semanticWarnings as string[] : [];
       diagnostics = { ...diagnostics, semanticWarnings: [...previous, message] };
     };
-    const continueAfterSemanticVerification = async (suggestions: Suggestion[]) => {
+    const continueAfterSemanticVerification = async (suggestions: Suggestion[], completionWarnings: string[] = []) => {
+      const requiredStoryArcIssues = validateRequiredStoryArcFunctions(suggestions, body.arcTemplate);
+      const storyArcRepairAttempted = planningState.storyArcRepairAttempted === true;
+      if (requiredStoryArcIssues.length > 0 && !storyArcRepairAttempted) {
+        planningState = {
+          ...planningState,
+          phase: "story_arc_repair_pending",
+          nextAction: "story-arc-repair",
+          storyArcRepairIssues: requiredStoryArcIssues,
+        };
+        diagnostics = {
+          ...diagnostics,
+          stage: "story_arc_repair_pending",
+          storyArcRepairIssues: requiredStoryArcIssues,
+        };
+        await updateRun({ suggestions, planning_state: planningState, diagnostics });
+        throw new SuggestionWorkerYield();
+      }
       const semanticCoverage = obligationCoverage([...(body.existingSections ?? []), ...suggestions], recipeObligations);
       if (semanticCoverage.missingRequired.length > 0) {
         planningState = { ...planningState, phase: "obligation_repair_pending", nextAction: "obligation-repair" };
@@ -5599,7 +5632,7 @@ export async function runSuggestionJob(
         await updateRun({ suggestions, planning_state: planningState, diagnostics });
         throw new SuggestionWorkerYield();
       }
-      await postValidatedOutline(suggestions, []);
+      await postValidatedOutline(suggestions, completionWarnings);
     };
     if (planningState.nextAction === "semantic-verification") {
       let verification: SemanticVerificationResult | undefined;
@@ -5667,6 +5700,45 @@ export async function runSuggestionJob(
         recordSemanticWarning(`Semantic obligations remained after bounded repair; continuing with the best repaired outline (${verification.unsatisfied.length} unresolved).`);
       }
       await continueAfterSemanticVerification(persistedSemanticSuggestions);
+      return;
+    }
+    if (planningState.nextAction === "story-arc-repair" || planningState.nextAction === "story-arc-repair-completion") {
+      let repairedSuggestions = persistedSemanticSuggestions;
+      if (planningState.nextAction === "story-arc-repair") {
+        const repair = await repairRequiredStoryArcFunctions(
+          persistedSemanticSuggestions,
+          body.arcTemplate,
+          billableCall,
+          recipeObligations,
+          { premise: body.recipe?.project?.summary },
+        );
+        repairedSuggestions = repair.suggestions;
+        const repairedQuality = collectAdvisoryOutlineQuality(
+          repairedSuggestions,
+          body.storyMaterialEnrichment,
+          requestedStoryMaterialFormat(body),
+          body.arcTemplate,
+          allocation,
+        );
+        planningState = {
+          ...planningState,
+          phase: "story_arc_repair_complete",
+          nextAction: "story-arc-repair-completion",
+          storyArcRepairAttempted: true,
+        };
+        diagnostics = {
+          ...diagnostics,
+          stage: "story_arc_repair_complete",
+          storyArcRepairIssues: Array.isArray(planningState.storyArcRepairIssues)
+            ? planningState.storyArcRepairIssues
+            : [],
+          semanticArcRepairedSections: repair.repaired,
+          semanticArcUnresolvedSections: repair.unresolved,
+          semanticArcIssues: repairedQuality.semanticArcIssues,
+        };
+        await updateRun({ suggestions: repairedSuggestions, planning_state: planningState, diagnostics });
+      }
+      await continueAfterSemanticVerification(repairedSuggestions);
       return;
     }
     if (planningState.nextAction === "obligation-repair") {
@@ -6064,25 +6136,7 @@ export async function runSuggestionJob(
       throw new SuggestionWorkerYield();
     }
 
-    const coverage = obligationCoverage([...(body.existingSections ?? []), ...result.suggestions], recipeObligations);
-    diagnostics = {
-      ...diagnostics,
-      recipeObligationCoverage: coverage.covered,
-      missingRequiredRecipeObligations: coverage.missingRequired.map((obligation) => obligation.id),
-      novelScale: evaluateNovelScale(result.suggestions, body.existingSections ?? []),
-    };
-    let completedSuggestions = result.suggestions;
-    let completionWarnings = result.warnings;
-    if (coverage.missingRequired.length > 0) {
-      planningState = { ...planningState, phase: "obligation_repair_pending", nextAction: "obligation-repair" };
-      diagnostics = markMeaningfulProgress(
-        { ...diagnostics, stage: "obligation_repair_pending" },
-        "validated_suggestions_persisted",
-      );
-      await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
-      throw new SuggestionWorkerYield();
-    }
-    await postValidatedOutline(completedSuggestions, completionWarnings);
+    await continueAfterSemanticVerification(result.suggestions, result.warnings);
   } catch (err) {
     if (err instanceof SuggestionWorkerYield) {
       const yieldedAt = new Date().toISOString();
