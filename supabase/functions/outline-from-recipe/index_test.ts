@@ -5949,6 +5949,31 @@ Deno.test("semantic verifier receives every story non-negotiable with Section Co
   assertEquals(requirements[0].sections[0].resultingChange, "Trust becomes mutual.");
 });
 
+Deno.test("semantic verifier captures returned obligations and validation errors", async () => {
+  const template = {
+    name: "Dark Romance",
+    beats: [{ id: "e", role: "entanglement", label: "Entanglement", description: "The protagonists must make a concrete choice that changes their relationship." }],
+  } as any;
+  const captured: Record<string, unknown>[] = [];
+  await assertRejects(
+    () => verifyStoryArcSemantics(
+      [{ storyArcBeatID: "e", dramaticEvent: "They choose intimacy.", resultingChange: "Trust becomes mutual.", terminalState: "They remain together." }] as any,
+      template,
+      async () => ({
+        content: JSON.stringify({ beats: [{ beatID: "e", obligations: [] }] }),
+        recordProviderAttemptMetadata: async (metadata: Record<string, unknown>) => captured.push(metadata),
+      }) as any,
+    ),
+    Error,
+    "missing obligation",
+  );
+  const semanticVerification = captured[0].semanticVerification as Record<string, unknown>;
+  assertEquals(semanticVerification.returnedBeatIDs, ["e"]);
+  assertEquals(semanticVerification.returnedObligationIDs, []);
+  assertStringIncludes(String((semanticVerification.validationError as Record<string, unknown>).message), "missing obligation");
+  assertEquals((semanticVerification.expectedObligationIDs as unknown[]).length > 0, true);
+});
+
 Deno.test("ungrounded intimacy verifier evidence enters semantic repair instead of throwing", async () => {
   const template = {
     name: "Dark Romance",

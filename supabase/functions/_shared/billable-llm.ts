@@ -58,6 +58,10 @@ export interface BillableProviderResult {
   toolCostUsd: number;
 }
 
+export type ProviderAttemptMetadataRecorder = (
+  metadata: Record<string, unknown>,
+) => Promise<void>;
+
 export interface BillableUsageContext {
   projectID?: string | null;
   generationOutputID?: string | null;
@@ -104,6 +108,10 @@ export interface BillableLLMRequest<T> {
   messages: LLMMessage[];
   maxOutputTokens: number;
   providerOptions?: BillableProviderOptions;
+  /** Backend-only observability payload persisted on the provider attempt. */
+  providerAttemptMetadata?: Record<string, unknown>;
+  /** Retain provider content only for the semantic-verification audit call. */
+  captureProviderResponse?: boolean;
   usageContext: BillableUsageContext;
   /** PR-372: SHA-256 hex of the serialized stable prefix sent to the
    *  provider. For diagnostics only — never reverse to prompt content.
@@ -155,6 +163,8 @@ export interface BillableLLMResult<T> {
   /** PR-372: margin in cents (customerRevenueCents - providerCogsCents).
    *  Improves on cache hits; may be negative on cache writes without reuse. */
   marginCents: number;
+  /** Best-effort backend-only metadata update for post-call validation errors. */
+  recordProviderAttemptMetadata?: ProviderAttemptMetadataRecorder;
 }
 
 export interface BillableLLMDependencies {
@@ -207,6 +217,60 @@ async function updateProviderAttempt(adminClient: unknown, attemptID: string | n
     const result = await (adminClient as any).from("generation_provider_attempts").update(patch).eq("id", attemptID);
     if (result?.error) console.error(`[billable-llm] provider-attempt update failed: ${JSON.stringify(result.error)}`);
   } catch (error) { console.error(`[billable-llm] provider-attempt update threw: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+function providerAttemptRequestMetadata(
+  req: BillableLLMRequest<any>,
+): Record<string, unknown> {
+  return {
+    ...(req.providerAttemptMetadata ?? {}),
+    request: {
+      messageCount: req.messages.length,
+      messageBytes: new TextEncoder().encode(JSON.stringify(req.messages)).byteLength,
+      maxOutputTokens: req.maxOutputTokens,
+      responseFormat: (() => {
+        const format = req.providerOptions?.responseFormat as Record<string, unknown> | undefined;
+        const schema = format?.json_schema as Record<string, unknown> | undefined;
+        return format ? {
+          type: format.type ?? null,
+          name: schema?.name ?? null,
+          strict: schema?.strict ?? null,
+        } : null;
+      })(),
+    },
+  };
+}
+
+function providerAttemptResponseMetadata(
+  req: BillableLLMRequest<any>,
+  providerResult: BillableProviderResult,
+): Record<string, unknown> {
+  const metadata = {
+    ...providerAttemptRequestMetadata(req),
+  };
+  if (req.captureProviderResponse) {
+    (metadata as Record<string, unknown>).providerResponse = {
+      content: providerResult.content,
+      modelName: providerResult.modelName,
+      inputTokens: providerResult.inputTokens,
+      outputTokens: providerResult.outputTokens,
+      cachedInputTokens: providerResult.cachedInputTokens,
+      cacheWriteInputTokens: providerResult.cacheWriteInputTokens,
+      finishReason: providerResult.finishReason ?? null,
+      toolCostUsd: providerResult.toolCostUsd,
+    };
+  } else {
+    (metadata as Record<string, unknown>).providerResponse = {
+      modelName: providerResult.modelName,
+      inputTokens: providerResult.inputTokens,
+      outputTokens: providerResult.outputTokens,
+      cachedInputTokens: providerResult.cachedInputTokens,
+      cacheWriteInputTokens: providerResult.cacheWriteInputTokens,
+      finishReason: providerResult.finishReason ?? null,
+      toolCostUsd: providerResult.toolCostUsd,
+    };
+  }
+  return metadata;
 }
 
 async function reconcileOutlineRun(adminClient: unknown, runID: string | null | undefined): Promise<void> {
@@ -289,6 +353,7 @@ async function startProviderAttempt(adminClient: unknown, req: BillableLLMReques
       attempt_key: physicalAttemptKey, logical_stage_key: req.usageContext.logicalStageKey ?? req.usageContext.idempotencyKey ?? billingAttemptKey,
       attempt_ordinal: req.usageContext.attemptOrdinal ?? 1,
       model_name: req.model.provider_model, status: "started",
+      metadata: providerAttemptRequestMetadata(req),
       stable_prefix_hash: req.stablePrefixHash ?? null,
       prompt_bytes: req.usageContext.promptBytes ?? null,
       stable_prefix_bytes: req.usageContext.stablePrefixBytes ?? null,
@@ -375,6 +440,9 @@ export async function runBillableLLM<T>(
     const allocated = await beginOutlineProviderAttempt(deps.adminClient, req);
     attemptID = allocated.id;
     attemptKey = allocated.key;
+    await updateProviderAttempt(deps.adminClient, attemptID, {
+      metadata: providerAttemptRequestMetadata(req),
+    });
   } else {
     attemptID = await startProviderAttempt(deps.adminClient, req, attemptKey);
   }
@@ -460,7 +528,7 @@ export async function runBillableLLM<T>(
   const providerCached = Math.max(0, providerResult.cachedInputTokens ?? 0);
   const providerCacheWrite = Math.max(0, providerResult.cacheWriteInputTokens ?? 0);
   const providerCogsSnapshot = computeProviderCogsCents({ uncachedInputTokens: Math.max(0, totalProviderInput - providerCached - providerCacheWrite), cachedInputTokens: providerCached, cacheWriteInputTokens: providerCacheWrite, outputTokens: Math.max(0, providerResult.outputTokens ?? 0), toolCostUsd: providerResult.toolCostUsd }, pricing);
-  await updateProviderAttempt(deps.adminClient, attemptID, { status: "provider_succeeded", provider_completed_at: new Date().toISOString(), model_name: providerResult.modelName, input_tokens: providerResult.inputTokens, output_tokens: providerResult.outputTokens, cached_input_tokens: providerResult.cachedInputTokens, cache_write_input_tokens: providerResult.cacheWriteInputTokens, provider_cogs_cents: providerCogsSnapshot.providerCogsCents });
+  await updateProviderAttempt(deps.adminClient, attemptID, { status: "provider_succeeded", provider_completed_at: new Date().toISOString(), model_name: providerResult.modelName, input_tokens: providerResult.inputTokens, output_tokens: providerResult.outputTokens, cached_input_tokens: providerResult.cachedInputTokens, cache_write_input_tokens: providerResult.cacheWriteInputTokens, provider_cogs_cents: providerCogsSnapshot.providerCogsCents, metadata: providerAttemptResponseMetadata(req, providerResult) });
   const preCallbackUsage: GenerationUsage = {
     uncachedInputTokens: Math.max(0, totalProviderInput - providerCached - providerCacheWrite),
     cachedInputTokens: providerCached,
@@ -473,6 +541,14 @@ export async function runBillableLLM<T>(
     ? preCallbackRawCharge
     : computeActualChargeCredits(preCallbackUsage, pricing);
   const preCallbackMargin = computeMarginCents(preCallbackCharge, pricing, providerCogsSnapshot.providerCogsCents);
+  const recordProviderAttemptMetadata: ProviderAttemptMetadataRecorder = async (metadata) => {
+    await updateProviderAttempt(deps.adminClient, attemptID, {
+      metadata: {
+        ...providerAttemptResponseMetadata(req, providerResult),
+        ...metadata,
+      },
+    });
+  };
   let featureResult: T;
   try { featureResult = await req.onProviderSuccess(providerResult); }
   catch (error) {
@@ -530,6 +606,15 @@ export async function runBillableLLM<T>(
     } else {
       await updateProviderAttempt(deps.adminClient, attemptID, { status: "feature_validation_failed", completed_at: new Date().toISOString(), feature_error_code: error instanceof Error ? error.name : "feature_error" });
     }
+    await updateProviderAttempt(deps.adminClient, attemptID, {
+      metadata: {
+        ...providerAttemptResponseMetadata(req, providerResult),
+        validationError: {
+          name: error instanceof Error ? error.name : "feature_error",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      },
+    });
     throw error;
   }
 
@@ -722,6 +807,7 @@ export async function runBillableLLM<T>(
       providerCogsCents: providerCogs.providerCogsCents,
       customerRevenueCents: marginInfo.customerRevenueCents,
       marginCents: marginInfo.marginCents,
+      recordProviderAttemptMetadata,
     };
   }
 
@@ -739,6 +825,7 @@ export async function runBillableLLM<T>(
     providerCogsCents: providerCogs.providerCogsCents,
     customerRevenueCents: marginInfo.customerRevenueCents,
     marginCents: marginInfo.marginCents,
+    recordProviderAttemptMetadata,
   };
 }
 
