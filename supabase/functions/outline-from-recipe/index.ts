@@ -1108,6 +1108,7 @@ interface SuggestionLLMResult {
   creditCostCharged: number;
   remainingCredits: number;
   finishReason?: string;
+  recordProviderAttemptMetadata?: (metadata: Record<string, unknown>) => Promise<void>;
 }
 
 type SuggestionLLMCall = (
@@ -3865,8 +3866,28 @@ export async function verifyStoryArcSemantics(
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
     "outline-semantic-verification",
   );
-  const parsed = parseOutlineJSON<{ beats?: unknown; arcWideObligations?: unknown }>(raw.content, raw.finishReason);
-  if (!parsed || !Array.isArray(parsed.beats)) throw new Error("story_arc_semantic_verification: response missing beats");
+  const expectedObligationIDs = template.beats.flatMap((beat) =>
+    arcRoleContract(beat, template.name).semanticObligations.map((obligation) => `${beat.id}:${obligation.id}`));
+  const recordValidationError = async (error: unknown, extra: Record<string, unknown> = {}) => {
+    await raw.recordProviderAttemptMetadata?.({
+      semanticVerification: {
+        expectedObligationIDs,
+        ...extra,
+        validationError: {
+          name: error instanceof Error ? error.name : "semantic_verification_error",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      },
+    });
+  };
+  let parsed: { beats?: unknown; arcWideObligations?: unknown };
+  try {
+    parsed = parseOutlineJSON<{ beats?: unknown; arcWideObligations?: unknown }>(raw.content, raw.finishReason);
+    if (!parsed || !Array.isArray(parsed.beats)) throw new Error("story_arc_semantic_verification: response missing beats");
+  } catch (error) {
+    await recordValidationError(error);
+    throw error;
+  }
   const requirement = intimacyRequirement({ arcTemplate: template as ArcTemplateBlob, recipe: recipe as CanonicalRecipeEnvelope });
   const rawArcWide = Array.isArray(parsed.arcWideObligations) ? parsed.arcWideObligations : [];
   const arcWideObligations: SemanticVerificationObligation[] = [];
@@ -3939,17 +3960,39 @@ export async function verifyStoryArcSemantics(
   }
   for (const rawBeat of parsed.beats as any[]) {
     const beatID = String(rawBeat?.beatID ?? "");
-    if (!knownBeats.has(beatID) || seen.has(beatID)) throw new Error(`story_arc_semantic_verification: unknown or duplicate beat ${beatID}`);
+    if (!knownBeats.has(beatID) || seen.has(beatID)) {
+      const error = new Error(`story_arc_semantic_verification: unknown or duplicate beat ${beatID}`);
+      await recordValidationError(error, { returnedBeatIDs: (parsed.beats as any[]).map((candidate) => String(candidate?.beatID ?? "")) });
+      throw error;
+    }
     seen.add(beatID);
     const beat = knownBeats.get(beatID)!;
     const sections = suggestions.map((section, sectionIndex) => ({ section, sectionIndex })).filter(({ section }) => section.storyArcBeatID === beatID);
     const byObligation = new Map(arcRoleContract(beat, template.name).semanticObligations.map((obligation) => [obligation.id, obligation]));
-    if (!Array.isArray(rawBeat.obligations)) throw new Error(`story_arc_semantic_verification: missing obligations for ${beatID}`);
+    if (!Array.isArray(rawBeat.obligations)) {
+      const error = new Error(`story_arc_semantic_verification: missing obligations for ${beatID}`);
+      await recordValidationError(error, {
+        returnedBeatIDs: (parsed.beats as any[]).map((candidate) => String(candidate?.beatID ?? "")),
+        returnedObligationIDs: (parsed.beats as any[]).flatMap((candidate) => Array.isArray(candidate?.obligations)
+          ? candidate.obligations.map((obligation: any) => `${String(candidate?.beatID ?? "")}:${String(obligation?.obligationID ?? "")}`)
+          : []),
+      });
+      throw error;
+    }
     const obligations: SemanticVerificationObligation[] = [];
     for (const rawObligation of rawBeat.obligations) {
       const obligationID = String(rawObligation?.obligationID ?? "");
       const obligation = byObligation.get(obligationID);
-      if (!obligation || !knownObligations.has(`${beatID}:${obligationID}`)) throw new Error(`story_arc_semantic_verification: unknown obligation ${obligationID}`);
+      if (!obligation || !knownObligations.has(`${beatID}:${obligationID}`)) {
+        const error = new Error(`story_arc_semantic_verification: unknown obligation ${obligationID}`);
+        await recordValidationError(error, {
+          returnedBeatIDs: (parsed.beats as any[]).map((candidate) => String(candidate?.beatID ?? "")),
+          returnedObligationIDs: (parsed.beats as any[]).flatMap((candidate) => Array.isArray(candidate?.obligations)
+            ? candidate.obligations.map((candidateObligation: any) => `${String(candidate?.beatID ?? "")}:${String(candidateObligation?.obligationID ?? "")}`)
+            : []),
+        });
+        throw error;
+      }
       const sectionIndex = Number(rawObligation.sectionIndex);
       const field = rawObligation.field;
       const quote = normalizeEvidenceText(String(rawObligation.quote ?? ""));
@@ -3978,11 +4021,38 @@ export async function verifyStoryArcSemantics(
       if (!verified.satisfied) unsatisfied.push({ beatID, obligationID, reason: verified.reason });
     }
     for (const obligation of byObligation.values()) {
-      if (!obligations.some((candidate) => candidate.obligationID === obligation.id)) throw new Error(`story_arc_semantic_verification: missing obligation ${obligation.id}`);
+      if (!obligations.some((candidate) => candidate.obligationID === obligation.id)) {
+        const error = new Error(`story_arc_semantic_verification: missing obligation ${obligation.id}`);
+        await recordValidationError(error, {
+          returnedBeatIDs: (parsed.beats as any[]).map((candidate) => String(candidate?.beatID ?? "")),
+          returnedObligationIDs: (parsed.beats as any[]).flatMap((candidate) => Array.isArray(candidate?.obligations)
+            ? candidate.obligations.map((candidateObligation: any) => `${String(candidate?.beatID ?? "")}:${String(candidateObligation?.obligationID ?? "")}`)
+            : []),
+        });
+        throw error;
+      }
     }
     beats.push({ beatID, obligations });
   }
-  for (const beat of template.beats) if (arcRoleContract(beat, template.name).semanticObligations.length > 0 && !seen.has(beat.id)) throw new Error(`story_arc_semantic_verification: missing beat ${beat.id}`);
+  for (const beat of template.beats) if (arcRoleContract(beat, template.name).semanticObligations.length > 0 && !seen.has(beat.id)) {
+    const error = new Error(`story_arc_semantic_verification: missing beat ${beat.id}`);
+    await recordValidationError(error, {
+      returnedBeatIDs: (parsed.beats as any[]).map((candidate) => String(candidate?.beatID ?? "")),
+      returnedObligationIDs: (parsed.beats as any[]).flatMap((candidate) => Array.isArray(candidate?.obligations)
+        ? candidate.obligations.map((candidateObligation: any) => `${String(candidate?.beatID ?? "")}:${String(candidateObligation?.obligationID ?? "")}`)
+        : []),
+    });
+    throw error;
+  }
+  await raw.recordProviderAttemptMetadata?.({
+    semanticVerification: {
+      expectedObligationIDs,
+      returnedBeatIDs: beats.map((beat) => beat.beatID),
+      returnedObligationIDs: beats.flatMap((beat) => beat.obligations.map((obligation) => `${beat.beatID}:${obligation.obligationID}`)),
+      unsatisfiedCount: unsatisfied.length,
+      status: "validated",
+    },
+  });
   return { arcWideObligations, beats, unsatisfied };
 }
 
@@ -5135,6 +5205,15 @@ export async function runSuggestionJob(
       const leaseHeartbeat = setInterval(() => {
         void touchLease();
       }, 30_000);
+      const providerAttemptMetadata = action === "outline-semantic-verification" || action === "outline-semantic-repair-batch"
+        ? {
+          telemetryVersion: 1,
+          request: { messages, maxOutputTokens, responseFormat },
+          expectedObligationIDs: action === "outline-semantic-verification"
+            ? body.arcTemplate.beats.flatMap((beat) => arcRoleContract(beat, body.arcTemplate.name).semanticObligations.map((obligation) => `${beat.id}:${obligation.id}`))
+            : [],
+        }
+        : undefined;
       let result: any;
       try {
         result = await billableLLM({
@@ -5151,6 +5230,8 @@ export async function runSuggestionJob(
           cacheMode: model.cacheMode,
           promptCacheKey: model.cacheMode === "none" ? undefined : promptCacheKey,
         },
+        providerAttemptMetadata,
+        captureProviderResponse: action === "outline-semantic-verification",
         stablePrefixHash,
         usageContext: {
           generationLengthMode: "outline",
@@ -5205,6 +5286,7 @@ export async function runSuggestionJob(
         creditCostCharged: result.charged ? result.actualCharge : 0,
         remainingCredits: result.remainingCredits,
         finishReason: result.providerResult?.finishReason,
+        recordProviderAttemptMetadata: result.recordProviderAttemptMetadata,
       };
     };
 

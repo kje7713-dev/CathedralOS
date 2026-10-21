@@ -271,6 +271,33 @@ function makeRequest(
   };
 }
 
+function makeOutlineAttemptAdmin(attempt: Record<string, unknown>) {
+  return {
+    from: (table: string) => table === "generation_provider_attempts"
+      ? {
+        insert: (_row: unknown) => ({
+          select: (_columns: string) => ({
+            single: () => Promise.resolve({ data: { id: "observability-attempt" }, error: null }),
+          }),
+        }),
+        update: (patch: Record<string, unknown>) => ({
+          eq: (_column: string, _value: unknown) => {
+            Object.assign(attempt, patch);
+            return Promise.resolve({ data: null, error: null });
+          },
+        }),
+      }
+      : { insert: (_row: unknown) => Promise.resolve({ data: null, error: null }) },
+    rpc: (name: string) => {
+      if (name === "get_outline_stage_totals") return Promise.resolve({ data: [{ raw_charge_credits: 0, settled_charge_credits: 0 }], error: null });
+      if (name === "begin_outline_provider_attempt") return Promise.resolve({ data: [{ attempt_id: "observability-attempt", attempt_key: "observability:attempt:1", attempt_ordinal: 1 }], error: null });
+      if (name === "settle_outline_provider_attempt") return Promise.resolve({ data: [{ settlement_status: "settled", usage_event_id: "usage", ledger_id: "ledger", remaining_credits: 10 }], error: null });
+      if (name === "reconcile_outline_provider_attempts") return Promise.resolve({ data: null, error: null });
+      throw new Error(`unexpected RPC ${name}`);
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Billing & invariant tests
 // ---------------------------------------------------------------------------
@@ -1616,6 +1643,67 @@ Deno.test("runBillableLLM: hard input ceiling allows 269999 and 270000, rejects 
   assertEquals(providerCalls.length, 2);
   assertEquals(creditStore.chargeCalls.length, 0);
   assertEquals(admin.rpcCalls.length, 0);
+});
+
+Deno.test("semantic verification provider attempt persists bounded request and response diagnostics", async () => {
+  const attempt: Record<string, unknown> = {};
+  await runBillableLLM(
+    makeRequest({
+      purpose: "outline-suggestion",
+      action: "outline-semantic-verification",
+      providerAttemptMetadata: { semanticVerification: { expectedObligationIDs: ["e:authored_beat_requirement"] } },
+      captureProviderResponse: true,
+      usageContext: { ...makeRequest().usageContext, featureRunID: "00000000-0000-0000-0000-0000000000ee", logicalStageKey: "semantic-verification" },
+    }),
+    { adminClient: makeOutlineAttemptAdmin(attempt), provider: makeProvider(makeLLMResponse({ content: '{"beats":[]}' })), creditStore: makeCreditStore() },
+  );
+  const metadata = attempt.metadata as Record<string, unknown>;
+  assertEquals((metadata.request as Record<string, unknown>).messageCount, 2);
+  assertEquals((metadata.providerResponse as Record<string, unknown>).content, '{"beats":[]}');
+  assertEquals((metadata.semanticVerification as Record<string, unknown>).expectedObligationIDs, ["e:authored_beat_requirement"]);
+});
+
+Deno.test("outline provider failure preserves request diagnostics before dispatch", async () => {
+  const attempt: Record<string, unknown> = {};
+  await assertRejects(
+    () => runBillableLLM(
+      makeRequest({
+        purpose: "outline-suggestion",
+        action: "outline-semantic-verification",
+        providerAttemptMetadata: { semanticVerification: { expectedObligationIDs: ["e:authored_beat_requirement"] } },
+        captureProviderResponse: true,
+        usageContext: { ...makeRequest().usageContext, featureRunID: "00000000-0000-0000-0000-0000000000ef", logicalStageKey: "semantic-verification" },
+      }),
+      { adminClient: makeOutlineAttemptAdmin(attempt), provider: makeProvider(new Error("timeout")), creditStore: makeCreditStore() },
+    ),
+    Error,
+    "timeout",
+  );
+  const metadata = attempt.metadata as Record<string, unknown>;
+  assertEquals((metadata.request as Record<string, unknown>).messageCount, 2);
+  assertEquals((metadata.providerResponse as Record<string, unknown> | undefined)?.content, undefined);
+});
+
+Deno.test("semantic verification rejection persists validation diagnostics without full content for other calls", async () => {
+  const attempt: Record<string, unknown> = {};
+  await assertRejects(
+    () => runBillableLLM(
+      makeRequest({
+        purpose: "outline-suggestion",
+        action: "outline-semantic-verification",
+        providerAttemptMetadata: { semanticVerification: { returnedBeatIDs: ["e"], returnedObligationIDs: [] } },
+        captureProviderResponse: true,
+        onProviderSuccess: async () => { throw new Error("missing obligation e:authored_beat_requirement"); },
+        usageContext: { ...makeRequest().usageContext, featureRunID: "00000000-0000-0000-0000-0000000000f0", logicalStageKey: "semantic-verification" },
+      }),
+      { adminClient: makeOutlineAttemptAdmin(attempt), provider: makeProvider(makeLLMResponse({ content: '{"beats":[{"beatID":"e","obligations":[]}]}' })), creditStore: makeCreditStore() },
+    ),
+    Error,
+    "missing obligation",
+  );
+  const metadata = attempt.metadata as Record<string, unknown>;
+  assertEquals((metadata.providerResponse as Record<string, unknown>).content, '{"beats":[{"beatID":"e","obligations":[]}]}');
+  assertStringIncludes(String((metadata.validationError as Record<string, unknown>).message), "missing obligation");
 });
 
 Deno.test("outline settlement waits for the durable feature checkpoint", async () => {
