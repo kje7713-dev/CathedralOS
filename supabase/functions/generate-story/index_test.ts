@@ -80,6 +80,46 @@ import { RECENT_REPETITION_LOOKBACK } from "../_shared/repetition-restraint.ts";
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+Deno.test("assigned author requirements preserve intent without overriding section authority", () => {
+  const base = {
+    sourcePayloadJSON: MINIMAL_PAYLOAD,
+    generationAction: "generate" as const,
+    generationLengthMode: "short" as const,
+    container: "scene" as const,
+    pov: "thirdPersonLimited" as const,
+    outputBudget: 800,
+    projectName: "Test",
+    promptPackName: "Pack",
+    sectionTitle: "The Ice Cream Trap",
+    sectionSummary: "The raccoon corners the witness at the freezer.",
+    sectionDramaticEvent: "The raccoon chooses whether to attack the witness.",
+    sectionResultingChange: "The witness understands the danger and escapes injured.",
+    sectionTerminalState: "The raccoon remains at large and the freezer is destroyed.",
+    projectStateContext: "The raccoon is alive and has not previously killed anyone.",
+  };
+  const assigned = buildPrompt({
+    ...base,
+    recipeObligations: [
+      { id: "R1", statement: "The homicidal raccoon must intentionally kill someone." },
+      { id: "R2", statement: "The raccoon is obsessed with ice cream." },
+    ],
+    assignedRecipeRequirementIDs: ["R1", "R2"],
+  }).volatileBlocks.join("\n");
+  assertStringIncludes(assigned, "## Assigned Author Requirements");
+  assertStringIncludes(assigned, "The homicidal raccoon must intentionally kill someone.");
+  assertStringIncludes(assigned, "The raccoon is obsessed with ice cream.");
+  assertStringIncludes(assigned, "preserve and materially realize that requirement through the actions and outcomes already planned for this section");
+  assertStringIncludes(assigned, "current Section Contract remains authoritative");
+  assertStringIncludes(assigned, "Established Project State remains authoritative");
+  assertStringIncludes(assigned, "Do not make every tagged chapter independently demonstrate the entire project premise");
+  assertStringIncludes(assigned, "Do not force a requirement into unrelated sections");
+
+  const unassigned = buildPrompt({ ...base }).volatileBlocks.join("\n");
+  assertEquals(unassigned.includes("## Assigned Author Requirements"), false);
+  assertEquals(unassigned.includes("The homicidal raccoon must intentionally kill someone."), false);
+});
+
 Deno.test("buildPrompt places recent repetition restraint in volatile context only", async () => {
   const recentRawText =
     "UNIQUE_RAW_PROSE_SENTENCE: The radio hissed. She held the radio close.";

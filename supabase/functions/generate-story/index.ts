@@ -461,6 +461,10 @@ interface GenerateStoryRequest {
   plannedTargetWordsMax?: number;
   // Bounded future trajectory context used only by durable Run All.
   futureOutlineContext?: string;
+  // Immutable outline-planning obligations and the IDs assigned to the
+  // current section. Optional for legacy/direct generation callers.
+  recipeObligations?: unknown;
+  assignedRecipeRequirementIDs?: unknown;
   // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): the 5 Story Arc
   // Context fields were REMOVED from the request body. iOS and run-outline
   // no longer pass them — generate-story now resolves story arc context
@@ -728,6 +732,43 @@ function join(items: (string | undefined | null)[], sep = "; "): string {
 
 function nonEmpty(s: string | undefined | null): s is string {
   return typeof s === "string" && s.trim().length > 0;
+}
+
+type AssignedRecipeObligation = {
+  id?: unknown;
+  statement?: unknown;
+};
+
+export function renderAssignedRecipeRequirementGuidance(
+  recipeObligations: unknown,
+  assignedRecipeRequirementIDs: unknown,
+): string[] {
+  const assignedIDs = Array.isArray(assignedRecipeRequirementIDs)
+    ? assignedRecipeRequirementIDs.map(String).map((id) => id.trim()).filter(Boolean)
+    : [];
+  if (assignedIDs.length === 0 || !Array.isArray(recipeObligations)) return [];
+
+  const obligationsByID = new Map(
+    recipeObligations
+      .filter((item): item is AssignedRecipeObligation => !!item && typeof item === "object")
+      .map((item) => [String(item.id ?? "").trim(), String(item.statement ?? "").trim()]),
+  );
+  const applicable = assignedIDs
+    .map((id) => ({ id, statement: obligationsByID.get(id) ?? "" }))
+    .filter((item) => item.statement.length > 0);
+  if (applicable.length === 0) return [];
+
+  return [
+    "## Assigned Author Requirements",
+    "",
+    "These author requirements are assigned to the current Section Contract because they are materially applicable to this section:",
+    ...applicable.map((item) => `- ${item.id}: ${item.statement}`),
+    "",
+    "When the current Section Contract is assigned an author requirement, preserve and materially realize that requirement through the actions and outcomes already planned for this section. Do not soften, reinterpret, or replace it. Do not force a requirement into unrelated sections.",
+    "The current Section Contract remains authoritative for what happens in this chapter. Established Project State remains authoritative for scene-entry facts; do not contradict it or move future events into the current chapter.",
+    "Do not make every tagged chapter independently demonstrate the entire project premise, repeat a broad requirement, or add a new event solely to satisfy an obligation when the Section Contract does not support it.",
+    "",
+  ];
 }
 
 function section(header: string, lines: string[]): string[] {
@@ -1629,6 +1670,11 @@ export function buildPrompt(req: {
   storyArcTotalBeats?: number;
   storyArcWithinBeatPosition?: number;
   storyArcWithinBeatTotal?: number;
+  // Immutable outline-planning obligations and the IDs assigned to this
+  // section. Rendered only when a Section Contract is present, so direct
+  // generation without assignments retains its existing prompt shape.
+  recipeObligations?: unknown;
+  assignedRecipeRequirementIDs?: unknown;
   // Ordered recent canonical section prose used only to derive restraint.
   recentRepetitionRawText?: string[];
 }): {
@@ -2179,6 +2225,12 @@ Structural limits:
       "",
       `POV: ${povInstruction(req.pov)}`,
       "",
+    );
+    contextLines.push(
+      ...renderAssignedRecipeRequirementGuidance(
+        req.recipeObligations,
+        req.assignedRecipeRequirementIDs,
+      ),
     );
   }
 
@@ -3057,6 +3109,8 @@ async function handler(
         sectionTitle: section.title,
         sectionSummary: section.summary,
         futureOutlineContext: section.futureOutlineContext,
+        recipeObligations: body.recipeObligations,
+        assignedRecipeRequirementIDs: body.assignedRecipeRequirementIDs,
       });
       const estimatedInputTokens = estimateTokensFromText(
         stableBlocks.join("\n"),
@@ -3133,6 +3187,8 @@ async function handler(
       plannedTargetWordsMin: body.plannedTargetWordsMin,
       plannedTargetWordsMax: body.plannedTargetWordsMax,
       futureOutlineContext: body.futureOutlineContext,
+      recipeObligations: body.recipeObligations,
+      assignedRecipeRequirementIDs: body.assignedRecipeRequirementIDs,
     });
     // PR-372: concat blocks for token estimation. Hash not computed in the
     // estimate path (no billable call → no telemetry row).
@@ -3345,6 +3401,8 @@ async function handler(
     plannedTargetWordsMin: body.plannedTargetWordsMin,
     plannedTargetWordsMax: body.plannedTargetWordsMax,
     futureOutlineContext: body.futureOutlineContext,
+    recipeObligations: body.recipeObligations,
+    assignedRecipeRequirementIDs: body.assignedRecipeRequirementIDs,
     // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): Story Arc Context
     // resolved SERVER-SIDE from outlineSectionCtx (fetched via
     // fetchOutlineSectionContext at the top of the handler). Caller no longer
