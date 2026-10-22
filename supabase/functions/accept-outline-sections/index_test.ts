@@ -166,9 +166,9 @@ Deno.test("length contract persists novel target and container-derived section r
   ]);
   assertEquals(contract.outline, {
     planning_format: "novel",
-    target_word_count: 80000,
-    target_word_count_min: 70000,
-    target_word_count_max: 90000,
+    target_word_count: 115000,
+    target_word_count_min: 115000,
+    target_word_count_max: 125000,
     projected_word_count: 9078,
   });
   assertEquals(contract.sections, [

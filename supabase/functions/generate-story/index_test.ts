@@ -80,6 +80,7 @@ import { RECENT_REPETITION_LOOKBACK } from "../_shared/repetition-restraint.ts";
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
 Deno.test("buildPrompt places recent repetition restraint in volatile context only", async () => {
   const recentRawText =
     "UNIQUE_RAW_PROSE_SENTENCE: The radio hissed. She held the radio close.";

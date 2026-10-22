@@ -31,9 +31,9 @@ const ALLOWED_CONTAINERS = new Set([
 const MAX_ACCEPTED_SECTIONS = 200;
 const NOVEL_LENGTH_CONTRACT = {
   planning_format: "novel",
-  target_word_count: 80000,
-  target_word_count_min: 70000,
-  target_word_count_max: 90000,
+  target_word_count: 115000,
+  target_word_count_min: 115000,
+  target_word_count_max: 125000,
 } as const;
 const CONTAINER_WORD_RANGES: Record<string, [number, number]> = {
   beat: [58, 192],

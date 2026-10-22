@@ -430,7 +430,7 @@ Deno.test("allocator floors are scaled to the novel word budget", () => {
   const total = Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0);
   assertEquals(total <= maximumBudgetedNewSections(req), true);
   assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
-  assertEquals(maximumBudgetedNewSections(req), 28);
+  assertEquals(maximumBudgetedNewSections(req), 29);
 });
 
 Deno.test("budget normalization preserves one-section coverage per uncovered beat", () => {
@@ -1367,7 +1367,7 @@ Deno.test("outline section contract assigns canonical plot decisions to the plan
 Deno.test("novel planning exposes container semantics and projected-size expansion", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
-  assertEquals(allocationPrompt.includes("plan toward 90,000 words"), true);
+  assertEquals(allocationPrompt.includes("plan toward 115,000 words"), true);
   assertEquals(allocationPrompt.includes("minimum number of NEW dramatic sections still required"), true);
   assertEquals(allocationPrompt.includes("floor, not a target or maximum"), true);
   assertEquals(source.includes("targetSections"), false);
@@ -1385,7 +1385,11 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
     ["beat-2", { minSections: 1, rationale: "escalation" }],
   ])).system;
   assertEquals(outlinePrompt.includes("Novel length policy"), true);
-  assertEquals(outlinePrompt.includes("120,000-word hard cap"), true);
+  assertEquals(outlinePrompt.includes("Every defining behavior, event, or conflict explicitly specified by the author must have a concrete realization"), true);
+  assertEquals(outlinePrompt.includes("dramaticEvent, resultingChange, or terminalState"), true);
+  assertEquals(outlinePrompt.includes("Mentioning it in a summary, labeling a character with the trait, or assigning a recipe requirement ID does not constitute realization"), true);
+  assertEquals(outlinePrompt.includes("Preserve creative freedom over how and when the requirement is realized"), true);
+  assertEquals(outlinePrompt.includes("125,000-word hard cap"), true);
   assertEquals(outlinePrompt.includes("Fit the complete story package into the budget"), true);
   assertEquals(outlinePrompt.includes("do not drop story material"), true);
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
@@ -1402,7 +1406,7 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   ]), [2300, 4800]);
   assertEquals(projectedExpectedTokens([{ container: "scene" }]), 1300);
   assertEquals(evaluateNovelScale([{ container: "scene" }]).meetsMinimum, false);
-  assertEquals(evaluateNovelScale([{ container: "scene" }]).minimumWords, 80000);
+  assertEquals(evaluateNovelScale([{ container: "scene" }]).minimumWords, 115000);
   assertEquals(projectedExpectedTokens([{ container: "sceneSequence" }]), 5000);
   assertEquals(projectedExpectedTokens([{ container: "scene" }, { container: "scene" }]), 2600);
   assertEquals(needsNovelExpansion([{ container: "sceneSequence" }]), true);
@@ -1491,9 +1495,9 @@ Deno.test("optional repair failure keeps the original structurally valid outline
 });
 
 Deno.test("beat-local expansion visits canonical beats and isolates additions", async () => {
-  const initial = sceneOutline(76).map((section, index) => ({
+  const initial = sceneOutline(111).map((section, index) => ({
     ...section,
-    storyArcBeatID: index < 39 ? "beat-1" : "beat-2",
+    storyArcBeatID: index < 56 ? "beat-1" : "beat-2",
   }));
   const calls: Array<{ beatID: string; currentSections: number }> = [];
   const result = await progressivelyExpandOutline(
@@ -1516,12 +1520,12 @@ Deno.test("beat-local expansion visits canonical beats and isolates additions", 
     },
   );
   assertEquals(calls, [
-    { beatID: "beat-1", currentSections: 39 },
-    { beatID: "beat-2", currentSections: 37 },
+    { beatID: "beat-1", currentSections: 56 },
+    { beatID: "beat-2", currentSections: 55 },
   ]);
-  assertEquals(result.suggestions.length, 80);
-  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-1").length, 41);
-  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-2").length, 39);
+  assertEquals(result.suggestions.length, 115);
+  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-1").length, 58);
+  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-2").length, 57);
 });
 
 Deno.test("beat-local expansion rejects additions assigned to another beat", async () => {
@@ -1546,7 +1550,7 @@ Deno.test("beat-local expansion prompt carries the target beat contract", () => 
     round: 1,
     projectedTokens: 2600,
     projectedWords: 2000,
-    desiredWords: [90000, 120000],
+    desiredWords: [115000, 125000],
     remainingDeficitTokens: 88400,
     beat: {
       beatID: "beat-1",
@@ -1563,17 +1567,17 @@ Deno.test("beat-local expansion prompt carries the target beat contract", () => 
 });
 
 Deno.test("novel scale evaluates existing accepted sections together with the generated delta", () => {
-  const existing = sceneOutline(60);
+  const existing = sceneOutline(94);
   const generated = sceneOutline(21);
   const deltaOnly = evaluateNovelScale(generated);
   const complete = evaluateNovelScale(generated, existing);
   assertEquals(deltaOnly.meetsMinimum, false);
   assertEquals(complete.meetsMinimum, true);
-  assertEquals(complete.projectedWords >= 80000, true);
+  assertEquals(complete.projectedWords >= 115000, true);
 });
 
 Deno.test("existing accepted sections can prevent unnecessary expansion", async () => {
-  const existing = sceneOutline(80);
+  const existing = sceneOutline(115);
   let calls = 0;
   const result = await progressivelyExpandOutline(
     [],
@@ -1672,7 +1676,7 @@ function sceneOutline(count: number): any[] {
 
 Deno.test("progressive expansion runs round 2 after a short round 1 and succeeds when scale is reached", async () => {
   const calls: any[] = [];
-  const initial = sceneOutline(60);
+  const initial = sceneOutline(65);
   const result = await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async (current, context) => {
     calls.push({ current: current.length, context });
     return context.round === 1
@@ -1680,18 +1684,18 @@ Deno.test("progressive expansion runs round 2 after a short round 1 and succeeds
       : Array.from({ length: 10 }, (_, i) => expansionSection(`Round 2 ${i + 1}`, "chapter"));
   });
   assertEquals(calls.map((call) => call.context.round), [1, 2]);
-  assertEquals(calls[0].current, 60);
-  assertEquals(calls[1].current, 70);
+  assertEquals(calls[0].current, 65);
+  assertEquals(calls[1].current, 75);
   assertEquals(result.diagnostics.length, 2);
-  assertEquals(result.diagnostics[0].sectionCountBefore, 60);
-  assertEquals(result.diagnostics[0].sectionCountAfter, 70);
-  assertEquals(result.diagnostics[1].sectionCountBefore, 70);
-  assertEquals(result.diagnostics[1].sectionCountAfter, 80);
+  assertEquals(result.diagnostics[0].sectionCountBefore, 65);
+  assertEquals(result.diagnostics[0].sectionCountAfter, 75);
+  assertEquals(result.diagnostics[1].sectionCountBefore, 75);
+  assertEquals(result.diagnostics[1].sectionCountAfter, 85);
   assertEquals(result.warnings, []);
 });
 
 Deno.test("required allocation coverage expands even when novel scale is already sufficient", async () => {
-  const initial = sceneOutline(80);
+  const initial = sceneOutline(115);
   let calls = 0;
   const result = await progressivelyExpandOutline(
     initial as any,
@@ -1701,15 +1705,15 @@ Deno.test("required allocation coverage expands even when novel scale is already
       return [expansionSection("Coverage repair", "scene")];
     },
     undefined,
-    { coverageGate: (current) => current.length < 81 },
+    { coverageGate: (current) => current.length < 116 },
   );
   assertEquals(calls, 1);
-  assertEquals(result.suggestions.length, 81);
+  assertEquals(result.suggestions.length, 116);
 });
 
 Deno.test("optional enrichment expansion is global when no allocation deficit identifies a beat", async () => {
   const initial = [
-    ...sceneOutline(79),
+    ...sceneOutline(114),
     { ...sceneOutline(1)[0], storyArcBeatID: "beat-2" },
   ];
   const calls: Array<string | undefined> = [];
@@ -1743,7 +1747,7 @@ Deno.test("Test3-shaped undersized outline fails closed after bounded expansion"
   }
   assertEquals(calls, MAX_EXPANSION_ROUNDS);
   assertEquals((failure as NovelScalePlanningError).code, "failed_under_target");
-  assertEquals((failure as NovelScalePlanningError).message.includes("80,000-word preferred planning floor"), true);
+  assertEquals((failure as NovelScalePlanningError).message.includes("115,000-word preferred planning floor"), true);
 });
 
 Deno.test("stale expansion anchors append within their beat while exact anchors remain stable", () => {
@@ -1770,7 +1774,7 @@ Deno.test("stale expansion anchors append within their beat while exact anchors 
 });
 
 Deno.test("hard-valid novel preserves the outline when optional expansion validation fails", async () => {
-  const initial = sceneOutline(88);
+  const initial = sceneOutline(115);
   let providerCalls = 0;
   const result = await progressivelyExpandOutline(
     initial as any,
@@ -1789,7 +1793,7 @@ Deno.test("hard-valid novel preserves the outline when optional expansion valida
 });
 
 Deno.test("optional expansion persists rejected provider attempt diagnostics", async () => {
-  const initial = sceneOutline(88);
+  const initial = sceneOutline(115);
   let diagnostic: any = null;
   const attempt = {
     round: 1,
@@ -1802,7 +1806,7 @@ Deno.test("optional expansion persists rejected provider attempt diagnostics", a
     candidateContainers: ["chapter", "chapter"],
     projectedTokensAfter: 170_000,
     status: "rejected" as const,
-    error: "projected novel scale exceeded 120,000-word hard cap",
+    error: "projected novel scale exceeded 125,000-word hard cap",
   };
   const result = await progressivelyExpandOutline(
     initial as any,
@@ -1819,15 +1823,15 @@ Deno.test("budget fitting records partial acceptance and discarded candidates", 
   const current = Array.from({ length: 20 }, (_, index) => expansionSection(`Current ${index + 1}`, "chapter"));
   const additions = Array.from({ length: 10 }, (_, index) => expansionSection(`Candidate ${index + 1}`, "chapter"));
   const fitted = fitExpansionAdditionsToBudget(current as any, additions as any, [], { round: 1 });
-  assertEquals(fitted.additions.length, 8);
+  assertEquals(fitted.additions.length, 9);
   assertEquals(fitted.attempt.returnedCount, 10);
-  assertEquals(fitted.attempt.acceptedCount, 8);
-  assertEquals(fitted.attempt.rejectedCount, 2);
+  assertEquals(fitted.attempt.acceptedCount, 9);
+  assertEquals(fitted.attempt.rejectedCount, 1);
   assertEquals(fitted.attempt.budgetTruncated, true);
 });
 
 Deno.test("later-beat expansion failure preserves earlier accepted additions", async () => {
-  const initial = Array.from({ length: 19 }, (_, index) => expansionSection(`Current ${index + 1}`, "chapter", "beat-1"));
+  const initial = Array.from({ length: 28 }, (_, index) => expansionSection(`Current ${index + 1}`, "chapter", "beat-1"));
   let checkpoint: any[] | null = null;
   const result = await progressivelyExpandOutline(
     initial as any,
@@ -1837,7 +1841,7 @@ Deno.test("later-beat expansion failure preserves earlier accepted additions", a
       throw new ExpansionValidationError("later beat rejected", {
         round: context.round,
         beatID: beat?.beatID,
-        sectionCountBefore: 20,
+        sectionCountBefore: 29,
         projectedTokensBefore: 90_000,
         returnedCount: 3,
         acceptedCount: 0,
@@ -1852,10 +1856,10 @@ Deno.test("later-beat expansion failure preserves earlier accepted additions", a
     async (_diagnostic, _all, current) => { checkpoint = current; },
     { beats: [{ id: "beat-1" }, { id: "beat-2" }], qualityGate: () => true },
   );
-  assertEquals(result.suggestions.length, 20);
+  assertEquals(result.suggestions.length, 29);
   assertEquals(result.suggestions.at(-1)?.title, "Earlier accepted");
-  assertEquals((checkpoint as any)?.[19]?.title, "Earlier accepted");
-  assertEquals(result.diagnostics.at(-1)?.sectionCountAfter, 20);
+  assertEquals((checkpoint as any)?.[28]?.title, "Earlier accepted");
+  assertEquals(result.diagnostics.at(-1)?.sectionCountAfter, 29);
   assertEquals(result.diagnostics.at(-1)?.attempts?.at(-1)?.rejectedCount, 3);
 });
 
@@ -1968,16 +1972,16 @@ Deno.test("insufficient-credit expansion failures are resumable from their durab
 });
 
 Deno.test("retry resumes from the persisted expansion checkpoint without repeating first-pass work", async () => {
-  const checkpointSuggestions = sceneOutline(37);
+  const checkpointSuggestions = sceneOutline(39);
   const completedRound = {
     round: 1,
     sectionCountBefore: 27,
     projectedTokensBefore: 35100,
     projectedWordsBefore: 27000,
     additionsReturned: 10,
-    sectionCountAfter: 37,
+    sectionCountAfter: 39,
     projectedTokensAfter: 48100,
-    projectedWordsAfter: 37000,
+    projectedWordsAfter: 39000,
     remainingEstimatedDeficitTokens: 42900,
     status: "completed",
   } as const;
@@ -2007,10 +2011,10 @@ Deno.test("retry resumes from the persisted expansion checkpoint without repeati
     { startRound: resumed!.startRound, priorDiagnostics: resumed!.priorDiagnostics },
   );
   assertEquals(calls, [2]);
-  assertEquals(result.suggestions.length, 55);
+  assertEquals(result.suggestions.length, 57);
 });
 
-Deno.test("a ~34K projected novel cannot terminate as completed below the 70K minimum", async () => {
+Deno.test("a ~34K projected novel cannot terminate as completed below the 115K minimum", async () => {
   const underweight = sceneOutline(34) as any;
   assertEquals(Math.round(evaluateNovelScale(underweight).projectedWords), 34000);
   await assertRejects(
@@ -2077,11 +2081,11 @@ Deno.test("existing sections survive progressive expansion and global cap fails 
     failure = error;
   }
   assertEquals((failure as NovelScalePlanningError).code, "failed_under_target");
-  assertEquals((failure as NovelScalePlanningError).message.includes("80,000-word preferred planning floor"), true);
+  assertEquals((failure as NovelScalePlanningError).message.includes("115,000-word preferred planning floor"), true);
 });
 
 Deno.test("expansion prompt includes round projection, broad range, and remaining deficit", () => {
-  const prompt = buildExpansionPrompt(sparseRequest as any, sceneOutline(27) as any, { round: 2, projectedTokens: 35100, projectedWords: 27000, desiredWords: [90000, 120000], remainingDeficitTokens: 22700 });
+  const prompt = buildExpansionPrompt(sparseRequest as any, sceneOutline(27) as any, { round: 2, projectedTokens: 35100, projectedWords: 27000, desiredWords: [115000, 125000], remainingDeficitTokens: 22700 });
   assertEquals(prompt.system.includes("progressive expansion round 2 of 3"), true);
   assertEquals(prompt.system.includes("remaining estimated deficit"), true);
   assertEquals(prompt.user.includes("remainingDeficitTokens"), true);
@@ -3485,7 +3489,7 @@ Deno.test("optional expansion ignores provider obligation evidence metadata", ()
 
 Deno.test("PR3 expansion prompt carries the complete target semantic contract", () => {
   const template = { ...sparseRequest, arcTemplate: { name: "Freytag's Pyramid", id: "f", beats: freytagFixture.beats } } as any;
-  const prompt = buildExpansionPrompt(template, [], { round: 1, projectedTokens: 1, projectedWords: 1, desiredWords: [90000, 120000], remainingDeficitTokens: 100, beat: { beatID: "fall", beatLabel: "Falling Action", currentSections: [], projectedTokens: 0, projectedWords: 0 } } as any);
+  const prompt = buildExpansionPrompt(template, [], { round: 1, projectedTokens: 1, projectedWords: 1, desiredWords: [115000, 125000], remainingDeficitTokens: 100, beat: { beatID: "fall", beatLabel: "Falling Action", currentSections: [], projectedTokens: 0, projectedWords: 0 } } as any);
   assertEquals(prompt.system.includes("allowedFunctions="), true);
   assertEquals(prompt.system.includes("forbidsNewPrimaryConflict=true"), true);
   assertEquals(prompt.system.includes("phaseDirection=resolve"), true);
@@ -4421,7 +4425,7 @@ Deno.test("expansion prompt stays bounded as global outline grows", () => {
   const target = { beatID: "beat-1", beatLabel: "Opening", beatDescription: "Begin", projectedWords: 1200, currentSections: [{ id: "target", title: "Target", summary: "Current target", storyArcBeatID: "beat-1", container: "scene" }] };
   const sizes = [10, 50, 100].map((count) => {
     const current = Array.from({ length: count }, (_, i) => ({ id: `s-${i}`, title: `Section ${i}`, summary: `Summary ${i}`, storyArcBeatID: "beat-1", container: "scene" }));
-    const prompt = buildExpansionPrompt(sparseRequest as any, current as any, { round: 1, projectedTokens: 1200, projectedWords: 300, desiredWords: [90000, 120000], remainingDeficitTokens: 1000, beat: target as any }, []);
+    const prompt = buildExpansionPrompt(sparseRequest as any, current as any, { round: 1, projectedTokens: 1200, projectedWords: 300, desiredWords: [115000, 125000], remainingDeficitTokens: 1000, beat: target as any }, []);
     return JSON.stringify(prompt).length;
   });
   assertEquals(sizes[2] <= sizes[0] * 1.5, true);
@@ -4780,7 +4784,7 @@ Deno.test("unused enrichment does not expand a novel with scale and beat coverag
     ...fullBody,
     requestedFormat: "novel",
     storyMaterialEnrichment: novelMaterial,
-    existingSections: Array.from({ length: 20 }, (_, index) => ({
+    existingSections: Array.from({ length: 27 }, (_, index) => ({
       title: `Existing chapter ${index + 1}`,
       summary: "Existing chapter material.",
       container: "chapter",
@@ -4825,7 +4829,7 @@ Deno.test("weak resolution is repaired before optional expansion", async () => {
     ...fullBody,
     requestedFormat: "novel",
     storyMaterialEnrichment: novelMaterial,
-    existingSections: Array.from({ length: 20 }, (_, index) => ({ title: `Existing chapter ${index + 1}`, summary: "Existing chapter material.", container: "chapter" })),
+    existingSections: Array.from({ length: 27 }, (_, index) => ({ title: `Existing chapter ${index + 1}`, summary: "Existing chapter material.", container: "chapter" })),
     arcTemplate: {
       ...fullBody.arcTemplate,
       name: "Save the Cat!",
@@ -5380,9 +5384,9 @@ Deno.test("provider billing unavailable during resumed expansion suppresses raw 
     projectedTokensBefore: 35100,
     projectedWordsBefore: 27000,
     additionsReturned: 10,
-    sectionCountAfter: 37,
+    sectionCountAfter: 39,
     projectedTokensAfter: 48100,
-    projectedWordsAfter: 37000,
+    projectedWordsAfter: 39000,
     remainingEstimatedDeficitTokens: 42900,
     status: "completed",
   };
@@ -6232,7 +6236,7 @@ Deno.test("whole-arc intimacy evidence is accepted on eligible beat sections", (
   assertEquals(result.suggestions[0].arcObligationEvidence?.selected_intimacy_level?.length, 1);
 });
 
-Deno.test("novel scale uses the preferred 80,000-word floor and rejects tiny new leaves", () => {
+Deno.test("novel scale uses the preferred 115,000-word floor and rejects tiny new leaves", () => {
   assertEquals(NOVEL_LEAF_CONTAINERS, ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"]);
   assertThrows(() => validateNovelLeafContainers([{ container: "moment" }]));
   assertThrows(() => validateNovelLeafContainers([{ container: "vignette" }]));

@@ -650,9 +650,9 @@ const CONTAINER_EXPECTED_RANGES: Record<string, [number, number]> = {
   setPiece: [2000, 5000], sceneSequence: [3000, 7000], shortStory: [2500, 8000],
   chapter: [3000, 8000], episode: [5000, 15000],
 };
-export const NOVEL_TARGET_WORDS: [number, number] = [90000, 120000];
-export const NOVEL_PREFERRED_MIN_WORDS = 80000;
-export const NOVEL_MAX_WORDS = 120000;
+export const NOVEL_TARGET_WORDS: [number, number] = [115000, 125000];
+export const NOVEL_PREFERRED_MIN_WORDS = 115000;
+export const NOVEL_MAX_WORDS = 125000;
 const TOKENS_PER_WORD = 1.3;
 const NOVEL_MIN_PROJECTED_TOKENS = NOVEL_PREFERRED_MIN_WORDS * TOKENS_PER_WORD;
 const NOVEL_MAX_PROJECTED_TOKENS = NOVEL_MAX_WORDS * TOKENS_PER_WORD;
@@ -2784,7 +2784,7 @@ export function buildPrompt(
 Every section must commit to one canonical event. Never use unresolved alternatives such as "X or Y", "someone", "a friend", "somewhere", or multiple possible versions of the event. Choose the specific person, place, object, and action.
 
 ## Novel length policy
-For a novel, plan toward 90,000 words, with an 80,000-word minimum and a 120,000-word hard cap. The cap applies to the complete outline projection, not only to later expansion. Allocate the available word budget across the Story Arc beats before choosing sections. Cover every authored obligation, essential character arc, major conflict, reversal, consequence, and ending commitment within that budget. Combine related events into fuller sections; do not create one section per enrichment item. Fit the complete story package into the budget. When material competes for space, combine related events into fuller sections, deepen shared sections, and adjust the level of detail; do not drop story material merely to meet the cap. Never treat the length policy as permission to omit a required story element. Use the chapter container for substantial units and the server's expected container ranges as planning estimates; keep the complete projected outline at or below 120,000 words.
+For a novel, plan toward 115,000 words, with a 115,000-word minimum and a 125,000-word hard cap. The cap applies to the complete outline projection, not only to later expansion. Allocate the available word budget across the Story Arc beats before choosing sections. Cover every authored obligation, essential character arc, major conflict, reversal, consequence, and ending commitment within that budget. Combine related events into fuller sections; do not create one section per enrichment item. Fit the complete story package into the budget. When material competes for space, combine related events into fuller sections, deepen shared sections, and adjust the level of detail; do not drop story material merely to meet the cap. Never treat the length policy as permission to omit a required story element. Use the chapter container for substantial units and the server's expected container ranges as planning estimates; keep the complete projected outline at or below 125,000 words.
 
 Selected motifs are supporting material, not a quota. Use a motif in a section only when the section contract, causality, physical continuity, or a meaningful transformation requires it; do not repeat a motif merely to prove that the outline remembers it. Prefer concrete scene-specific images when no selected motif is needed.
 
@@ -2797,7 +2797,7 @@ Evaluate the WHOLE proposed novel — including sections in other Story Arc beat
 
 Avoid redundant patterns such as: the group pushes the same threat back twice as two separate victories; the same breach or conflict is effectively closed twice; a character resolves the same belonging or identity question twice; the same relationship realization receives another "final" resolution; or a later climax restages the earlier climax with greater spectacle but substantially the same result.
 
-Do not solve redundant dramatic work by adding sections. Allocation, minimum section coverage, and the novel length policy remain authoritative. When multiple planned sections would otherwise perform similar dramatic work, combine or redesign them so the complete outline remains within the 120,000-word cap while still fulfilling its Story Arc role and recipe obligations. Preserve required story content; remove padding and optional repetition.
+Do not solve redundant dramatic work by adding sections. Allocation, minimum section coverage, and the novel length policy remain authoritative. When multiple planned sections would otherwise perform similar dramatic work, combine or redesign them so the complete outline remains within the 125,000-word cap while still fulfilling its Story Arc role and recipe obligations. Preserve required story content; remove padding and optional repetition.
 
 A later section may revisit the same characters, antagonist, conflict, location, or thematic question, but must advance it through a genuinely new development: a new consequence; an increased or different cost; a reversal; changed knowledge; changed power; transferred agency; a harder decision; resolution of a different thread; a changed relationship; a transformed meaning of the earlier event; or a materially different tactical state. Each section should earn its place by changing something the previous sections have not already changed.
 
@@ -2820,6 +2820,7 @@ The expected ranges are literary targets; runtime/provider headroom is not a des
 
 ## Recipe realization priority
 The recipe is the governing creative brief, not metadata to distribute as section tags. Required recipe obligations outrank generic outline habits, filler, and even the desire for evenly balanced Story Arc coverage. Materially dramatize the premise, selected characters, relationships, story spark, themes, setting, tone/audience guidance, and ending intent wherever the recipe supplies them. A section may carry a recipe ID only when its Section Contract actually advances that requirement; never tag a section merely to make coverage counts pass. Before finalizing, audit the whole outline against every required obligation and redesign weak or generic sections until the recipe visibly drives the plot, escalation, relationship movement, and payoff.
+Every defining behavior, event, or conflict explicitly specified by the author must have a concrete realization somewhere in the outline. At least one relevant Section Contract must require that realization through its dramaticEvent, resultingChange, or terminalState. Mentioning it in a summary, labeling a character with the trait, or assigning a recipe requirement ID does not constitute realization. Preserve creative freedom over how and when the requirement is realized.
 
 ## Recipe obligations
 The JSON planning context contains the authoritative obligations exactly once.
@@ -2833,7 +2834,7 @@ Use the deterministic, provenance-preserving planning view below. Items marked s
 
 ## Use the minimum-only allocation
 
-For each beat, generate at least the stated minimum number of distinct sections while respecting the novel length policy. The minimum is a coverage floor, not permission to exceed the 120,000-word cap: add sections only when the required story cannot be covered by combining material. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.
+For each beat, generate at least the stated minimum number of distinct sections while respecting the novel length policy. The minimum is a coverage floor, not permission to exceed the 125,000-word cap: add sections only when the required story cannot be covered by combining material. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.
 
 ## Character arc and plot integration
 Whenever practical, relationship and character-arc turns should cause or complicate plot events rather than occurring as isolated character-development scenes.
@@ -2929,7 +2930,7 @@ export class AllocationBudgetConstraintError extends Error {
 // Novel scale is evaluated using the midpoint of a container's literary
 // range, not its floor. Budgeting against only the chapter minimum lets a
 // 52-section allocation pass preflight while the same sections project well
-// above the 120,000-word hard cap.
+// above the 125,000-word hard cap.
 const PROJECTED_CHAPTER_TOKENS = projectedExpectedTokens([{ container: "chapter" }]);
 
 export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): number {
@@ -3171,7 +3172,7 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan toward 90,000 words, with an 80,000-word minimum and a 120,000-word hard cap when sections generate near their expected literary ranges; a fresh novel must reach the approximately 80,000-word preferred planning floor before completion. Treat 120,000 words as an absolute ceiling, not a normal target. This is a budget constraint, not permission to add sections indefinitely. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes. The server budget for NEW sections in this request is at most ${maxBudgetedSections}; the sum of all minSections values must fit inside that budget. Combine related events within a section instead of creating an allocation floor that would exceed it.
+This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan toward 115,000 words, with a 115,000-word minimum and a 125,000-word hard cap when sections generate near their expected literary ranges; a fresh novel must reach the approximately 115,000-word preferred planning floor before completion. Treat 125,000 words as an absolute ceiling, not a normal target. This is a budget constraint, not permission to add sections indefinitely. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes. The server budget for NEW sections in this request is at most ${maxBudgetedSections}; the sum of all minSections values must fit inside that budget. Combine related events within a section instead of creating an allocation floor that would exceed it.
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
