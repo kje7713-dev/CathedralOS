@@ -3247,6 +3247,105 @@ Deno.test("PR3 Final Image aftermath-only content is repaired into an actual res
   assertEquals(repaired.suggestions[0].terminalState?.includes("question is answered"), true);
 });
 
+Deno.test("targeted Story Arc repair skips healthy resolutions and preserves failed repairs", async () => {
+  const template = {
+    name: "Save the Cat!",
+    beats: [{ id: "final", role: "final_image", label: "Final Image" }],
+  };
+  const healthy: any = semanticSection(
+    "final",
+    "The Settled Question",
+    "The survivors resolve the central conflict and choose the new normal.",
+    "resolution",
+  );
+  healthy.resultingChange = "The central conflict is resolved and its cost is accepted.";
+  healthy.terminalState = "The new normal holds without the former conflict continuing.";
+  const healthyActions: string[] = [];
+  const healthyResult = await repairRequiredStoryArcFunctions(
+    [healthy],
+    template as any,
+    async (...args: any[]) => {
+      healthyActions.push(args[4]);
+      throw new Error("healthy outline should not call repair");
+    },
+  );
+  assertEquals(healthyActions, []);
+  assertEquals(healthyResult.repaired, []);
+  assertEquals(healthyResult.unresolved, []);
+
+  const aftermathOnly: any = semanticSection(
+    "final",
+    "The Aftermath",
+    "The survivors mourn and remember what was lost.",
+    "resolution",
+  );
+  aftermathOnly.resultingChange = "The aftermath continues.";
+  aftermathOnly.terminalState = "The aftermath remains unresolved.";
+  const failed = await repairRequiredStoryArcFunctions(
+    [aftermathOnly],
+    template as any,
+    async (_system: string, _user: string, _max: number, _format: unknown, _action: string, validate?: (content: string) => unknown) => {
+      const content = JSON.stringify({ section: aftermathOnly });
+      validate?.(content);
+      return { content, creditCostCharged: 1, remainingCredits: 9 };
+    },
+  );
+  assertEquals(failed.repaired, []);
+  assertEquals(failed.unresolved, ["The Aftermath"]);
+  assertEquals(failed.suggestions, [aftermathOnly]);
+});
+
+Deno.test("resolution validation ignores generic acceptance and uses state-change fields", () => {
+  const template = {
+    name: "Save the Cat!",
+    beats: [{ id: "final", role: "final_image", label: "Final Image" }],
+  };
+  const unresolved: any = {
+    ...semanticSection("final", "Acceptance", "Mara accepts that the threat remains.", "resolution"),
+    resultingChange: "She accepts the unresolved situation.",
+    terminalState: "The threat continues beyond the ending.",
+  };
+  const issues = validateRequiredStoryArcFunctions([unresolved], template as any);
+  assertEquals(issues.some((issue) => issue.includes("does not materially resolve")), true);
+});
+
+Deno.test("Story Arc repair prompt includes premise and preceding climax context", async () => {
+  const template = {
+    name: "Save the Cat!",
+    beats: [
+      { id: "climax", role: "climax", label: "Climax" },
+      { id: "final", role: "final_image", label: "Final Image" },
+    ],
+  };
+  const climax: any = semanticSection("climax", "The Raccoon Confrontation", "The raccoon confronts the poachers and breaks their trap network.", "climax");
+  const weak: any = semanticSection("final", "The Cleanup", "The survivors clean up after the confrontation.", "resolution");
+  let capturedContext: any;
+  const repaired = await repairRequiredStoryArcFunctions(
+    [climax, weak],
+    template as any,
+    async (_system, user, _max, _format, _action, validate) => {
+      const content = JSON.stringify({
+        section: {
+          ...weak,
+          summary: "The raccoon is safe and the poachers' threat is over.",
+          dramaticEvent: "The survivors resolve the central conflict by stopping the poachers and freeing the raccoon.",
+          resultingChange: "The central conflict is resolved and the raccoon can return home.",
+          terminalState: "The raccoon is safe; the former threat no longer continues.",
+        },
+      });
+      capturedContext = JSON.parse(user).context;
+      validate?.(content);
+      return { content, creditCostCharged: 1, remainingCredits: 9 };
+    },
+    [],
+    { premise: "A raccoon protects its den from a widening poaching operation." },
+  );
+  assertEquals(capturedContext.premise, "A raccoon protects its den from a widening poaching operation.");
+  assertEquals(capturedContext.precedingClimax.title, "The Raccoon Confrontation");
+  assertEquals(repaired.unresolved, []);
+  assertEquals(repaired.repaired, ["The Cleanup: resolution"]);
+});
+
 Deno.test("semantic repair preserves provider output exhaustion", async () => {
   const template = {
     name: "Save the Cat!",
@@ -4510,7 +4609,7 @@ function fakeWorkerBilling(requestedActions: string[], providerCalls = requested
       return { featureResult: JSON.stringify(semanticVerifierFixture(request)), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
     }
     if (request.action === "outline-suggestions") {
-      const section = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`), entryState: "The prior state holds.", dramaticEvent: `${title} happens.`, resultingChange: `${title} changes the pressure.`, terminalState: `${title} hands forward a new pressure.` });
+      const section = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`), entryState: "The prior state holds.", dramaticEvent: beat === "beat-1" ? `${title} happens.` : `${title} resolves the central conflict.`, resultingChange: beat === "beat-1" ? `${title} changes the pressure.` : `${title} settles the central conflict.`, terminalState: beat === "beat-1" ? `${title} hands forward a new pressure.` : `${title} establishes the new normal.` });
       return { featureResult: JSON.stringify({ beats: { "beat-1": [section("beat-1", "Opening route")], "beat-2": [section("beat-2", "Cost of the route")] } }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
     }
     if (request.action === "outline-plan") {
@@ -4658,6 +4757,102 @@ Deno.test("optional enrichment expansion checkpoints a global round before the n
   assertEquals(db.row.status, "pending");
   assertEquals(db.row.planning_state.phase, "expansion");
   assertEquals(db.row.attempt_count, 0);
+});
+
+Deno.test("unused enrichment does not expand a novel with scale and beat coverage", async () => {
+  const fullBody = await executableWorkerBody();
+  const novelMaterial = attachRecipeProvenance({
+    ...fullBody.storyMaterialEnrichment,
+    format: "novel",
+    locations: [
+      { id: "unused-location-1", source: "planner", sourceReference: null, label: "Shelter", description: "A defensible shelter." },
+      { id: "unused-location-2", source: "planner", sourceReference: null, label: "Crossing", description: "A dangerous crossing." },
+    ],
+    escalationLadder: [
+      { id: "unused-escalation-1", source: "planner", sourceReference: null, label: "First pressure", description: "The first pressure rises." },
+      { id: "unused-escalation-2", source: "planner", sourceReference: null, label: "Second pressure", description: "The second pressure rises." },
+      { id: "unused-escalation-3", source: "planner", sourceReference: null, label: "Unused escalation", description: "An unused escalation." },
+    ],
+    reversals: [{ id: "unused-reversal", source: "planner", sourceReference: null, label: "Reversal", description: "The plan turns." }],
+    consequences: [{ id: "unused-consequence", source: "planner", sourceReference: null, label: "Consequence", description: "The choice costs something." }],
+  } as any, await recipeProvenance(fullBody.recipe as any));
+  const body = {
+    ...fullBody,
+    requestedFormat: "novel",
+    storyMaterialEnrichment: novelMaterial,
+    existingSections: Array.from({ length: 20 }, (_, index) => ({
+      title: `Existing chapter ${index + 1}`,
+      summary: "Existing chapter material.",
+      container: "chapter",
+    })),
+  } as any;
+  const db = new ExecutableRunDb({ ...checkpointedWorkerRow(body), story_material: novelMaterial });
+  const actions: string[] = [];
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: fakeWorkerBilling(actions) as any,
+    scheduleContinuation: async () => {},
+  });
+  await run();
+  await run();
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.diagnostics.unusedStoryMaterialItems > 0, true);
+  assertEquals(db.row.diagnostics.expansionRounds ?? [], []);
+});
+
+Deno.test("weak resolution is repaired before optional expansion", async () => {
+  const fullBody = await executableWorkerBody();
+  const novelMaterial = attachRecipeProvenance({
+    ...fullBody.storyMaterialEnrichment,
+    format: "novel",
+    locations: [
+      { id: "repair-location-1", source: "planner", sourceReference: null, label: "Shelter", description: "A defensible shelter." },
+      { id: "repair-location-2", source: "planner", sourceReference: null, label: "Crossing", description: "A dangerous crossing." },
+    ],
+    escalationLadder: [
+      { id: "repair-escalation-1", source: "planner", sourceReference: null, label: "First pressure", description: "The first pressure rises." },
+      { id: "repair-escalation-2", source: "planner", sourceReference: null, label: "Second pressure", description: "The second pressure rises." },
+      { id: "repair-escalation-3", source: "planner", sourceReference: null, label: "Final pressure", description: "The final pressure rises." },
+    ],
+    reversals: [{ id: "repair-reversal", source: "planner", sourceReference: null, label: "Reversal", description: "The plan turns." }],
+    consequences: [{ id: "repair-consequence", source: "planner", sourceReference: null, label: "Consequence", description: "The choice costs something." }],
+  } as any, await recipeProvenance(fullBody.recipe as any));
+  const body = {
+    ...fullBody,
+    requestedFormat: "novel",
+    storyMaterialEnrichment: novelMaterial,
+    existingSections: Array.from({ length: 20 }, (_, index) => ({ title: `Existing chapter ${index + 1}`, summary: "Existing chapter material.", container: "chapter" })),
+    arcTemplate: {
+      ...fullBody.arcTemplate,
+      name: "Save the Cat!",
+      beats: fullBody.arcTemplate.beats.map((beat: any, index: number) => ({ ...beat, role: index === 1 ? "final_image" : beat.role, label: index === 1 ? "Final Image" : beat.label, description: "" })),
+    },
+  } as any;
+  const weakSection = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`), entryState: "The prior state holds.", dramaticEvent: beat === "beat-1" ? `${title} happens.` : "The survivors mourn what was lost.", resultingChange: beat === "beat-1" ? `${title} changes the pressure.` : "The aftermath continues.", terminalState: beat === "beat-1" ? `${title} hands forward a new pressure.` : "The former conflict remains unresolved." });
+  const repairedSection = { ...weakSection("beat-2", "The Settled Cost"), summary: "The central conflict is settled and its cost is accepted.", dramaticEvent: "The survivors resolve the central conflict and choose the new normal.", resultingChange: "The central conflict is resolved and the cost is accepted.", terminalState: "The new normal holds without the former conflict continuing." };
+  const db = new ExecutableRunDb({ ...checkpointedWorkerRow(body), story_material: novelMaterial });
+  const actions: string[] = [];
+  const billable = validatedWorkerBilling(actions, (action) => {
+    if (action === "outline-suggestions") return { beats: { "beat-1": [weakSection("beat-1", "Opening")], "beat-2": [weakSection("beat-2", "The Aftermath")] } };
+    if (action === "outline-semantic-repair-beat-2-resolution") return { section: repairedSection };
+    return { suggestions: [] };
+  });
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  await run();
+  assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(db.row.planning_state.nextAction, "story-arc-repair");
+  await run();
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-repair-beat-2-resolution"]);
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.suggestions.some((section: any) => section.title === "The Settled Cost"), true);
+  assertEquals(db.row.diagnostics.semanticArcIssues, []);
+  assertEquals(actions.some((action) => action.startsWith("outline-expansion-")), false);
 });
 
 Deno.test("fresh novel worker sequence is enrichment then allocation then one global outline call", async () => {
