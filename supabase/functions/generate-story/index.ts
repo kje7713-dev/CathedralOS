@@ -764,9 +764,10 @@ export function renderAssignedRecipeRequirementGuidance(
     "These author requirements are assigned to the current Section Contract because they are materially applicable to this section:",
     ...applicable.map((item) => `- ${item.id}: ${item.statement}`),
     "",
-    "When the current Section Contract is assigned an author requirement, preserve and materially realize that requirement through the actions and outcomes already planned for this section. Do not soften, reinterpret, or replace it. Do not force a requirement into unrelated sections.",
-    "The current Section Contract remains authoritative for what happens in this chapter. Established Project State remains authoritative for scene-entry facts; do not contradict it or move future events into the current chapter.",
-    "Do not make every tagged chapter independently demonstrate the entire project premise, repeat a broad requirement, or add a new event solely to satisfy an obligation when the Section Contract does not support it.",
+    "Whole-story requirements: broad author requirements govern the story's overall direction and must remain true and be meaningfully realized across the complete manuscript. Their assignment to multiple sections does not require every chapter to independently dramatize the entire premise or repeat its defining event.",
+    "Current-section requirements: materially realize an assigned requirement in this chapter only when the current Section Contract explicitly calls for the relevant behavior, event, or outcome. Otherwise, preserve consistency with the requirement and allow its realization at the appropriate point in the planned story.",
+    "The current Section Contract determines what happens now and remains authoritative for this chapter. Established Project State controls prior facts and continuity; do not contradict it. Future Outline Obligations must not be enacted prematurely.",
+    "Do not soften, reinterpret, replace, or contradict explicit author intent. Never invent additional events, repeat established developments, or prematurely fulfill future requirements solely because a broad requirement ID is assigned.",
     "",
   ];
 }

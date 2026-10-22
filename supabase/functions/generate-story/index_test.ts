@@ -109,11 +109,28 @@ Deno.test("assigned author requirements preserve intent without overriding secti
   assertStringIncludes(assigned, "## Assigned Author Requirements");
   assertStringIncludes(assigned, "The homicidal raccoon must intentionally kill someone.");
   assertStringIncludes(assigned, "The raccoon is obsessed with ice cream.");
-  assertStringIncludes(assigned, "preserve and materially realize that requirement through the actions and outcomes already planned for this section");
-  assertStringIncludes(assigned, "current Section Contract remains authoritative");
-  assertStringIncludes(assigned, "Established Project State remains authoritative");
-  assertStringIncludes(assigned, "Do not make every tagged chapter independently demonstrate the entire project premise");
-  assertStringIncludes(assigned, "Do not force a requirement into unrelated sections");
+  assertStringIncludes(assigned, "Whole-story requirements: broad author requirements govern the story's overall direction");
+  assertStringIncludes(assigned, "must remain true and be meaningfully realized across the complete manuscript");
+  assertStringIncludes(assigned, "does not require every chapter to independently dramatize the entire premise or repeat its defining event");
+  assertStringIncludes(assigned, "Current-section requirements: materially realize an assigned requirement in this chapter only when the current Section Contract explicitly calls for the relevant behavior, event, or outcome");
+  assertStringIncludes(assigned, "Otherwise, preserve consistency with the requirement and allow its realization at the appropriate point in the planned story");
+  assertStringIncludes(assigned, "The current Section Contract determines what happens now and remains authoritative");
+  assertStringIncludes(assigned, "Established Project State controls prior facts and continuity");
+  assertStringIncludes(assigned, "Future Outline Obligations must not be enacted prematurely");
+  assertStringIncludes(assigned, "Do not soften, reinterpret, replace, or contradict explicit author intent");
+  assertStringIncludes(assigned, "Never invent additional events, repeat established developments, or prematurely fulfill future requirements solely because a broad requirement ID is assigned");
+
+  const explicitlyRequired = buildPrompt({
+    ...base,
+    sectionDramaticEvent: "The raccoon intentionally kills the witness.",
+    recipeObligations: [
+      { id: "R1", statement: "The homicidal raccoon must intentionally kill someone." },
+      { id: "R2", statement: "The raccoon is obsessed with ice cream." },
+    ],
+    assignedRecipeRequirementIDs: ["R1", "R2"],
+  }).volatileBlocks.join("\n");
+  assertStringIncludes(explicitlyRequired, "The raccoon intentionally kills the witness.");
+  assertStringIncludes(explicitlyRequired, "Current-section requirements: materially realize an assigned requirement");
 
   const unassigned = buildPrompt({ ...base }).volatileBlocks.join("\n");
   assertEquals(unassigned.includes("## Assigned Author Requirements"), false);
