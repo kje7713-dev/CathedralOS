@@ -69,13 +69,16 @@ enum GenerationModelServiceError: Error, LocalizedError {
 final class BackendGenerationModelService: GenerationModelServiceProtocol {
     private let authService: AuthService
     private let session: URLSession
+    private let sessionProvider: any SupabaseSessionProvider
 
     init(
         authService: AuthService = BackendAuthService.shared,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        sessionProvider: (any SupabaseSessionProvider)? = nil
     ) {
         self.authService = authService
         self.session = session
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
     }
 
     func fetchEnabledModels() async throws -> [GenerationModelOption] {
@@ -104,7 +107,15 @@ final class BackendGenerationModelService: GenerationModelServiceProtocol {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await sessionProvider.retryOnceAfterExpiredJWT(
+                request: request,
+                session: session,
+            )
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn, .sessionExpired:
+                throw GenerationModelServiceError.notSignedIn
+            }
         } catch {
             throw GenerationModelServiceError.networkError(error)
         }
