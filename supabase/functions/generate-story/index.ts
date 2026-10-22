@@ -461,10 +461,6 @@ interface GenerateStoryRequest {
   plannedTargetWordsMax?: number;
   // Bounded future trajectory context used only by durable Run All.
   futureOutlineContext?: string;
-  // Immutable outline-planning obligations and the IDs assigned to the
-  // current section. Optional for legacy/direct generation callers.
-  recipeObligations?: unknown;
-  assignedRecipeRequirementIDs?: unknown;
   // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): the 5 Story Arc
   // Context fields were REMOVED from the request body. iOS and run-outline
   // no longer pass them — generate-story now resolves story arc context
@@ -732,44 +728,6 @@ function join(items: (string | undefined | null)[], sep = "; "): string {
 
 function nonEmpty(s: string | undefined | null): s is string {
   return typeof s === "string" && s.trim().length > 0;
-}
-
-type AssignedRecipeObligation = {
-  id?: unknown;
-  statement?: unknown;
-};
-
-export function renderAssignedRecipeRequirementGuidance(
-  recipeObligations: unknown,
-  assignedRecipeRequirementIDs: unknown,
-): string[] {
-  const assignedIDs = Array.isArray(assignedRecipeRequirementIDs)
-    ? assignedRecipeRequirementIDs.map(String).map((id) => id.trim()).filter(Boolean)
-    : [];
-  if (assignedIDs.length === 0 || !Array.isArray(recipeObligations)) return [];
-
-  const obligationsByID = new Map(
-    recipeObligations
-      .filter((item): item is AssignedRecipeObligation => !!item && typeof item === "object")
-      .map((item) => [String(item.id ?? "").trim(), String(item.statement ?? "").trim()]),
-  );
-  const applicable = assignedIDs
-    .map((id) => ({ id, statement: obligationsByID.get(id) ?? "" }))
-    .filter((item) => item.statement.length > 0);
-  if (applicable.length === 0) return [];
-
-  return [
-    "## Assigned Author Requirements",
-    "",
-    "These author requirements are assigned to the current Section Contract because they are materially applicable to this section:",
-    ...applicable.map((item) => `- ${item.id}: ${item.statement}`),
-    "",
-    "Whole-story requirements: broad author requirements govern the story's overall direction and must remain true and be meaningfully realized across the complete manuscript. Their assignment to multiple sections does not require every chapter to independently dramatize the entire premise or repeat its defining event.",
-    "Current-section requirements: materially realize an assigned requirement in this chapter only when the current Section Contract explicitly calls for the relevant behavior, event, or outcome. Otherwise, preserve consistency with the requirement and allow its realization at the appropriate point in the planned story.",
-    "The current Section Contract determines what happens now and remains authoritative for this chapter. Established Project State controls prior facts and continuity; do not contradict it. Future Outline Obligations must not be enacted prematurely.",
-    "Do not soften, reinterpret, replace, or contradict explicit author intent. Never invent additional events, repeat established developments, or prematurely fulfill future requirements solely because a broad requirement ID is assigned.",
-    "",
-  ];
 }
 
 function section(header: string, lines: string[]): string[] {
@@ -1671,11 +1629,6 @@ export function buildPrompt(req: {
   storyArcTotalBeats?: number;
   storyArcWithinBeatPosition?: number;
   storyArcWithinBeatTotal?: number;
-  // Immutable outline-planning obligations and the IDs assigned to this
-  // section. Rendered only when a Section Contract is present, so direct
-  // generation without assignments retains its existing prompt shape.
-  recipeObligations?: unknown;
-  assignedRecipeRequirementIDs?: unknown;
   // Ordered recent canonical section prose used only to derive restraint.
   recentRepetitionRawText?: string[];
 }): {
@@ -2226,12 +2179,6 @@ Structural limits:
       "",
       `POV: ${povInstruction(req.pov)}`,
       "",
-    );
-    contextLines.push(
-      ...renderAssignedRecipeRequirementGuidance(
-        req.recipeObligations,
-        req.assignedRecipeRequirementIDs,
-      ),
     );
   }
 
@@ -3110,8 +3057,6 @@ async function handler(
         sectionTitle: section.title,
         sectionSummary: section.summary,
         futureOutlineContext: section.futureOutlineContext,
-        recipeObligations: body.recipeObligations,
-        assignedRecipeRequirementIDs: body.assignedRecipeRequirementIDs,
       });
       const estimatedInputTokens = estimateTokensFromText(
         stableBlocks.join("\n"),
@@ -3188,8 +3133,6 @@ async function handler(
       plannedTargetWordsMin: body.plannedTargetWordsMin,
       plannedTargetWordsMax: body.plannedTargetWordsMax,
       futureOutlineContext: body.futureOutlineContext,
-      recipeObligations: body.recipeObligations,
-      assignedRecipeRequirementIDs: body.assignedRecipeRequirementIDs,
     });
     // PR-372: concat blocks for token estimation. Hash not computed in the
     // estimate path (no billable call → no telemetry row).
@@ -3402,8 +3345,6 @@ async function handler(
     plannedTargetWordsMin: body.plannedTargetWordsMin,
     plannedTargetWordsMax: body.plannedTargetWordsMax,
     futureOutlineContext: body.futureOutlineContext,
-    recipeObligations: body.recipeObligations,
-    assignedRecipeRequirementIDs: body.assignedRecipeRequirementIDs,
     // PR-360-Z cleanup pass (Kevin 2026-08-21 17:47 EDT): Story Arc Context
     // resolved SERVER-SIDE from outlineSectionCtx (fetched via
     // fetchOutlineSectionContext at the top of the handler). Caller no longer
