@@ -457,7 +457,7 @@ struct KindleExportView: View {
                     ProgressView()
                     Text("Loading previous exports…")
                 }
-            } else if previousExports.isEmpty {
+            } else if previousExports.isEmpty && previousExportsError == nil {
                 Text("No previous EPUBs for this project yet.")
                     .font(CathedralTheme.Typography.body(13))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)

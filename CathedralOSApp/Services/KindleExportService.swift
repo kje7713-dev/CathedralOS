@@ -394,10 +394,17 @@ struct KindleExportDiagnostic: Codable {
 final class KindleExportService {
     let backend: BackendClient
     private let session: URLSession
+    private let sessionProvider: any SupabaseSessionProvider
 
-    init(backend: BackendClient, session: URLSession = .shared) {
+    init(
+        backend: BackendClient,
+        session: URLSession = .shared,
+        authService: AuthService = BackendAuthService.shared,
+        sessionProvider: (any SupabaseSessionProvider)? = nil
+    ) {
         self.backend = backend
         self.session = session
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver(authService: authService)
     }
 
     /// Kick off an export job. Returns the job_id for polling.
@@ -418,7 +425,14 @@ final class KindleExportService {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: urlRequest)
+            (data, response) = try await performAuthenticatedRequest(for: urlRequest)
+        } catch let error as KindleExportError {
+            throw error
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn, .sessionExpired:
+                throw KindleExportError.notAuthenticated
+            }
         } catch {
             throw KindleExportError.networkError(error.localizedDescription)
         }
@@ -472,7 +486,14 @@ final class KindleExportService {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await performAuthenticatedRequest(for: request)
+        } catch let error as KindleExportError {
+            throw error
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn, .sessionExpired:
+                throw KindleExportError.notAuthenticated
+            }
         } catch {
             throw KindleExportError.networkError(error.localizedDescription)
         }
@@ -511,7 +532,14 @@ final class KindleExportService {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await performAuthenticatedRequest(for: request)
+        } catch let error as KindleExportError {
+            throw error
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn, .sessionExpired:
+                throw KindleExportError.notAuthenticated
+            }
         } catch {
             throw KindleExportError.networkError(error.localizedDescription)
         }
@@ -552,7 +580,14 @@ final class KindleExportService {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: urlRequest)
+            (data, response) = try await performAuthenticatedRequest(for: urlRequest)
+        } catch let error as KindleExportError {
+            throw error
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn, .sessionExpired:
+                throw KindleExportError.notAuthenticated
+            }
         } catch {
             throw KindleExportError.pollFailed(error.localizedDescription)
         }
@@ -597,7 +632,14 @@ final class KindleExportService {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await performAuthenticatedRequest(for: request)
+        } catch let error as KindleExportError {
+            throw error
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn, .sessionExpired:
+                throw KindleExportError.notAuthenticated
+            }
         } catch {
             throw KindleExportError.networkError(error.localizedDescription)
         }
@@ -623,5 +665,14 @@ final class KindleExportService {
             throw KindleExportError.invalidResponse(
                 "Could not decode delete response: \(error.localizedDescription)")
         }
+    }
+
+    private func performAuthenticatedRequest(
+        for request: URLRequest
+    ) async throws -> (Data, URLResponse) {
+        try await sessionProvider.retryOnceAfterExpiredJWT(
+            request: request,
+            session: session,
+        )
     }
 }
