@@ -1367,7 +1367,8 @@ Deno.test("outline section contract assigns canonical plot decisions to the plan
 Deno.test("novel planning exposes container semantics and projected-size expansion", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
-  assertEquals(allocationPrompt.includes("plan toward 90,000 words"), true);
+  assertEquals(allocationPrompt.includes("plan toward 115,000 words"), true);
+  assertEquals(source.includes("NOVEL_TARGET_WORDS: [number, number] = [115000, 120000]"), true);
   assertEquals(allocationPrompt.includes("minimum number of NEW dramatic sections still required"), true);
   assertEquals(allocationPrompt.includes("floor, not a target or maximum"), true);
   assertEquals(source.includes("targetSections"), false);
@@ -1385,6 +1386,7 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
     ["beat-2", { minSections: 1, rationale: "escalation" }],
   ])).system;
   assertEquals(outlinePrompt.includes("Novel length policy"), true);
+  assertEquals(outlinePrompt.includes("plan toward 115,000 words"), true);
   assertEquals(outlinePrompt.includes("120,000-word hard cap"), true);
   assertEquals(outlinePrompt.includes("Fit the complete story package into the budget"), true);
   assertEquals(outlinePrompt.includes("do not drop story material"), true);
