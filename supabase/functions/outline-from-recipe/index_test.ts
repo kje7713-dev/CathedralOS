@@ -4861,6 +4861,80 @@ Deno.test("unused enrichment does not expand a novel with scale and beat coverag
   assertEquals(db.row.diagnostics.expansionRounds ?? [], []);
 });
 
+async function weakResolutionWorkerFixture(repairMode: "throw" | "invalid" | "unresolved") {
+  const fullBody = await executableWorkerBody();
+  const body = {
+    ...fullBody,
+    arcTemplate: {
+      ...fullBody.arcTemplate,
+      name: "Save the Cat!",
+      beats: fullBody.arcTemplate.beats.map((beat: any, index: number) => ({
+        ...beat,
+        role: index === 1 ? "final_image" : beat.role,
+        label: index === 1 ? "Final Image" : beat.label,
+        description: "",
+      })),
+    },
+  } as any;
+  const weakSection = (beat: string, title: string) => ({
+    title,
+    summary: `${title} summary`,
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends`,
+    storyArcBeatID: beat,
+    dramaticFunction: beat === "beat-1" ? "setup" : "resolution",
+    recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`),
+    entryState: "The prior state holds.",
+    dramaticEvent: beat === "beat-1" ? `${title} happens.` : "The survivors mourn what was lost.",
+    resultingChange: beat === "beat-1" ? `${title} changes the pressure.` : "The aftermath continues.",
+    terminalState: beat === "beat-1" ? `${title} hands forward a new pressure.` : "The former conflict remains unresolved.",
+  });
+  const db = new ExecutableRunDb({ ...checkpointedWorkerRow(body), story_material: body.storyMaterialEnrichment });
+  const actions: string[] = [];
+  const billable = validatedWorkerBilling(actions, (action) => {
+    if (action === "outline-suggestions") {
+      return { beats: { "beat-1": [weakSection("beat-1", "Opening")], "beat-2": [weakSection("beat-2", "The Aftermath")] } };
+    }
+    if (action === "outline-semantic-repair-beat-2-resolution") {
+      if (repairMode === "throw") throw new Error("creative repair unavailable");
+      if (repairMode === "invalid") return { section: { title: "Invalid repair" } };
+      return { section: weakSection("beat-2", "The Aftermath") };
+    }
+    return { suggestions: [] };
+  });
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: billable as any,
+    scheduleContinuation: async () => {},
+  });
+  return { db, actions, run, weakSection };
+}
+
+Deno.test("failed story-quality repair preserves the validated outline and surfaces a warning", async () => {
+  const fixture = await weakResolutionWorkerFixture("throw");
+  await fixture.run();
+  await fixture.run();
+  assertEquals(fixture.db.row.status, "completed");
+  assertEquals(fixture.actions, ["outline-suggestions", "outline-semantic-repair-beat-2-resolution"]);
+  assertEquals(fixture.db.row.suggestions.map((section: any) => section.title), ["Opening", "The Aftermath"]);
+  assertEquals(fixture.db.row.diagnostics.semanticArcUnresolvedSections, ["The Aftermath"]);
+  assertEquals(fixture.db.row.warnings.some((warning: string) => warning.includes("Story Arc repair did not resolve section: The Aftermath")), true);
+});
+
+Deno.test("an unresolved bounded story-quality repair completes with the best valid version", async () => {
+  const fixture = await weakResolutionWorkerFixture("unresolved");
+  await fixture.run();
+  await fixture.run();
+  assertEquals(fixture.db.row.status, "completed");
+  assertEquals(fixture.db.row.suggestions.map((section: any) => section.title), ["Opening", "The Aftermath"]);
+  assertEquals(fixture.db.row.warnings.some((warning: string) => warning.includes("Story Arc repair did not resolve section: The Aftermath")), true);
+  assertEquals(fixture.actions, ["outline-suggestions", "outline-semantic-repair-beat-2-resolution"]);
+});
+
 Deno.test("weak resolution is repaired before optional expansion", async () => {
   const fullBody = await executableWorkerBody();
   const novelMaterial = attachRecipeProvenance({
@@ -4909,6 +4983,7 @@ Deno.test("weak resolution is repaired before optional expansion", async () => {
   assertEquals(db.row.status, "completed");
   assertEquals(db.row.suggestions.some((section: any) => section.title === "The Settled Cost"), true);
   assertEquals(db.row.diagnostics.semanticArcIssues, []);
+  assertEquals(db.row.warnings, []);
   assertEquals(actions.some((action) => action.startsWith("outline-expansion-")), false);
 });
 
@@ -5299,6 +5374,7 @@ Deno.test("global outline completion preserves advisory quality and obligation a
   assertEquals("advisoryValidationError" in diagnostics, false);
   assertEquals(typeof diagnostics.recipeObligationCoverage, "object");
   assertEquals(diagnostics.missingRequiredRecipeObligations, []);
+  assertEquals(db.row.warnings, diagnostics.semanticArcIssues.map((issue: string) => `Story Arc quality concern remains for review: ${issue}`));
 });
 
 
