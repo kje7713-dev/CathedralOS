@@ -2756,14 +2756,19 @@ export function buildPrompt(
   obligations: RecipeObligation[] = [],
   storyMaterial?: StoryMaterialEnrichment,
 ): { system: string; user: string } {
+  const isNovel = requestedStoryMaterialFormat(req) === "novel";
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
       const beat = req.arcTemplate.beats.find((b) => b.id === beatId);
-      return `- ${
-        beat?.label ?? beatId
-      }: minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"} (${info.rationale})`;
+      const sectionLabel = isNovel
+        ? `complete first-pass allocation: ${info.minSections} section${info.minSections === 1 ? "" : "s"}`
+        : `minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"}`;
+      return `- ${beat?.label ?? beatId}: ${sectionLabel} (${info.rationale})`;
     })
     .join("\n");
+  const allocationDirective = isNovel
+    ? `## Complete first-pass allocation\n\nThe allocation above is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. The allocation assumes a chapter-scale midpoint of 5,500 tokens (the midpoint of the server's 3,000-8,000 chapter range), so account for the actual projected contribution of every selected container. Do not treat a shorter container as chapter-scale, and do not leave routine book-length development to later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
+    : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
     const obligations = contract.semanticObligations.length > 0
@@ -2815,6 +2820,8 @@ Choose a container for the scale of one dramatic unit, not to fake novel length:
 - setPiece: a major confrontation, action, ceremony, revelation, or complex high-stakes event, 2,000-5,000
 - sceneSequence: several connected scenes, locations, or times pursuing one coherent objective, 3,000-7,000
 - chapter: a publishing unit containing multiple substantial movements that belong together, 3,000-8,000+
+
+${isNovel ? `For novel planning, reason about the complete 115,000-word budget before choosing containers. The allocation's 5,500-token chapter midpoint is a planning assumption, not a label: prefer chapter when an allocated unit contains multiple connected movements such as setup, resistance, escalation, consequence, and character development pursuing one coherent narrative purpose. Combine related material when it belongs together, while preserving distinct events and irreversible state changes. Use scene, developedScene, setPiece, or sceneSequence when the dramatic material genuinely requires a smaller or differently shaped unit. Their lower midpoints reduce the authoritative projected total, so never count a shorter container as if it were a chapter and never relabel or pad material to hide that reduction. A deterministic projection of 29 mixed containers must use the actual container midpoints, not 29 chapter midpoints.` : `Use the container whose range fits the material. Preserve the existing format's allocation semantics and do not use containers to inflate or fragment the outline.`}
 For a new novel, prefer the chapter container: each chapter-scale section targets the existing chapter minimum of 3,000 planned tokens. Use scene, developedScene, setPiece, or sceneSequence only when the material genuinely requires a smaller or differently shaped dramatic unit; never use them to fragment one chapter or inflate section counts. Do not create moment, vignette, microScene, beat, shortStory, or episode leaves. Do not split one continuous dramatic objective into several short sections merely because each tactic can be named as its own event: setup → attempt → resistance → changed tactic → consequence usually belongs in one developedScene. A brief final image, kiss, gesture, or emotional beat should normally close the preceding substantive scene rather than become an isolated tiny novel section. Favor more developed story, never padding; preserve distinct state change, no duplicate revelations or resolutions, and no filler sections.
 The expected ranges are literary targets; runtime/provider headroom is not a desired length.
 
@@ -2832,9 +2839,7 @@ These are mandatory acceptance criteria, not descriptive tags. Reserve concrete 
 ## Compact planning context
 Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation. When the planning context supplies a concrete location, clue, institution, object, threat mechanism, or consequence, use it rather than generic phrases such as "damaged site", "weak point", "psychic pressure", or "thin place".
 
-## Use the minimum-only allocation
-
-For each beat, generate at least the stated minimum number of distinct sections while respecting the novel length policy. The minimum is a coverage floor, not permission to exceed the 125,000-word cap: add sections only when the required story cannot be covered by combining material. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.
+${allocationDirective}
 
 ## Character arc and plot integration
 Whenever practical, relationship and character-arc turns should cause or complicate plot events rather than occurring as isolated character-development scenes.
@@ -2877,6 +2882,9 @@ Respond with structured JSON matching the schema. This is the only provider call
   const user = JSON.stringify({
     planningContext: planningView,
     allocation: Array.from(allocation.entries()),
+    allocationContract: isNovel
+      ? "Complete first-pass novel distribution; each allocation is substantial new work and shorter containers count at their actual midpoint."
+      : "Minimum section coverage for this non-novel format; preserve existing format semantics.",
     hint: req.hint ?? null,
   }, null, 2);
 
