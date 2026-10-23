@@ -5105,22 +5105,55 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
     requestedFormat: "novel",
     storyMaterialEnrichment: novelMaterial,
   } as any;
+  const baseSection = (beat: string, title: string) => ({
+    title, summary: `${title} summary`, container: "chapter", pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends`, storyArcBeatID: beat,
+    dramaticFunction: beat === "beat-1" ? "setup" : "resolution",
+    recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`),
+    entryState: "The prior state holds.", dramaticEvent: `${title} happens.`,
+    resultingChange: `${title} changes the pressure.`, terminalState: `${title} hands forward pressure.`,
+  });
+  const firstPass = Array.from({ length: 25 }, (_, index) =>
+    baseSection(index === 24 ? "beat-2" : "beat-1", `First-pass chapter ${index + 1}`));
   const initialDB = new ExecutableRunDb(checkpointedWorkerRow(body));
   const initialActions: string[] = [];
+  const initialBilling = validatedWorkerBilling(initialActions, (action) => {
+    if (action === "outline-suggestions") {
+      return {
+        beats: {
+          "beat-1": firstPass.filter((section) => section.storyArcBeatID === "beat-1"),
+          "beat-2": firstPass.filter((section) => section.storyArcBeatID === "beat-2"),
+        },
+      };
+    }
+    if (action === "outline-expansion-1-global") {
+      return { suggestions: [expansionSection("Checkpoint chapter 26", "chapter"), expansionSection("Checkpoint chapter 27", "chapter")] };
+    }
+    // A valid first expansion is followed by a recoverable under-target
+    // failure, exercising completion from the persisted 27-section state.
+    return { suggestions: [] };
+  });
   const initialRun = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
     db: initialDB,
     model: { provider_model: "fixture-model" },
     provider: {},
     creditStore: {},
-    billableLLM: fakeWorkerBilling(initialActions) as any,
+    billableLLM: initialBilling as any,
     scheduleContinuation: async () => {},
   });
   await initialRun();
   await initialRun();
   await initialRun();
+  await initialRun();
   assertEquals(initialDB.row.status, "completed");
-  assertEquals(initialDB.row.suggestions.length, 2);
-  assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global"]);
+  assertEquals(initialDB.row.suggestions.length, 27);
+  assertEquals(initialDB.row.suggestions.map((section: any) => section.title), [
+    ...firstPass.slice(0, 24).map((section) => section.title),
+    "Checkpoint chapter 26",
+    "Checkpoint chapter 27",
+    firstPass[24].title,
+  ]);
+  assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global", "outline-expansion-2-global"]);
   assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("Optional novel expansion did not finish")), true);
 
   const completedRound = {
