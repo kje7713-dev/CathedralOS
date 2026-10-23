@@ -5414,12 +5414,37 @@ Deno.test("final quality includes legacy accepted sections without semantic meta
   assertEquals(quality.semanticArcIssues, []);
 });
 
-Deno.test("mixed legacy accepted and generated sections still report generated defects", () => {
+Deno.test("mixed legacy accepted resolution and generated aftermath remain unverifiable, not missing", () => {
   const { dramaticFunction: _dramaticFunction, ...acceptedResolution } = finalQualityTestSection("final", "Accepted narrative resolution", "resolution", "The central conflict is resolved.", "The new normal holds.");
-  const generatedSetup = finalQualityTestSection("final", "Generated aftermath", "aftermath", "The residue continues.", "The old conflict remains unresolved.");
+  const generatedAftermath = finalQualityTestSection("final", "Generated aftermath", "aftermath", "The residue continues.", "The new normal holds.");
+  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedAftermath as any]);
+  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, undefined, new Set([acceptedResolution as any]));
+  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("missing required dramatic function resolution")), false);
+});
+
+Deno.test("mixed legacy accepted section does not hide a generated weak resolution", () => {
+  const { dramaticFunction: _dramaticFunction, ...acceptedResolution } = finalQualityTestSection("final", "Accepted narrative resolution", "resolution", "The central conflict is resolved.", "The new normal holds.");
+  const generatedResolution = finalQualityTestSection("final", "Generated weak resolution", "resolution", "The survivors mourn what was lost.", "The former conflict remains unresolved.");
+  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedResolution as any]);
+  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, undefined, new Set([acceptedResolution as any]));
+  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("does not materially resolve")), true);
+});
+
+Deno.test("mixed legacy accepted section does not hide an incompatible generated function", () => {
+  const { dramaticFunction: _dramaticFunction, ...acceptedResolution } = finalQualityTestSection("final", "Accepted narrative resolution", "resolution", "The central conflict is resolved.", "The new normal holds.");
+  const generatedSetup = finalQualityTestSection("final", "Generated incompatible setup", "setup", "A new setup event.", "The setup continues.");
   const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedSetup as any]);
   const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, undefined, new Set([acceptedResolution as any]));
-  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("final") && issue.includes("resolution")), true);
+  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("declares setup, not allowed")), true);
+});
+
+Deno.test("mixed legacy accepted section leaves authored obligation status unverifiable", () => {
+  const template = { ...finalQualityTestTemplate, beats: finalQualityTestTemplate.beats.map((beat) => beat.id === "final" ? { ...beat, description: "Settle the central conflict on the page." } : beat) };
+  const { dramaticFunction: _dramaticFunction, ...acceptedResolution } = finalQualityTestSection("final", "Accepted narrative resolution", "resolution", "The central conflict is resolved.", "The new normal holds.");
+  const generatedAftermath = finalQualityTestSection("final", "Generated aftermath", "aftermath", "The residue continues.", "The new normal holds.");
+  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedAftermath as any]);
+  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", template as any, undefined, new Set([acceptedResolution as any]));
+  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("missing semantic obligation")), false);
 });
 
 Deno.test("final quality still reports a truly missing Story Arc requirement", () => {

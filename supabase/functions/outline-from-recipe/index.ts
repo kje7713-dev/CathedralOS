@@ -3754,7 +3754,8 @@ export function validateArcSemanticObligations(
         const refs = candidate.arcObligationEvidence?.[obligation.id] ?? [];
         return refs.length > 0 && obligation.requiredFields.every((field) => typeof candidate[field] === "string" && candidate[field]!.trim().length > 0);
       });
-      if (!satisfied && !(knownSections.length === 0 && sections.length > 0)) {
+      const hasLegacyAcceptedSection = sections.some((section) => legacyAcceptedSections.has(section));
+      if (!satisfied && !hasLegacyAcceptedSection) {
         issues.push(`beat ${beat.label} (${beat.id}) is missing semantic obligation ${obligation.id}: ${obligation.instruction}`);
       }
     }
@@ -4247,7 +4248,7 @@ export function validateRequiredStoryArcFunctions(
       if (requiredSections.length === 0) {
         // Existing iOS sections predate semantic metadata. Their missing
         // dramaticFunction makes this requirement unverifiable, not failed.
-        if (knownSections.length === 0 && sections.length > 0) continue;
+        if (sections.some((section) => legacyAcceptedSections.has(section))) continue;
         issues.push(`beat ${beat.label} (${beat.id}) is missing required dramatic function ${required}; present functions: ${present}`);
       } else if (required === "resolution" && !requiredSections.some((section) =>
         RESOLUTION_ACTION_SIGNALS.test(resolutionEvidenceText(section))
