@@ -3089,19 +3089,6 @@ export function mergeSuggestionsByBeatOrder(
   });
 }
 
-export function composeFinalQualitySuggestions(
-  beatOrder: string[],
-  existingSections: Suggestion[],
-  generatedSections: Suggestion[],
-): Suggestion[] {
-  const beatIDs = new Set(beatOrder);
-  const existingBeatSections = existingSections.filter((section) => beatIDs.has(section.storyArcBeatID));
-  // Free-form accepted sections have no canonical Story Arc beat and cannot
-  // satisfy a beat-scoped requirement. Keep them out of this validator input;
-  // they remain untouched and are still excluded from the returned delta.
-  return mergeSuggestionsByBeatOrder(beatOrder, existingBeatSections, generatedSections, true);
-}
-
 export function mergeRepairedSuggestions(
   beatOrder: string[],
   beatIds: Set<string>,
@@ -3741,23 +3728,18 @@ export function validateGroundedArcEvidence(
 export function validateArcSemanticObligations(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats">,
-  legacyAcceptedSections: ReadonlySet<Suggestion> = new Set(),
 ): string[] {
   const issues: string[] = [];
   for (const beat of template.beats) {
     const obligations = arcRoleContract(beat, template.name).semanticObligations;
     if (obligations.length === 0) continue;
     const sections = suggestions.filter((section) => section.storyArcBeatID === beat.id);
-    const knownSections = sections.filter((section) => !legacyAcceptedSections.has(section));
     for (const obligation of obligations) {
-      const satisfied = knownSections.some((candidate) => {
+      const satisfied = sections.some((candidate) => {
         const refs = candidate.arcObligationEvidence?.[obligation.id] ?? [];
         return refs.length > 0 && obligation.requiredFields.every((field) => typeof candidate[field] === "string" && candidate[field]!.trim().length > 0);
       });
-      const hasLegacyAcceptedSection = sections.some((section) => legacyAcceptedSections.has(section));
-      if (!satisfied && !hasLegacyAcceptedSection) {
-        issues.push(`beat ${beat.label} (${beat.id}) is missing semantic obligation ${obligation.id}: ${obligation.instruction}`);
-      }
+      if (!satisfied) issues.push(`beat ${beat.label} (${beat.id}) is missing semantic obligation ${obligation.id}: ${obligation.instruction}`);
     }
   }
   return issues;
@@ -4233,7 +4215,6 @@ export function validatePostRepairBeatCoverage(
 export function validateRequiredStoryArcFunctions(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats">,
-  legacyAcceptedSections: ReadonlySet<Suggestion> = new Set(),
 ): string[] {
   const contracts = arcRoleContracts(template);
   const issues: string[] = [];
@@ -4241,14 +4222,10 @@ export function validateRequiredStoryArcFunctions(
     const roleContract = contracts.get(beat.id);
     if (!roleContract || roleContract.requiredFunctions.length === 0) continue;
     const sections = suggestions.filter((section) => section.storyArcBeatID === beat.id);
-    const knownSections = sections.filter((section) => !legacyAcceptedSections.has(section));
-    const present = knownSections.map((section) => section.dramaticFunction ?? "(undeclared)").join(", ") || "(none)";
+    const present = sections.map((section) => section.dramaticFunction ?? "(undeclared)").join(", ") || "(none)";
     for (const required of roleContract.requiredFunctions) {
-      const requiredSections = knownSections.filter((section) => section.dramaticFunction === required);
+      const requiredSections = sections.filter((section) => section.dramaticFunction === required);
       if (requiredSections.length === 0) {
-        // Existing iOS sections predate semantic metadata. Their missing
-        // dramaticFunction makes this requirement unverifiable, not failed.
-        if (sections.some((section) => legacyAcceptedSections.has(section))) continue;
         issues.push(`beat ${beat.label} (${beat.id}) is missing required dramatic function ${required}; present functions: ${present}`);
       } else if (required === "resolution" && !requiredSections.some((section) =>
         RESOLUTION_ACTION_SIGNALS.test(resolutionEvidenceText(section))
@@ -4370,12 +4347,11 @@ export function validateStoryArcSemantics(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats">,
   allocation?: Map<string, Allocation>,
-  legacyAcceptedSections: ReadonlySet<Suggestion> = new Set(),
 ): string[] {
   const issues: string[] = [
     ...validatePostRepairBeatCoverage(suggestions, template, allocation),
-    ...validateRequiredStoryArcFunctions(suggestions, template, legacyAcceptedSections),
-    ...validateArcSemanticObligations(suggestions, template, legacyAcceptedSections),
+    ...validateRequiredStoryArcFunctions(suggestions, template),
+    ...validateArcSemanticObligations(suggestions, template),
   ];
   const contracts = arcRoleContracts(template);
   const ordered = [...suggestions].sort((a, b) => {
@@ -4514,11 +4490,10 @@ export function validateOutlinePlanningQuality(
   format: StoryMaterialFormat = "novel",
   template?: Pick<ArcTemplateBlob, "name" | "beats">,
   allocation?: Map<string, Allocation>,
-  legacyAcceptedSections: ReadonlySet<Suggestion> = new Set(),
 ): OutlineQualityDiagnostic {
   const distinctnessIssues = findDramaticDistinctnessIssues(suggestions);
   const causalScaleIssues = findCausalScaleIssues(suggestions, storyMaterial, format);
-  const semanticArcIssues = template ? validateStoryArcSemantics(suggestions, template, allocation, legacyAcceptedSections) : [];
+  const semanticArcIssues = template ? validateStoryArcSemantics(suggestions, template, allocation) : [];
   const supportingEntities = storyMaterial
     ? findUnusedStoryMaterial(suggestions, storyMaterial).map((item) => item.id).slice(0, 50)
     : [];
@@ -4543,10 +4518,9 @@ export function collectAdvisoryOutlineQuality(
   format: StoryMaterialFormat = "novel",
   template?: Pick<ArcTemplateBlob, "name" | "beats">,
   allocation?: Map<string, Allocation>,
-  legacyAcceptedSections: ReadonlySet<Suggestion> = new Set(),
 ): OutlineQualityDiagnostic {
   try {
-    return validateOutlinePlanningQuality(suggestions, storyMaterial, format, template, allocation, legacyAcceptedSections);
+    return validateOutlinePlanningQuality(suggestions, storyMaterial, format, template, allocation);
   } catch (error) {
     return {
       distinctnessIssues: [],
@@ -5548,48 +5522,7 @@ export async function runSuggestionJob(
         await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
         throw new SuggestionWorkerYield();
       }
-      let finalQuality: OutlineQualityDiagnostic;
-      try {
-        const finalQualitySuggestions = composeFinalQualitySuggestions(
-          body.arcTemplate.beats.map((beat) => beat.id),
-          (body.existingSections ?? []) as unknown as Suggestion[],
-          completedSuggestions,
-        );
-        const legacyAcceptedSections = new Set(
-          (body.existingSections ?? []).filter((section) =>
-            body.arcTemplate.beats.some((beat) => beat.id === section.storyArcBeatID)
-          ) as unknown as Suggestion[],
-        );
-        finalQuality = collectAdvisoryOutlineQuality(
-          finalQualitySuggestions,
-          body.storyMaterialEnrichment,
-          requestedStoryMaterialFormat(body),
-          body.arcTemplate,
-          effectiveAllocation,
-          legacyAcceptedSections,
-        );
-      } catch (error) {
-        const advisoryValidationError = error instanceof Error ? error.message : String(error);
-        finalQuality = {
-          distinctnessIssues: [],
-          causalScaleIssues: [],
-          semanticArcIssues: [],
-          supportingEntities: [],
-          unusedStoryMaterialItems: 0,
-          advisoryValidationError,
-        };
-      }
-      diagnostics = { ...diagnostics, finalAdvisoryQuality: finalQuality };
-      const advisoryWarnings = [
-        ...(Array.isArray(diagnostics.semanticWarnings)
-          ? (diagnostics.semanticWarnings as string[])
-          : []),
-        ...finalQuality.semanticArcIssues.map((issue) => `Story Arc quality concern remains for review: ${issue}`),
-        ...(finalQuality.advisoryValidationError
-          ? [`Final advisory quality validation was unavailable; continuing with the best validated outline: ${finalQuality.advisoryValidationError}`]
-          : []),
-      ];
-      const finalWarnings = [...new Set([...completionWarnings, ...advisoryWarnings])];
+      const finalWarnings = completionWarnings;
       await updateRun({
         status: "completed",
         suggestions: completedSuggestions,

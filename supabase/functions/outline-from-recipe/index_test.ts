@@ -63,7 +63,6 @@ import {
   parseExpansionResponse,
   validateExpansionAdditions,
   mergeRepairedSuggestions,
-  composeFinalQualitySuggestions,
   mergeExpansionAdditions,
   evaluateNovelScale,
   needsNovelExpansion,
@@ -4862,90 +4861,6 @@ Deno.test("unused enrichment does not expand a novel with scale and beat coverag
   assertEquals(db.row.diagnostics.expansionRounds ?? [], []);
 });
 
-async function weakResolutionWorkerFixture(repairMode: "throw" | "invalid" | "unresolved") {
-  const fullBody = await executableWorkerBody();
-  const body = {
-    ...fullBody,
-    arcTemplate: {
-      ...fullBody.arcTemplate,
-      name: "Save the Cat!",
-      beats: fullBody.arcTemplate.beats.map((beat: any, index: number) => ({
-        ...beat,
-        role: index === 1 ? "final_image" : beat.role,
-        label: index === 1 ? "Final Image" : beat.label,
-        description: "",
-      })),
-    },
-  } as any;
-  const weakSection = (beat: string, title: string) => ({
-    title,
-    summary: `${title} summary`,
-    container: "scene",
-    pov: "thirdPersonLimited",
-    terminalBeat: `${title} ends`,
-    storyArcBeatID: beat,
-    dramaticFunction: beat === "beat-1" ? "setup" : "resolution",
-    recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`),
-    entryState: "The prior state holds.",
-    dramaticEvent: beat === "beat-1" ? `${title} happens.` : "The survivors mourn what was lost.",
-    resultingChange: beat === "beat-1" ? `${title} changes the pressure.` : "The aftermath continues.",
-    terminalState: beat === "beat-1" ? `${title} hands forward a new pressure.` : "The former conflict remains unresolved.",
-  });
-  const db = new ExecutableRunDb({ ...checkpointedWorkerRow(body), story_material: body.storyMaterialEnrichment });
-  const actions: string[] = [];
-  const billable = validatedWorkerBilling(actions, (action) => {
-    if (action === "outline-suggestions") {
-      return { beats: { "beat-1": [weakSection("beat-1", "Opening")], "beat-2": [weakSection("beat-2", "The Aftermath")] } };
-    }
-    if (action === "outline-semantic-repair-beat-2-resolution") {
-      if (repairMode === "throw") throw new Error("creative repair unavailable");
-      if (repairMode === "invalid") return { section: { title: "Invalid repair" } };
-      return { section: weakSection("beat-2", "The Aftermath") };
-    }
-    return { suggestions: [] };
-  });
-  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
-    db,
-    model: { provider_model: "fixture-model" },
-    provider: {},
-    creditStore: {},
-    billableLLM: billable as any,
-    scheduleContinuation: async () => {},
-  });
-  return { db, actions, run, weakSection };
-}
-
-Deno.test("failed story-quality repair preserves the validated outline and surfaces a warning", async () => {
-  const fixture = await weakResolutionWorkerFixture("throw");
-  await fixture.run();
-  await fixture.run();
-  assertEquals(fixture.db.row.status, "completed");
-  assertEquals(fixture.actions, ["outline-suggestions", "outline-semantic-repair-beat-2-resolution"]);
-  assertEquals(fixture.db.row.suggestions.map((section: any) => section.title), ["Opening", "The Aftermath"]);
-  assertEquals(fixture.db.row.diagnostics.semanticArcUnresolvedSections, ["The Aftermath"]);
-  assertEquals(fixture.db.row.warnings.some((warning: string) => warning.includes("Story Arc quality concern remains for review")), true);
-});
-
-Deno.test("invalid Story Arc repair preserves the last validated sections and warns once", async () => {
-  const fixture = await weakResolutionWorkerFixture("invalid");
-  await fixture.run();
-  await fixture.run();
-  assertEquals(fixture.db.row.status, "completed");
-  assertEquals(fixture.db.row.suggestions.map((section: any) => section.title), ["Opening", "The Aftermath"]);
-  assertEquals(fixture.actions, ["outline-suggestions", "outline-semantic-repair-beat-2-resolution"]);
-  assertEquals(fixture.db.row.warnings.filter((warning: string) => warning.includes("Story Arc quality concern remains for review")).length, 1);
-});
-
-Deno.test("an unresolved bounded story-quality repair completes with the best valid version", async () => {
-  const fixture = await weakResolutionWorkerFixture("unresolved");
-  await fixture.run();
-  await fixture.run();
-  assertEquals(fixture.db.row.status, "completed");
-  assertEquals(fixture.db.row.suggestions.map((section: any) => section.title), ["Opening", "The Aftermath"]);
-  assertEquals(fixture.db.row.warnings.some((warning: string) => warning.includes("Story Arc quality concern remains for review")), true);
-  assertEquals(fixture.actions, ["outline-suggestions", "outline-semantic-repair-beat-2-resolution"]);
-});
-
 Deno.test("weak resolution is repaired before optional expansion", async () => {
   const fullBody = await executableWorkerBody();
   const novelMaterial = attachRecipeProvenance({
@@ -4994,7 +4909,6 @@ Deno.test("weak resolution is repaired before optional expansion", async () => {
   assertEquals(db.row.status, "completed");
   assertEquals(db.row.suggestions.some((section: any) => section.title === "The Settled Cost"), true);
   assertEquals(db.row.diagnostics.semanticArcIssues, []);
-  assertEquals(db.row.warnings, []);
   assertEquals(actions.some((action) => action.startsWith("outline-expansion-")), false);
 });
 
@@ -5263,7 +5177,6 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
   });
   await initialRun();
   await initialRun();
-  initialDB.row.diagnostics.semanticArcIssues = ["historical issue resolved by later expansion"];
   await initialRun();
   await initialRun();
   assertEquals(initialDB.row.status, "completed");
@@ -5276,7 +5189,6 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
   ]);
   assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global", "outline-expansion-2-global"]);
   assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("Optional novel expansion did not finish")), true);
-  assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("historical issue resolved by later expansion")), false);
 
   const completedRound = {
     round: 1,
@@ -5360,50 +5272,6 @@ Deno.test("production checkpoint resume executes the single global outline call 
   assertEquals(scheduled.length, 1);
 });
 
-Deno.test("composition failure after validation completes with the generated outline unchanged", async () => {
-  const body = await executableWorkerBody() as any;
-  body.existingSections = [{
-    title: "Accepted section", summary: "Accepted summary", container: "scene", storyArcBeatID: "beat-1", recipeRequirementIDs: [],
-  }] as any;
-  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
-  const actions: string[] = [];
-  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
-    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
-    billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
-  });
-  await run();
-  const expectedSuggestions = structuredClone(db.row.suggestions);
-  Object.defineProperty(body.existingSections[0], "title", { configurable: true, get: () => { throw new Error("simulated final quality composition failure"); } });
-  await run();
-  assertEquals(db.row.status, "completed");
-  assertEquals(db.row.suggestions, expectedSuggestions);
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
-  assertEquals(typeof db.row.diagnostics.finalAdvisoryQuality.advisoryValidationError, "string");
-  assertEquals(db.row.warnings.some((warning: string) => warning.includes("Final advisory quality validation was unavailable")), true);
-});
-
-Deno.test("advisory validator failure completes without another provider call", async () => {
-  const body = await executableWorkerBody() as any;
-  body.existingSections = [
-    { title: "Accepted one", summary: "Accepted summary one", container: "scene", storyArcBeatID: "beat-1", recipeRequirementIDs: [] },
-    { title: "Accepted two", summary: "Accepted summary two", container: "scene", storyArcBeatID: "beat-1", recipeRequirementIDs: [] },
-  ] as any;
-  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
-  const actions: string[] = [];
-  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
-    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
-    billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
-  });
-  await run();
-  const expectedSuggestions = structuredClone(db.row.suggestions);
-  await run();
-  assertEquals(db.row.status, "completed");
-  assertEquals(db.row.suggestions, expectedSuggestions);
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
-  assertEquals(typeof db.row.diagnostics.finalAdvisoryQuality.advisoryValidationError, "string");
-  assertEquals(db.row.warnings.some((warning: string) => warning.includes("Final advisory quality validation was unavailable")), true);
-});
-
 Deno.test("global outline completion preserves advisory quality and obligation audit diagnostics", async () => {
   const body = await executableWorkerBody();
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
@@ -5431,90 +5299,8 @@ Deno.test("global outline completion preserves advisory quality and obligation a
   assertEquals("advisoryValidationError" in diagnostics, false);
   assertEquals(typeof diagnostics.recipeObligationCoverage, "object");
   assertEquals(diagnostics.missingRequiredRecipeObligations, []);
-  assertEquals(db.row.warnings, diagnostics.semanticArcIssues.map((issue: string) => `Story Arc quality concern remains for review: ${issue}`));
 });
 
-
-const finalQualityTestTemplate = {
-  name: "Save the Cat!",
-  beats: [
-    { id: "setup", role: "opening_image", label: "Opening Image", description: "" },
-    { id: "final", role: "final_image", label: "Final Image", description: "" },
-  ],
-};
-
-const finalQualityTestSection = (beatID: string, title: string, dramaticFunction: string, resultingChange: string, terminalState: string) => ({
-  title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`,
-  storyArcBeatID: beatID, dramaticFunction, recipeRequirementIDs: [], entryState: "The prior state holds.",
-  dramaticEvent: `${title} happens.`, resultingChange, terminalState,
-});
-
-Deno.test("final quality includes legacy accepted sections without semantic metadata", () => {
-  const { dramaticFunction: _dramaticFunction, ...acceptedResolution } = finalQualityTestSection("final", "Accepted resolution", "resolution", "The central conflict is resolved and the cost is accepted.", "The new normal holds without the former conflict continuing.");
-  const generatedSetup = finalQualityTestSection("setup", "New setup", "setup", "The pressure changes.", "The next pressure begins.");
-  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedSetup as any]);
-  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, new Map([["setup", { minSections: 1, rationale: "test" }], ["final", { minSections: 0, rationale: "accepted coverage" }]]) as any, new Set([acceptedResolution as any]));
-  assertEquals(complete.map((section) => section.title), ["New setup", "Accepted resolution"]);
-  assertEquals(quality.semanticArcIssues, []);
-});
-
-Deno.test("mixed legacy accepted resolution and generated aftermath remain unverifiable, not missing", () => {
-  const { dramaticFunction: _dramaticFunction, ...acceptedResolution } = finalQualityTestSection("final", "Accepted narrative resolution", "resolution", "The central conflict is resolved.", "The new normal holds.");
-  const generatedAftermath = finalQualityTestSection("final", "Generated aftermath", "aftermath", "The residue continues.", "The new normal holds.");
-  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedAftermath as any]);
-  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, undefined, new Set([acceptedResolution as any]));
-  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("missing required dramatic function resolution")), false);
-});
-
-Deno.test("mixed legacy accepted section does not hide a generated weak resolution", () => {
-  const { dramaticFunction: _dramaticFunction, ...acceptedResolution } = finalQualityTestSection("final", "Accepted narrative resolution", "resolution", "The central conflict is resolved.", "The new normal holds.");
-  const generatedResolution = finalQualityTestSection("final", "Generated weak resolution", "resolution", "The survivors mourn what was lost.", "The former conflict remains unresolved.");
-  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedResolution as any]);
-  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, undefined, new Set([acceptedResolution as any]));
-  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("does not materially resolve")), true);
-});
-
-Deno.test("mixed legacy accepted section does not hide an incompatible generated function", () => {
-  const { dramaticFunction: _dramaticFunction, ...acceptedResolution } = finalQualityTestSection("final", "Accepted narrative resolution", "resolution", "The central conflict is resolved.", "The new normal holds.");
-  const generatedSetup = finalQualityTestSection("final", "Generated incompatible setup", "setup", "A new setup event.", "The setup continues.");
-  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedSetup as any]);
-  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, undefined, new Set([acceptedResolution as any]));
-  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("declares setup, not allowed")), true);
-});
-
-Deno.test("mixed legacy accepted section leaves authored obligation status unverifiable", () => {
-  const template = { ...finalQualityTestTemplate, beats: finalQualityTestTemplate.beats.map((beat) => beat.id === "final" ? { ...beat, description: "Settle the central conflict on the page." } : beat) };
-  const { dramaticFunction: _dramaticFunction, ...acceptedResolution } = finalQualityTestSection("final", "Accepted narrative resolution", "resolution", "The central conflict is resolved.", "The new normal holds.");
-  const generatedAftermath = finalQualityTestSection("final", "Generated aftermath", "aftermath", "The residue continues.", "The new normal holds.");
-  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedAftermath as any]);
-  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", template as any, undefined, new Set([acceptedResolution as any]));
-  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("missing semantic obligation")), false);
-});
-
-Deno.test("final quality still reports a truly missing Story Arc requirement", () => {
-  const generatedSetup = finalQualityTestSection("setup", "New setup", "setup", "The pressure changes.", "The next pressure begins.");
-  const complete = composeFinalQualitySuggestions(["setup", "final"], [], [generatedSetup as any]);
-  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, new Map([["setup", { minSections: 1, rationale: "test" }], ["final", { minSections: 0, rationale: "test" }]]) as any);
-  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("final") && issue.includes("resolution")), true);
-});
-
-Deno.test("final quality composition does not double-count accepted sections", () => {
-  const acceptedResolution = finalQualityTestSection("final", "Accepted resolution", "resolution", "The central conflict is resolved.", "The new normal holds.");
-  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [acceptedResolution as any]);
-  assertEquals(complete.length, 1);
-  assertEquals(complete[0], acceptedResolution as any);
-});
-
-Deno.test("final advisory validator failure remains best-effort", () => {
-  const body = executableWorkerRecipe();
-  const quality = collectAdvisoryOutlineQuality(
-    [],
-    { ...repairStoryMaterialFromRecipe(body as any, { sourceRecipeHash: "validator-failure", sourceRecipeVersion: 1, sourcePromptPackID: "validator-failure", sourcePromptPackName: "validator failure" }, "shortStory"), characters: null } as any,
-    "shortStory",
-    { name: "Worker Arc", beats: [{ id: "beat-1", role: "setup", label: "Setup" }] },
-  );
-  assertEquals(typeof quality.advisoryValidationError, "string");
-});
 
 Deno.test("required-obligation repair prompt and validator preserve the contract", () => {
   const obligations = deriveRecipeObligations(sparseRequest.recipe as any);
