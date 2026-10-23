@@ -3089,6 +3089,19 @@ export function mergeSuggestionsByBeatOrder(
   });
 }
 
+export function composeFinalQualitySuggestions(
+  beatOrder: string[],
+  existingSections: Suggestion[],
+  generatedSections: Suggestion[],
+): Suggestion[] {
+  const beatIDs = new Set(beatOrder);
+  const existingBeatSections = existingSections.filter((section) => beatIDs.has(section.storyArcBeatID));
+  // Free-form accepted sections have no canonical Story Arc beat and cannot
+  // satisfy a beat-scoped requirement. Keep them out of this validator input;
+  // they remain untouched and are still excluded from the returned delta.
+  return mergeSuggestionsByBeatOrder(beatOrder, existingBeatSections, generatedSections, true);
+}
+
 export function mergeRepairedSuggestions(
   beatOrder: string[],
   beatIds: Set<string>,
@@ -5522,8 +5535,13 @@ export async function runSuggestionJob(
         await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
         throw new SuggestionWorkerYield();
       }
-      const finalQuality = collectAdvisoryOutlineQuality(
+      const finalQualitySuggestions = composeFinalQualitySuggestions(
+        body.arcTemplate.beats.map((beat) => beat.id),
+        (body.existingSections ?? []) as unknown as Suggestion[],
         completedSuggestions,
+      );
+      const finalQuality = collectAdvisoryOutlineQuality(
+        finalQualitySuggestions,
         body.storyMaterialEnrichment,
         requestedStoryMaterialFormat(body),
         body.arcTemplate,

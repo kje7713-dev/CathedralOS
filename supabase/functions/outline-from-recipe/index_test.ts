@@ -63,6 +63,7 @@ import {
   parseExpansionResponse,
   validateExpansionAdditions,
   mergeRepairedSuggestions,
+  composeFinalQualitySuggestions,
   mergeExpansionAdditions,
   evaluateNovelScale,
   needsNovelExpansion,
@@ -5389,6 +5390,43 @@ Deno.test("global outline completion preserves advisory quality and obligation a
   assertEquals(db.row.warnings, diagnostics.semanticArcIssues.map((issue: string) => `Story Arc quality concern remains for review: ${issue}`));
 });
 
+
+const finalQualityTestTemplate = {
+  name: "Save the Cat!",
+  beats: [
+    { id: "setup", role: "opening_image", label: "Opening Image", description: "" },
+    { id: "final", role: "final_image", label: "Final Image", description: "" },
+  ],
+};
+
+const finalQualityTestSection = (beatID: string, title: string, dramaticFunction: string, resultingChange: string, terminalState: string) => ({
+  title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`,
+  storyArcBeatID: beatID, dramaticFunction, recipeRequirementIDs: [], entryState: "The prior state holds.",
+  dramaticEvent: `${title} happens.`, resultingChange, terminalState,
+});
+
+Deno.test("final quality includes accepted sections for required Story Arc functions", () => {
+  const acceptedResolution = finalQualityTestSection("final", "Accepted resolution", "resolution", "The central conflict is resolved and the cost is accepted.", "The new normal holds without the former conflict continuing.");
+  const generatedSetup = finalQualityTestSection("setup", "New setup", "setup", "The pressure changes.", "The next pressure begins.");
+  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedSetup as any]);
+  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, new Map([["setup", { minSections: 1, rationale: "test" }], ["final", { minSections: 0, rationale: "accepted coverage" }]]) as any);
+  assertEquals(complete.map((section) => section.title), ["New setup", "Accepted resolution"]);
+  assertEquals(quality.semanticArcIssues, []);
+});
+
+Deno.test("final quality still reports a truly missing Story Arc requirement", () => {
+  const generatedSetup = finalQualityTestSection("setup", "New setup", "setup", "The pressure changes.", "The next pressure begins.");
+  const complete = composeFinalQualitySuggestions(["setup", "final"], [], [generatedSetup as any]);
+  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, new Map([["setup", { minSections: 1, rationale: "test" }], ["final", { minSections: 0, rationale: "test" }]]) as any);
+  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("final") && issue.includes("resolution")), true);
+});
+
+Deno.test("final quality composition does not double-count accepted sections", () => {
+  const acceptedResolution = finalQualityTestSection("final", "Accepted resolution", "resolution", "The central conflict is resolved.", "The new normal holds.");
+  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [acceptedResolution as any]);
+  assertEquals(complete.length, 1);
+  assertEquals(complete[0], acceptedResolution as any);
+});
 
 Deno.test("final advisory validator failure remains best-effort", () => {
   const body = executableWorkerRecipe();
