@@ -80,6 +80,30 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
         )
     }
 
+    func testEmptyPaidInsufficientCreditCheckpointIsRecoverable() {
+        let paused = OutlineSuggestionJob(
+            runID: "paused-run",
+            status: "failed",
+            suggestions: [],
+            warnings: nil,
+            error: "Billable LLM call requires ~46.38 credits",
+            errorCode: "insufficient_credits",
+            sourceRecipe: nil,
+            creditCostCharged: 2.5713,
+            remainingCredits: 17.872804,
+            diagnostics: nil,
+            planningState: ["nextAction": .string("outline-suggestions")],
+            attemptCount: 0,
+            updatedAt: nil,
+            leaseExpiresAt: nil
+        )
+
+        XCTAssertTrue(
+            DataDurabilityCoordinator.hasRecoverableSuggestionCheckpoint(paused),
+            "A paid checkpoint can be resumable even before the first outline section exists"
+        )
+    }
+
     func testPaidFailedSuggestionKeepsOriginalCheckpointRecoverable() {
         let suggestion = OutlineSuggestion(
             title: "Persisted section",

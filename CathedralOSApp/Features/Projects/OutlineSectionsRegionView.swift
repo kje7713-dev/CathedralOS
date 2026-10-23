@@ -907,9 +907,26 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 projectID: projectID,
                 idempotencyKey: request.idempotencyKey
             ),
-            (job.status == "completed" || DataDurabilityCoordinator.hasPaidSavedSuggestionWork(job)),
-            let suggestions = job.suggestions, !suggestions.isEmpty,
+            (job.status == "completed" ||
+                DataDurabilityCoordinator.hasPaidSavedSuggestionWork(job) ||
+                DataDurabilityCoordinator.hasRecoverableSuggestionCheckpoint(job)),
             let sourceRecipe = job.sourceRecipe else {
+                recoverableSuggestions = nil
+                return
+            }
+            let suggestions = job.suggestions ?? []
+            if suggestions.isEmpty,
+               DataDurabilityCoordinator.hasRecoverableSuggestionCheckpoint(job) {
+                // A later billable stage can pause after enrichment/allocation
+                // have been charged but before any outline sections exist.
+                // Keep the checkpoint visible after relaunch so the user can
+                // add credits and resume the same idempotent run.
+                recoverableSuggestionFailureCode = job.errorCode
+                suggestionsFeedback = "This outline run paused because the next stage needs more credits. Add credits, then tap Resume After Adding Credits. Completed stages will not be repeated or charged again."
+                recoverableSuggestions = nil
+                return
+            }
+            guard !suggestions.isEmpty else {
                 recoverableSuggestions = nil
                 return
             }
