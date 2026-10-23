@@ -1597,11 +1597,10 @@ Deno.test("beat-local expansion visits canonical beats and isolates additions", 
   );
   assertEquals(calls, [
     { beatID: "beat-1", currentSections: 56 },
-    { beatID: "beat-2", currentSections: 55 },
   ]);
-  assertEquals(result.suggestions.length, 115);
+  assertEquals(result.suggestions.length, 113);
   assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-1").length, 58);
-  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-2").length, 57);
+  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-2").length, 55);
 });
 
 Deno.test("beat-local expansion rejects additions assigned to another beat", async () => {
@@ -5213,8 +5212,8 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
     "Checkpoint chapter 27",
     firstPass[24].title,
   ]);
-  assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global", "outline-expansion-2-global"]);
-  assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("Optional novel expansion did not finish")), true);
+  assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global"]);
+  assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("Optional novel expansion did not finish")), false);
 
   const completedRound = {
     round: 1,
@@ -5273,7 +5272,7 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
   assertEquals(resumedDB.row.status, "completed");
   assertEquals(resumedDB.row.suggestions, initialDB.row.suggestions);
   assertEquals(resumedDB.row.warnings, initialDB.row.warnings);
-  assertEquals(resumedActions, ["outline-expansion-2-global"]);
+  assertEquals(resumedActions, []);
 });
 
 Deno.test("production checkpoint resume executes the single global outline call once", async () => {
