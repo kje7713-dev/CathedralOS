@@ -1076,7 +1076,7 @@ export function buildEnrichmentPrompt(
     ? `\n\nThe previous enrichment package was rejected: ${repairReason}. Return one corrected complete enrichment package.`
     : "";
   return {
-    system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Preserve the defining traits, behaviors, and conflicts explicitly stated in the author's premise. Treat them as creative commitments, not optional inspiration. Invent supporting material that develops those elements rather than explaining them away, softening them, or replacing them with a different central conflict. Ensure the antagonist, escalation ladder, and major reversals materially demonstrate the original premise through concrete story events, not just descriptions or rationale. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
+    system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. For a novel, develop enough interconnected conflict and opposition, escalation and reversals, character and relationship development, consequences and discoveries, and meaningful tactical and emotional state changes to support the approximately 115,000-word planning target. Do not chase that target with filler, fixed item counts, or unrelated subplots; prioritize substantive connected story material and let the outline planner determine its natural distribution. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Preserve the defining traits, behaviors, and conflicts explicitly stated in the author's premise. Treat them as creative commitments, not optional inspiration. Invent supporting material that develops those elements rather than explaining them away, softening them, or replacing them with a different central conflict. Ensure the antagonist, escalation ladder, and major reversals materially demonstrate the original premise through concrete story events, not just descriptions or rationale. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
     user: JSON.stringify({
       recipe: req.recipe,
       recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)),
@@ -2928,10 +2928,9 @@ export class AllocationBudgetConstraintError extends Error {
 }
 
 // Novel scale is evaluated using the midpoint of a container's literary
-// range, not its floor. Budgeting against only the chapter minimum lets a
-// Chapter minimums provide the conservative section-count budget; the final
-// projected-token evaluator still enforces the 125,000-word hard cap.
-const PROJECTED_CHAPTER_MIN_TOKENS = CONTAINER_EXPECTED_RANGES.chapter[0];
+// range, not its floor. Allocation safety uses the same projection basis as
+// evaluateNovelScale so first-pass planning cannot exceed the final hard cap.
+const PROJECTED_CHAPTER_TOKENS = projectedExpectedTokens([{ container: "chapter" }]);
 
 export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): number {
   if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
@@ -2940,7 +2939,7 @@ export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): numbe
     0,
     Math.min(
       MAX_PLANNED_SECTIONS,
-      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / PROJECTED_CHAPTER_MIN_TOKENS),
+      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / PROJECTED_CHAPTER_TOKENS),
     ),
   );
 }
@@ -2949,48 +2948,6 @@ export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): numbe
  * novel cap mathematically impossible. Relative allocation priority is
  * preserved through largest-remainder scaling; later stages can still combine
  * events inside each fuller section. */
-export function fitAllocationToNovelTarget(
-  allocation: Map<string, Allocation>,
-  req: OutlineFromRecipeRequest,
-): Map<string, Allocation> {
-  if (requestedStoryMaterialFormat(req) !== "novel") return allocation;
-  const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
-  const target = Math.min(
-    maximumBudgetedNewSections(req),
-    Math.ceil(Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - existingTokens) / PROJECTED_CHAPTER_MIN_TOKENS),
-  );
-  const entries = Array.from(allocation.entries());
-  const total = entries.reduce((sum, [, plan]) => sum + plan.minSections, 0);
-  if (total >= target || entries.length === 0) return allocation;
-  const weights = entries.map(([beatID, plan]) => ({
-    beatID,
-    plan,
-    raw: Math.max(1, plan.minSections),
-  }));
-  const weightTotal = weights.reduce((sum, item) => sum + item.raw, 0);
-  const additions = target - total;
-  const scaled = weights.map((item) => {
-    const exact = additions * item.raw / weightTotal;
-    return { ...item, value: item.plan.minSections + Math.floor(exact), fraction: exact - Math.floor(exact) };
-  });
-  let assigned = scaled.reduce((sum, item) => sum + item.value, 0);
-  for (const item of [...scaled].sort((left, right) => right.fraction - left.fraction)) {
-    if (assigned >= target) break;
-    item.value++;
-    assigned++;
-  }
-  const byBeat = new Map(scaled.map((item) => [item.beatID, item]));
-  return new Map(entries.map(([beatID, plan]) => {
-    const scaledPlan = byBeat.get(beatID)!;
-    if (scaledPlan.value === plan.minSections) return [beatID, plan];
-    return [beatID, {
-      ...plan,
-      minSections: scaledPlan.value,
-      rationale: `${plan.rationale} Server-normalized to the novel's ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target before generation.`,
-    }];
-  }));
-}
-
 export function fitAllocationToNovelBudget(
   allocation: Map<string, Allocation>,
   req: OutlineFromRecipeRequest,
@@ -3214,7 +3171,7 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan toward 115,000 words, with a 115,000-word minimum and a 125,000-word hard cap when sections generate near their expected literary ranges; a fresh novel must be allocated enough distinct sections to project to approximately 115,000 words before generation; this is a server-normalized planning target, not a user-visible failure condition. Treat 125,000 words as an absolute ceiling, not a normal target. This is a budget constraint, not permission to add sections indefinitely. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes. The server budget for NEW sections in this request is at most ${maxBudgetedSections}; the sum of all minSections values must fit inside that budget. Combine related events within a section instead of creating an allocation floor that would exceed it.
+This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 115,000 projected words while staying below the 125,000-word maximum. Use the midpoint projection of each supported container, including 5,500 tokens for a chapter, as the authoritative planning estimate. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat, and the projected contribution of existing sections. Distribute distinct, substantial chapter-scale units according to the narrative material each movement requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. The server budget for NEW sections in this request is at most ${maxBudgetedSections}; the sum of all minSections values must fit inside that budget. Treat 125,000 words as an absolute ceiling, not a normal target.
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
@@ -3222,7 +3179,7 @@ Treat the supplied recipe as the governing creative brief. Required obligations 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
 
-For every Story Arc beat, determine the minimum number of NEW dramatic sections still required to adequately realize that movement in a novel after considering the supplied existingSections. Output exactly one allocation for every beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. minSections represents the number of additional sections still required beyond existingSections — it is a floor, not a target or maximum. The later outline generator may create additional sections whenever the material supports them. A beat sufficiently covered by existing sections may use minSections 0 (existing coverage is already accounted for; do not include it in minSections). Do not output any other root key.
+Output exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Do not output any other root key.
 
 Output JSON only. No commentary, no prose.`;
 
@@ -3248,7 +3205,7 @@ Output JSON only. No commentary, no prose.`;
     planningContext: planningView,
     existingSectionsByBeat,
     existingUnlinkedSections,
-    allocation: "Return one minimum-only floor per canonical beat; additional sections remain legal.",
+    allocation: "For a fresh novel, return the complete first-pass allocation; with existing sections, return only the residual new allocation per beat.",
     hint: req.hint ?? null,
   }, null, 2);
   return { system, user };
@@ -6086,7 +6043,6 @@ export async function runSuggestionJob(
         }
         throw error;
       }
-      allocation = fitAllocationToNovelTarget(allocation, body);
       planningState = {
         ...planningState,
         phase: "allocation_complete",

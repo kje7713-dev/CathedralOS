@@ -38,7 +38,6 @@ import {
   buildExpansionPrompt,
   isRetryableInsufficientCreditFailure,
   fitAllocationToNovelBudget,
-  fitAllocationToNovelTarget,
   maximumBudgetedNewSections,
   allocationDeficits,
   allocationShortfalls,
@@ -383,7 +382,7 @@ Deno.test("existing accepted sections satisfy obligation coverage", () => {
 Deno.test("planner prompt passes empty existingSectionsByBeat when no existing sections", () => {
   const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [] } as any);
   assertEquals(
-    system.includes("minSections represents the number of additional sections still required beyond existingSections"),
+    system.includes("minSections is only the additional sections still required"),
     true,
     "planner prompt must explicitly state the residual-count contract",
   );
@@ -431,21 +430,20 @@ Deno.test("allocator floors are scaled to the novel word budget", () => {
   const total = Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0);
   assertEquals(total <= maximumBudgetedNewSections(req), true);
   assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
-  assertEquals(maximumBudgetedNewSections(req), 54);
+  assertEquals(maximumBudgetedNewSections(req), 29);
 });
 
-Deno.test("novel allocation is normalized toward the preferred word target", () => {
+Deno.test("novel allocation budget uses the same chapter midpoint as scale validation", () => {
   const req = { ...sparseRequest, requestedFormat: "novel" } as any;
-  const allocation = new Map([
-    ["beat-1", { minSections: 3, rationale: "opening" }],
-    ["beat-2", { minSections: 3, rationale: "escalation" }],
-  ]);
-  const normalized = fitAllocationToNovelTarget(allocation, req);
-  const total = Array.from(normalized.values()).reduce((sum, plan) => sum + plan.minSections, 0);
-  assertEquals(total, 50);
-  assertEquals(normalized.get("beat-1")?.minSections, 25);
-  assertEquals(normalized.get("beat-2")?.minSections, 25);
-  assertStringIncludes(normalized.get("beat-1")?.rationale ?? "", "115,000");
+  const chapterTokens = projectedExpectedTokens([{ container: "chapter" }]);
+  assertEquals(chapterTokens, 5500);
+  assertEquals(maximumBudgetedNewSections(req), Math.floor(125000 * 1.3 / chapterTokens));
+  const scale = evaluateNovelScale(
+    Array.from({ length: 28 }, () => ({ container: "chapter" })),
+  );
+  assertEquals(Math.round(scale.projectedWords), 118462);
+  assertEquals(scale.meetsPreferredMinimum, true);
+  assertEquals(scale.exceedsMaximum, false);
 });
 
 Deno.test("budget normalization preserves one-section coverage per uncovered beat", () => {
@@ -520,7 +518,7 @@ Deno.test("planner prompt groups one existing section onto its linked beat", () 
   const section = { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] };
   const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [section] } as any);
   assertEquals(
-    system.includes("existing coverage is already accounted for; do not include it in minSections"),
+    system.includes("when accepted sections already contribute to a beat, minSections is only the additional sections still required"),
     true,
     "planner prompt must instruct planner NOT to count existing coverage in minSections",
   );
@@ -535,7 +533,7 @@ Deno.test("planner prompt groups two existing sections onto the same beat", () =
   const s2 = { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R2"] };
   const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [s1, s2] } as any);
   assertEquals(
-    system.includes("minSections represents the number of additional sections still required beyond existingSections"),
+    system.includes("minSections is only the additional sections still required"),
     true,
   );
   const parsed: any = JSON.parse(user);
@@ -551,7 +549,7 @@ Deno.test("planner prompt groups mixed beats with different existing coverage pl
   const s4 = { storyArcBeatID: "beat-unknown" }; // unlinked to the arc template
   const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [s1, s2, s3, s4] } as any);
   assertEquals(
-    system.includes("minSections represents the number of additional sections still required beyond existingSections"),
+    system.includes("minSections is only the additional sections still required"),
     true,
   );
   const parsed: any = JSON.parse(user);
@@ -795,7 +793,7 @@ Deno.test("sparse recipe context is preserved for the single comprehensive outli
   assertEquals(user.includes("Douche"), true);
   assertEquals(system.includes("30-60"), false);
   assertEquals(system.includes("5-15"), false);
-  assertEquals(plannerPrompt.system.includes("minSections represents the number of additional sections still required beyond existingSections"), true);
+  assertEquals(plannerPrompt.system.includes("minSections is only the additional sections still required"), true);
   assertEquals(system.includes("minimum is a floor for dramatic coverage, not a target or maximum"), false);
   assertEquals(system.includes("targetSections"), false);
   assertEquals(system.includes("maxSections"), false);
@@ -1382,11 +1380,14 @@ Deno.test("outline section contract assigns canonical plot decisions to the plan
 Deno.test("novel planning exposes container semantics and projected-size expansion", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
-  assertEquals(allocationPrompt.includes("plan toward 115,000 words"), true);
-  assertEquals(allocationPrompt.includes("minimum number of NEW dramatic sections still required"), true);
-  assertEquals(allocationPrompt.includes("floor, not a target or maximum"), true);
+  assertEquals(allocationPrompt.includes("complete first-pass book at approximately 115,000 projected words"), true);
+  assertEquals(allocationPrompt.includes("midpoint projection of each supported container"), true);
+  assertEquals(allocationPrompt.includes("minSections is the intended complete first-pass allocation"), true);
+  assertEquals(allocationPrompt.includes("a beat with sufficient existing coverage must remain at 0"), true);
+  assertEquals(allocationPrompt.includes("Do not add sections to a sufficiently covered beat"), true);
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);
+  assertEquals(source.includes("fitAllocationToNovelTarget"), false);
   assertEquals(source.includes("promptLimit"), false);
   assertEquals(source.includes("assertPromptWithinBudget"), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
@@ -2749,6 +2750,9 @@ Deno.test("story material enrichment validates provenance and remains inspectabl
 Deno.test("enrichment prompt preserves sparse recipe facts and separates planner invention", () => {
   const prompt = buildEnrichmentPrompt(sparseRequest as any);
   assertEquals(prompt.system.includes("preserve, connect, and deepen supplied material"), true);
+  assertEquals(prompt.system.includes("support the approximately 115,000-word planning target"), true);
+  assertEquals(prompt.system.includes("conflict and opposition, escalation and reversals, character and relationship development"), true);
+  assertEquals(prompt.system.includes("Do not chase that target with filler, fixed item counts, or unrelated subplots"), true);
   assertEquals(prompt.system.includes("source=recipe"), false);
   assertEquals(prompt.system.includes("source=planner"), true);
   assertEquals(prompt.user.includes("Monsters kill humans"), true);
