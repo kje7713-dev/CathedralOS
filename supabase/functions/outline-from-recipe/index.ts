@@ -2929,9 +2929,9 @@ export class AllocationBudgetConstraintError extends Error {
 
 // Novel scale is evaluated using the midpoint of a container's literary
 // range, not its floor. Budgeting against only the chapter minimum lets a
-// 52-section allocation pass preflight while the same sections project well
-// above the 125,000-word hard cap.
-const PROJECTED_CHAPTER_TOKENS = projectedExpectedTokens([{ container: "chapter" }]);
+// Chapter minimums provide the conservative section-count budget; the final
+// projected-token evaluator still enforces the 125,000-word hard cap.
+const PROJECTED_CHAPTER_MIN_TOKENS = CONTAINER_EXPECTED_RANGES.chapter[0];
 
 export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): number {
   if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
@@ -2940,7 +2940,7 @@ export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): numbe
     0,
     Math.min(
       MAX_PLANNED_SECTIONS,
-      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / PROJECTED_CHAPTER_TOKENS),
+      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / PROJECTED_CHAPTER_MIN_TOKENS),
     ),
   );
 }
@@ -2949,6 +2949,48 @@ export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): numbe
  * novel cap mathematically impossible. Relative allocation priority is
  * preserved through largest-remainder scaling; later stages can still combine
  * events inside each fuller section. */
+export function fitAllocationToNovelTarget(
+  allocation: Map<string, Allocation>,
+  req: OutlineFromRecipeRequest,
+): Map<string, Allocation> {
+  if (requestedStoryMaterialFormat(req) !== "novel") return allocation;
+  const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
+  const target = Math.min(
+    maximumBudgetedNewSections(req),
+    Math.ceil(Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - existingTokens) / PROJECTED_CHAPTER_MIN_TOKENS),
+  );
+  const entries = Array.from(allocation.entries());
+  const total = entries.reduce((sum, [, plan]) => sum + plan.minSections, 0);
+  if (total >= target || entries.length === 0) return allocation;
+  const weights = entries.map(([beatID, plan]) => ({
+    beatID,
+    plan,
+    raw: Math.max(1, plan.minSections),
+  }));
+  const weightTotal = weights.reduce((sum, item) => sum + item.raw, 0);
+  const additions = target - total;
+  const scaled = weights.map((item) => {
+    const exact = additions * item.raw / weightTotal;
+    return { ...item, value: item.plan.minSections + Math.floor(exact), fraction: exact - Math.floor(exact) };
+  });
+  let assigned = scaled.reduce((sum, item) => sum + item.value, 0);
+  for (const item of [...scaled].sort((left, right) => right.fraction - left.fraction)) {
+    if (assigned >= target) break;
+    item.value++;
+    assigned++;
+  }
+  const byBeat = new Map(scaled.map((item) => [item.beatID, item]));
+  return new Map(entries.map(([beatID, plan]) => {
+    const scaledPlan = byBeat.get(beatID)!;
+    if (scaledPlan.value === plan.minSections) return [beatID, plan];
+    return [beatID, {
+      ...plan,
+      minSections: scaledPlan.value,
+      rationale: `${plan.rationale} Server-normalized to the novel's ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target before generation.`,
+    }];
+  }));
+}
+
 export function fitAllocationToNovelBudget(
   allocation: Map<string, Allocation>,
   req: OutlineFromRecipeRequest,
@@ -3172,7 +3214,7 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan toward 115,000 words, with a 115,000-word minimum and a 125,000-word hard cap when sections generate near their expected literary ranges; a fresh novel must reach the approximately 115,000-word preferred planning floor before completion. Treat 125,000 words as an absolute ceiling, not a normal target. This is a budget constraint, not permission to add sections indefinitely. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes. The server budget for NEW sections in this request is at most ${maxBudgetedSections}; the sum of all minSections values must fit inside that budget. Combine related events within a section instead of creating an allocation floor that would exceed it.
+This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan toward 115,000 words, with a 115,000-word minimum and a 125,000-word hard cap when sections generate near their expected literary ranges; a fresh novel must be allocated enough distinct sections to project to approximately 115,000 words before generation; this is a server-normalized planning target, not a user-visible failure condition. Treat 125,000 words as an absolute ceiling, not a normal target. This is a budget constraint, not permission to add sections indefinitely. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes. The server budget for NEW sections in this request is at most ${maxBudgetedSections}; the sum of all minSections values must fit inside that budget. Combine related events within a section instead of creating an allocation floor that would exceed it.
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
@@ -5442,6 +5484,7 @@ export async function runSuggestionJob(
     const completeValidatedOutline = async (
       completedSuggestions: Suggestion[],
       completionWarnings: string[],
+      allowUnderTarget = false,
     ) => {
       const finalCoverage = obligationCoverage([...(body.existingSections ?? []), ...completedSuggestions], recipeObligations);
       diagnostics = {
@@ -5453,11 +5496,14 @@ export async function runSuggestionJob(
         throw new RecipeObligationValidationError(`missing_recipe_obligations: ${finalCoverage.missingRequired.map((obligation) => obligation.id).join(", ")}`);
       }
       const finalScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
-      if (requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsMinimum) {
+      if (requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsMinimum && !allowUnderTarget) {
         throw new NovelScalePlanningError(
           "failed_under_target",
           "outline expansion did not reach plausible novel scale",
         );
+      }
+      if (requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsMinimum && allowUnderTarget) {
+        completionWarnings.push(`Novel outline is below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target; the usable outline was preserved.`);
       }
       if (requestedStoryMaterialFormat(body) === "novel" && finalScale.exceedsMaximum) {
         throw new NovelScalePlanningError(
@@ -5575,17 +5621,27 @@ export async function runSuggestionJob(
       );
       await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
       if (outlineNeedsExpansion) {
-        const expanded = await expandNovel(completedSuggestions, recipeObligations, 1, 0, []);
-        completedSuggestions = expanded.suggestions;
-        completionWarnings = [...completionWarnings, ...expanded.warnings];
-        diagnostics = {
-          ...diagnostics,
-          expansionRounds: expanded.diagnostics,
-          expansionCheckpoint: buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], expanded.diagnostics),
-          novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
-        };
+        try {
+          const expanded = await expandNovel(completedSuggestions, recipeObligations, 1, 0, []);
+          completedSuggestions = expanded.suggestions;
+          completionWarnings = [...completionWarnings, ...expanded.warnings];
+          diagnostics = {
+            ...diagnostics,
+            expansionRounds: expanded.diagnostics,
+            expansionCheckpoint: buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], expanded.diagnostics),
+            novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
+          };
+        } catch (error) {
+          if (!(error instanceof NovelScalePlanningError) || !["failed_expansion", "failed_under_target"].includes(error.code)) throw error;
+          completionWarnings.push(`Optional novel expansion did not finish; the usable outline was preserved below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target.`);
+          diagnostics = {
+            ...diagnostics,
+            expansionWarning: error.message,
+            novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
+          };
+        }
       }
-      await completeValidatedOutline(completedSuggestions, completionWarnings);
+      await completeValidatedOutline(completedSuggestions, completionWarnings, true);
     };
 
     if (!body.storyMaterialEnrichment && claimedRun.story_material) {
@@ -6030,6 +6086,7 @@ export async function runSuggestionJob(
         }
         throw error;
       }
+      allocation = fitAllocationToNovelTarget(allocation, body);
       planningState = {
         ...planningState,
         phase: "allocation_complete",

@@ -38,6 +38,7 @@ import {
   buildExpansionPrompt,
   isRetryableInsufficientCreditFailure,
   fitAllocationToNovelBudget,
+  fitAllocationToNovelTarget,
   maximumBudgetedNewSections,
   allocationDeficits,
   allocationShortfalls,
@@ -430,7 +431,21 @@ Deno.test("allocator floors are scaled to the novel word budget", () => {
   const total = Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0);
   assertEquals(total <= maximumBudgetedNewSections(req), true);
   assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
-  assertEquals(maximumBudgetedNewSections(req), 29);
+  assertEquals(maximumBudgetedNewSections(req), 54);
+});
+
+Deno.test("novel allocation is normalized toward the preferred word target", () => {
+  const req = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const allocation = new Map([
+    ["beat-1", { minSections: 3, rationale: "opening" }],
+    ["beat-2", { minSections: 3, rationale: "escalation" }],
+  ]);
+  const normalized = fitAllocationToNovelTarget(allocation, req);
+  const total = Array.from(normalized.values()).reduce((sum, plan) => sum + plan.minSections, 0);
+  assertEquals(total, 50);
+  assertEquals(normalized.get("beat-1")?.minSections, 25);
+  assertEquals(normalized.get("beat-2")?.minSections, 25);
+  assertStringIncludes(normalized.get("beat-1")?.rationale ?? "", "115,000");
 });
 
 Deno.test("budget normalization preserves one-section coverage per uncovered beat", () => {
@@ -458,7 +473,7 @@ Deno.test("budget normalization preserves one-section coverage per uncovered bea
 });
 
 Deno.test("budget normalization fails explicitly when uncovered beats cannot fit", () => {
-  const req = { ...sparseRequest, existingSections: Array.from({ length: 28 }, () => ({ container: "chapter" })) } as any;
+  const req = { ...sparseRequest, existingSections: Array.from({ length: 30 }, () => ({ container: "chapter" })) } as any;
   const allocation = new Map([
     ["beat-1", { minSections: 1, rationale: "opening" }],
     ["beat-2", { minSections: 1, rationale: "ending" }],
@@ -901,7 +916,7 @@ Deno.test("deterministic allocation budget constraints do not trigger a paid ret
   const req = {
     ...sparseRequest,
     requestedFormat: "novel",
-    existingSections: Array.from({ length: 28 }, () => ({ container: "chapter" })),
+    existingSections: Array.from({ length: 30 }, () => ({ container: "chapter" })),
   } as any;
   await assertRejects(
     () => planSectionAllocation(req, "test-key", (async () => {
