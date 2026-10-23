@@ -66,6 +66,7 @@ import {
   mergeExpansionAdditions,
   evaluateNovelScale,
   needsNovelExpansion,
+  NOVEL_EXPANSION_MIN_WORDS,
   buildExpansionCheckpoint,
   expansionResumeState,
   isRetryableExpansionFailure,
@@ -444,6 +445,31 @@ Deno.test("novel allocation budget uses the same chapter midpoint as scale valid
   assertEquals(Math.round(scale.projectedWords), 118462);
   assertEquals(scale.meetsPreferredMinimum, true);
   assertEquals(scale.exceedsMaximum, false);
+});
+
+Deno.test("2% novel tolerance skips length-only expansion without weakening the hard cap", async () => {
+  assertEquals(NOVEL_EXPANSION_MIN_WORDS, 112700);
+  const nearTarget = Array.from({ length: 27 }, () => ({ container: "chapter" }));
+  const belowTolerance = Array.from({ length: 26 }, () => ({ container: "chapter" }));
+  assertEquals(Math.round(evaluateNovelScale(nearTarget).projectedWords), 114231);
+  assertEquals(evaluateNovelScale(nearTarget).meetsMinimum, false, "115k remains the preferred planning goal");
+  assertEquals(needsNovelExpansion(nearTarget), false, "114,231 words is within the 2% tolerance");
+  assertEquals(needsNovelExpansion(belowTolerance), true, "110k words still needs development");
+  assertEquals(needsNovelExpansion(belowTolerance, [{ container: "chapter" }]), false, "existing accepted work counts once");
+  assertEquals(evaluateNovelScale(Array.from({ length: 30 }, () => ({ container: "chapter" }))).exceedsMaximum, true, "125k ceiling remains enforced");
+
+  let expansionCalls = 0;
+  const result = await progressivelyExpandOutline(
+    nearTarget as any,
+    new Set(["beat-1"]),
+    async () => {
+      expansionCalls++;
+      return [];
+    },
+  );
+  assertEquals(expansionCalls, 0, "no optional provider expansion for a negligible deficit");
+  assertEquals(result.suggestions.length, 27);
+  assertEquals(result.diagnostics.length, 0);
 });
 
 Deno.test("budget normalization preserves one-section coverage per uncovered beat", () => {
@@ -1571,11 +1597,10 @@ Deno.test("beat-local expansion visits canonical beats and isolates additions", 
   );
   assertEquals(calls, [
     { beatID: "beat-1", currentSections: 56 },
-    { beatID: "beat-2", currentSections: 55 },
   ]);
-  assertEquals(result.suggestions.length, 115);
+  assertEquals(result.suggestions.length, 113);
   assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-1").length, 58);
-  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-2").length, 57);
+  assertEquals(result.suggestions.filter((section) => section.storyArcBeatID === "beat-2").length, 55);
 });
 
 Deno.test("beat-local expansion rejects additions assigned to another beat", async () => {
@@ -1797,7 +1822,7 @@ Deno.test("Test3-shaped undersized outline fails closed after bounded expansion"
   }
   assertEquals(calls, MAX_EXPANSION_ROUNDS);
   assertEquals((failure as NovelScalePlanningError).code, "failed_under_target");
-  assertEquals((failure as NovelScalePlanningError).message.includes("115,000-word preferred planning floor"), true);
+  assertEquals((failure as NovelScalePlanningError).message.includes("2% tolerance for the 115,000-word preferred planning target"), true);
 });
 
 Deno.test("stale expansion anchors append within their beat while exact anchors remain stable", () => {
@@ -2131,7 +2156,7 @@ Deno.test("existing sections survive progressive expansion and global cap fails 
     failure = error;
   }
   assertEquals((failure as NovelScalePlanningError).code, "failed_under_target");
-  assertEquals((failure as NovelScalePlanningError).message.includes("115,000-word preferred planning floor"), true);
+  assertEquals((failure as NovelScalePlanningError).message.includes("2% tolerance for the 115,000-word preferred planning target"), true);
 });
 
 Deno.test("expansion prompt includes round projection, broad range, and remaining deficit", () => {
@@ -5187,8 +5212,8 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
     "Checkpoint chapter 27",
     firstPass[24].title,
   ]);
-  assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global", "outline-expansion-2-global"]);
-  assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("Optional novel expansion did not finish")), true);
+  assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global"]);
+  assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("Optional novel expansion did not finish")), false);
 
   const completedRound = {
     round: 1,
@@ -5247,7 +5272,7 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
   assertEquals(resumedDB.row.status, "completed");
   assertEquals(resumedDB.row.suggestions, initialDB.row.suggestions);
   assertEquals(resumedDB.row.warnings, initialDB.row.warnings);
-  assertEquals(resumedActions, ["outline-expansion-2-global"]);
+  assertEquals(resumedActions, []);
 });
 
 Deno.test("production checkpoint resume executes the single global outline call once", async () => {

@@ -654,6 +654,10 @@ export const NOVEL_TARGET_WORDS: [number, number] = [115000, 125000];
 export const NOVEL_PREFERRED_MIN_WORDS = 115000;
 export const NOVEL_MAX_WORDS = 125000;
 const TOKENS_PER_WORD = 1.3;
+// A 2% under-target projection is acceptable for completion. Keep the
+// 115,000-word planning goal and the 125,000-word maximum unchanged.
+export const NOVEL_LENGTH_TOLERANCE = 0.02;
+export const NOVEL_EXPANSION_MIN_WORDS = Math.ceil(NOVEL_PREFERRED_MIN_WORDS * (1 - NOVEL_LENGTH_TOLERANCE));
 const NOVEL_MIN_PROJECTED_TOKENS = NOVEL_PREFERRED_MIN_WORDS * TOKENS_PER_WORD;
 const NOVEL_MAX_PROJECTED_TOKENS = NOVEL_MAX_WORDS * TOKENS_PER_WORD;
 const MAX_PLANNED_SECTIONS = 200;
@@ -1915,7 +1919,7 @@ export function needsNovelExpansion(
   suggestions: PlannedSectionLike[],
   existingSections: PlannedSectionLike[] = [],
 ): boolean {
-  return !evaluateNovelScale(suggestions, existingSections).meetsPreferredMinimum;
+  return evaluateNovelScale(suggestions, existingSections).projectedWords < NOVEL_EXPANSION_MIN_WORDS;
 }
 
 const EXPANSION_SCHEMA = {
@@ -2484,21 +2488,21 @@ export async function progressivelyExpandOutline(
       suggestions = roundSuggestions;
       diagnostics.push(diagnostic);
       await onRound?.(diagnostic, diagnostics, suggestions);
-      if (evaluateNovelScale(suggestions, existingSections).meetsMinimum) {
-        warnings.push("Optional novel expansion was skipped after a validation mismatch; the durable outline already meets the hard planning floor.");
+      if (!needsNovelExpansion(suggestions, existingSections)) {
+        warnings.push("Optional novel expansion was skipped after a validation mismatch; the durable outline is within the 2% length tolerance.");
         break;
       }
       throw new NovelScalePlanningError(
         "failed_expansion",
-        `Novel expansion failed validation in round ${round}; the outline remains below the ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word preferred planning floor.`,
+        `Novel expansion failed validation in round ${round}; the outline remains below the 2% tolerance for the ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word preferred planning target.`,
       );
     }
   }
   const finalScale = evaluateNovelScale(suggestions, existingSections);
-  if (!finalScale.meetsMinimum) {
+  if (needsNovelExpansion(suggestions, existingSections)) {
     throw new NovelScalePlanningError(
       "failed_under_target",
-      `Novel outline remains below the ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word preferred planning floor after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
+      `Novel outline remains below the 2% tolerance for the ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word preferred planning target after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
     );
   }
   if (finalScale.exceedsMaximum) {
@@ -5408,14 +5412,13 @@ export async function runSuggestionJob(
           coverageGate: (current) => requestedStoryMaterialFormat(body) === "novel" && sectionAllocationDeficits(current).length > 0,
           qualityGate: (current) => {
             if (requestedStoryMaterialFormat(body) !== "novel") return false;
-            const scale = evaluateNovelScale(current, body.existingSections ?? []);
             const quality = collectAdvisoryOutlineQuality(
               current,
               body.storyMaterialEnrichment,
               requestedStoryMaterialFormat(body),
               body.arcTemplate,
             );
-            return !scale.meetsPreferredMinimum ||
+            return needsNovelExpansion(current, body.existingSections ?? []) ||
               quality.causalScaleIssues.length > 0;
           },
           onBeat: async (round, nextBeatIndex, current, allDiagnostics) => {
@@ -5464,13 +5467,14 @@ export async function runSuggestionJob(
         throw new RecipeObligationValidationError(`missing_recipe_obligations: ${finalCoverage.missingRequired.map((obligation) => obligation.id).join(", ")}`);
       }
       const finalScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
-      if (requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsMinimum && !allowUnderTarget) {
+      const belowLengthTolerance = needsNovelExpansion(completedSuggestions, body.existingSections ?? []);
+      if (requestedStoryMaterialFormat(body) === "novel" && belowLengthTolerance && !allowUnderTarget) {
         throw new NovelScalePlanningError(
           "failed_under_target",
           "outline expansion did not reach plausible novel scale",
         );
       }
-      if (requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsMinimum && allowUnderTarget) {
+      if (requestedStoryMaterialFormat(body) === "novel" && belowLengthTolerance && allowUnderTarget) {
         completionWarnings.push(`Novel outline is below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target; the usable outline was preserved.`);
       }
       if (requestedStoryMaterialFormat(body) === "novel" && finalScale.exceedsMaximum) {
@@ -5535,7 +5539,7 @@ export async function runSuggestionJob(
           finalSectionCounts: countSuggestionsByBeat(completedSuggestions),
           allocationDeficits: remainingAllocationDeficits,
           novelScale: finalScale,
-          ...(requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsPreferredMinimum
+          ...(requestedStoryMaterialFormat(body) === "novel" && belowLengthTolerance
             ? { preferredScaleWarning: `Novel plan is below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word development target.` }
             : {}),
         },
@@ -5572,7 +5576,6 @@ export async function runSuggestionJob(
       const outlineNeedsExpansion = requestedStoryMaterialFormat(body) === "novel" &&
         (sectionAllocationDeficits(completedSuggestions).length > 0 ||
           needsNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
-          !initialScale.meetsPreferredMinimum ||
           initialQuality.causalScaleIssues.length > 0);
       planningState = {
         ...planningState,
