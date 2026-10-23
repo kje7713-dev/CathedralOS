@@ -4922,7 +4922,17 @@ Deno.test("failed story-quality repair preserves the validated outline and surfa
   assertEquals(fixture.actions, ["outline-suggestions", "outline-semantic-repair-beat-2-resolution"]);
   assertEquals(fixture.db.row.suggestions.map((section: any) => section.title), ["Opening", "The Aftermath"]);
   assertEquals(fixture.db.row.diagnostics.semanticArcUnresolvedSections, ["The Aftermath"]);
-  assertEquals(fixture.db.row.warnings.some((warning: string) => warning.includes("Story Arc repair did not resolve section: The Aftermath")), true);
+  assertEquals(fixture.db.row.warnings.some((warning: string) => warning.includes("Story Arc quality concern remains for review")), true);
+});
+
+Deno.test("invalid Story Arc repair preserves the last validated sections and warns once", async () => {
+  const fixture = await weakResolutionWorkerFixture("invalid");
+  await fixture.run();
+  await fixture.run();
+  assertEquals(fixture.db.row.status, "completed");
+  assertEquals(fixture.db.row.suggestions.map((section: any) => section.title), ["Opening", "The Aftermath"]);
+  assertEquals(fixture.actions, ["outline-suggestions", "outline-semantic-repair-beat-2-resolution"]);
+  assertEquals(fixture.db.row.warnings.filter((warning: string) => warning.includes("Story Arc quality concern remains for review")).length, 1);
 });
 
 Deno.test("an unresolved bounded story-quality repair completes with the best valid version", async () => {
@@ -4931,7 +4941,7 @@ Deno.test("an unresolved bounded story-quality repair completes with the best va
   await fixture.run();
   assertEquals(fixture.db.row.status, "completed");
   assertEquals(fixture.db.row.suggestions.map((section: any) => section.title), ["Opening", "The Aftermath"]);
-  assertEquals(fixture.db.row.warnings.some((warning: string) => warning.includes("Story Arc repair did not resolve section: The Aftermath")), true);
+  assertEquals(fixture.db.row.warnings.some((warning: string) => warning.includes("Story Arc quality concern remains for review")), true);
   assertEquals(fixture.actions, ["outline-suggestions", "outline-semantic-repair-beat-2-resolution"]);
 });
 
@@ -5252,6 +5262,7 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
   });
   await initialRun();
   await initialRun();
+  initialDB.row.diagnostics.semanticArcIssues = ["historical issue resolved by later expansion"];
   await initialRun();
   await initialRun();
   assertEquals(initialDB.row.status, "completed");
@@ -5264,6 +5275,7 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
   ]);
   assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global", "outline-expansion-2-global"]);
   assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("Optional novel expansion did not finish")), true);
+  assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("historical issue resolved by later expansion")), false);
 
   const completedRound = {
     round: 1,
@@ -5377,6 +5389,17 @@ Deno.test("global outline completion preserves advisory quality and obligation a
   assertEquals(db.row.warnings, diagnostics.semanticArcIssues.map((issue: string) => `Story Arc quality concern remains for review: ${issue}`));
 });
 
+
+Deno.test("final advisory validator failure remains best-effort", () => {
+  const body = executableWorkerRecipe();
+  const quality = collectAdvisoryOutlineQuality(
+    [],
+    { ...repairStoryMaterialFromRecipe(body as any, { sourceRecipeHash: "validator-failure", sourceRecipeVersion: 1, sourcePromptPackID: "validator-failure", sourcePromptPackName: "validator failure" }, "shortStory"), characters: null } as any,
+    "shortStory",
+    { name: "Worker Arc", beats: [{ id: "beat-1", role: "setup", label: "Setup" }] },
+  );
+  assertEquals(typeof quality.advisoryValidationError, "string");
+});
 
 Deno.test("required-obligation repair prompt and validator preserve the contract", () => {
   const obligations = deriveRecipeObligations(sparseRequest.recipe as any);

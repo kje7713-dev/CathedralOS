@@ -5522,15 +5522,21 @@ export async function runSuggestionJob(
         await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
         throw new SuggestionWorkerYield();
       }
+      const finalQuality = collectAdvisoryOutlineQuality(
+        completedSuggestions,
+        body.storyMaterialEnrichment,
+        requestedStoryMaterialFormat(body),
+        body.arcTemplate,
+        effectiveAllocation,
+      );
+      diagnostics = { ...diagnostics, finalAdvisoryQuality: finalQuality };
       const advisoryWarnings = [
         ...(Array.isArray(diagnostics.semanticWarnings)
           ? (diagnostics.semanticWarnings as string[])
           : []),
-        ...(Array.isArray(diagnostics.semanticArcIssues)
-          ? (diagnostics.semanticArcIssues as string[]).map((issue) => `Story Arc quality concern remains for review: ${issue}`)
-          : []),
-        ...(Array.isArray(diagnostics.semanticArcUnresolvedSections)
-          ? (diagnostics.semanticArcUnresolvedSections as string[]).map((section) => `Story Arc repair did not resolve section: ${section}`)
+        ...finalQuality.semanticArcIssues.map((issue) => `Story Arc quality concern remains for review: ${issue}`),
+        ...(finalQuality.advisoryValidationError
+          ? [`Final advisory quality validation was unavailable; continuing with the best validated outline: ${finalQuality.advisoryValidationError}`]
           : []),
       ];
       const finalWarnings = [...new Set([...completionWarnings, ...advisoryWarnings])];
