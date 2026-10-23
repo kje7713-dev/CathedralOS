@@ -1076,7 +1076,7 @@ export function buildEnrichmentPrompt(
     ? `\n\nThe previous enrichment package was rejected: ${repairReason}. Return one corrected complete enrichment package.`
     : "";
   return {
-    system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Preserve the defining traits, behaviors, and conflicts explicitly stated in the author's premise. Treat them as creative commitments, not optional inspiration. Invent supporting material that develops those elements rather than explaining them away, softening them, or replacing them with a different central conflict. Ensure the antagonist, escalation ladder, and major reversals materially demonstrate the original premise through concrete story events, not just descriptions or rationale. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
+    system: `You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. For a novel, develop enough interconnected conflict and opposition, escalation and reversals, character and relationship development, consequences and discoveries, and meaningful tactical and emotional state changes to support the approximately 115,000-word planning target. Do not chase that target with filler, fixed item counts, or unrelated subplots; prioritize substantive connected story material and let the outline planner determine its natural distribution. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Preserve the defining traits, behaviors, and conflicts explicitly stated in the author's premise. Treat them as creative commitments, not optional inspiration. Invent supporting material that develops those elements rather than explaining them away, softening them, or replacing them with a different central conflict. Ensure the antagonist, escalation ladder, and major reversals materially demonstrate the original premise through concrete story events, not just descriptions or rationale. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
     user: JSON.stringify({
       recipe: req.recipe,
       recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)),
@@ -2928,9 +2928,8 @@ export class AllocationBudgetConstraintError extends Error {
 }
 
 // Novel scale is evaluated using the midpoint of a container's literary
-// range, not its floor. Budgeting against only the chapter minimum lets a
-// 52-section allocation pass preflight while the same sections project well
-// above the 125,000-word hard cap.
+// range, not its floor. Allocation safety uses the same projection basis as
+// evaluateNovelScale so first-pass planning cannot exceed the final hard cap.
 const PROJECTED_CHAPTER_TOKENS = projectedExpectedTokens([{ container: "chapter" }]);
 
 export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): number {
@@ -3172,7 +3171,7 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. Plan enough distinct dramatic material appropriate to that format; for a novel, plan toward 115,000 words, with a 115,000-word minimum and a 125,000-word hard cap when sections generate near their expected literary ranges; a fresh novel must reach the approximately 115,000-word preferred planning floor before completion. Treat 125,000 words as an absolute ceiling, not a normal target. This is a budget constraint, not permission to add sections indefinitely. Do not satisfy it with giant containers: major arc movements should decompose into multiple events, consequences, decisions, reversals, tests, discoveries, and aftermath. Quick transitions may take 1-2 sections; major movements commonly need 5-10 sections, and unusually material-rich movements may need more. Use the supplied premise, characters, enrichment, and arc to decide where density belongs; do not cap a beat at the minimum when its material warrants additional distinct sections. Every allocated section is a distinct chapter-scale dramatic unit: never allocate replayed sections, duplicate titles, duplicate state changes, or the same event under another Story Arc beat. For novel planning, prefer the chapter container and its existing 3,000-token minimum; use fewer, fuller sections rather than many small scenes. The server budget for NEW sections in this request is at most ${maxBudgetedSections}; the sum of all minSections values must fit inside that budget. Combine related events within a section instead of creating an allocation floor that would exceed it.
+This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 115,000 projected words while staying below the 125,000-word maximum. Use the midpoint projection of each supported container, including 5,500 tokens for a chapter, as the authoritative planning estimate. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat, and the projected contribution of existing sections. Distribute distinct, substantial chapter-scale units according to the narrative material each movement requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. The server budget for NEW sections in this request is at most ${maxBudgetedSections}; the sum of all minSections values must fit inside that budget. Treat 125,000 words as an absolute ceiling, not a normal target.
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
@@ -3180,7 +3179,7 @@ Treat the supplied recipe as the governing creative brief. Required obligations 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
 
-For every Story Arc beat, determine the minimum number of NEW dramatic sections still required to adequately realize that movement in a novel after considering the supplied existingSections. Output exactly one allocation for every beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. minSections represents the number of additional sections still required beyond existingSections — it is a floor, not a target or maximum. The later outline generator may create additional sections whenever the material supports them. A beat sufficiently covered by existing sections may use minSections 0 (existing coverage is already accounted for; do not include it in minSections). Do not output any other root key.
+Output exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Do not output any other root key.
 
 Output JSON only. No commentary, no prose.`;
 
@@ -3206,7 +3205,7 @@ Output JSON only. No commentary, no prose.`;
     planningContext: planningView,
     existingSectionsByBeat,
     existingUnlinkedSections,
-    allocation: "Return one minimum-only floor per canonical beat; additional sections remain legal.",
+    allocation: "For a fresh novel, return the complete first-pass allocation; with existing sections, return only the residual new allocation per beat.",
     hint: req.hint ?? null,
   }, null, 2);
   return { system, user };
@@ -5412,6 +5411,9 @@ export async function runSuggestionJob(
               quality.causalScaleIssues.length > 0;
           },
           onBeat: async (round, nextBeatIndex, current, allDiagnostics) => {
+            // Beat-level checkpoints are validated additions too. Keep the
+            // latest one available if a later provider attempt fails.
+            latestValidSuggestions = current;
             const expansionCheckpoint = buildExpansionCheckpoint(
               current,
               body.existingSections ?? [],
@@ -5442,6 +5444,7 @@ export async function runSuggestionJob(
     const completeValidatedOutline = async (
       completedSuggestions: Suggestion[],
       completionWarnings: string[],
+      allowUnderTarget = false,
     ) => {
       const finalCoverage = obligationCoverage([...(body.existingSections ?? []), ...completedSuggestions], recipeObligations);
       diagnostics = {
@@ -5453,11 +5456,14 @@ export async function runSuggestionJob(
         throw new RecipeObligationValidationError(`missing_recipe_obligations: ${finalCoverage.missingRequired.map((obligation) => obligation.id).join(", ")}`);
       }
       const finalScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
-      if (requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsMinimum) {
+      if (requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsMinimum && !allowUnderTarget) {
         throw new NovelScalePlanningError(
           "failed_under_target",
           "outline expansion did not reach plausible novel scale",
         );
+      }
+      if (requestedStoryMaterialFormat(body) === "novel" && !finalScale.meetsMinimum && allowUnderTarget) {
+        completionWarnings.push(`Novel outline is below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target; the usable outline was preserved.`);
       }
       if (requestedStoryMaterialFormat(body) === "novel" && finalScale.exceedsMaximum) {
         throw new NovelScalePlanningError(
@@ -5539,6 +5545,9 @@ export async function runSuggestionJob(
       assertDistinctOutlineTitles(initialSuggestions);
       let completedSuggestions = initialSuggestions;
       let completionWarnings = initialWarnings;
+      // Only callbacks after validation may advance this value. A provider
+      // response that fails validation must never replace the last checkpoint.
+      latestValidSuggestions = initialSuggestions;
       const initialScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
       if (requestedStoryMaterialFormat(body) === "novel" && initialScale.exceedsMaximum) {
         throw new NovelScalePlanningError(
@@ -5575,17 +5584,39 @@ export async function runSuggestionJob(
       );
       await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
       if (outlineNeedsExpansion) {
-        const expanded = await expandNovel(completedSuggestions, recipeObligations, 1, 0, []);
-        completedSuggestions = expanded.suggestions;
-        completionWarnings = [...completionWarnings, ...expanded.warnings];
-        diagnostics = {
-          ...diagnostics,
-          expansionRounds: expanded.diagnostics,
-          expansionCheckpoint: buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], expanded.diagnostics),
-          novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
-        };
+        try {
+          const expanded = await expandNovel(completedSuggestions, recipeObligations, 1, 0, []);
+          completedSuggestions = expanded.suggestions;
+          completionWarnings = [...completionWarnings, ...expanded.warnings];
+          diagnostics = {
+            ...diagnostics,
+            expansionRounds: expanded.diagnostics,
+            expansionCheckpoint: buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], expanded.diagnostics),
+            novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
+          };
+        } catch (error) {
+          if (!(error instanceof NovelScalePlanningError) || !["failed_expansion", "failed_under_target"].includes(error.code)) throw error;
+          // progressivelyExpandOutline invokes checkpoint callbacks only after
+          // additions pass structural, beat, and length validation. Prefer
+          // that newest validated state over the first-pass outline; invalid
+          // or partially parsed provider output never reaches this variable.
+          completedSuggestions = latestValidSuggestions.length > 0
+            ? latestValidSuggestions
+            : completedSuggestions;
+          completionWarnings.push(`Optional novel expansion did not finish; the usable outline was preserved below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target.`);
+          diagnostics = {
+            ...diagnostics,
+            expansionWarning: error.message,
+            expansionCheckpoint: diagnostics.expansionCheckpoint ?? buildExpansionCheckpoint(
+              completedSuggestions,
+              body.existingSections ?? [],
+              diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [],
+            ),
+            novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
+          };
+        }
       }
-      await completeValidatedOutline(completedSuggestions, completionWarnings);
+      await completeValidatedOutline(completedSuggestions, completionWarnings, true);
     };
 
     if (!body.storyMaterialEnrichment && claimedRun.story_material) {
@@ -5770,6 +5801,8 @@ export async function runSuggestionJob(
         updateRun,
       });
       body = { ...body, storyMaterialEnrichment: resumedMaterial };
+      // The persisted checkpoint is already validated; it is the fallback if
+      // the resumed provider attempt fails before producing another checkpoint.
       latestValidSuggestions = resume.suggestions;
       // PR8 (revised): preserve the repair audit fields through the
       // subsequent diagnostics assignment so they actually land in the
@@ -5824,16 +5857,26 @@ export async function runSuggestionJob(
         };
       } catch (error) {
         if (isProviderBillingUnavailable(error)) throw error;
+        const recoverableExpansionFailure = error instanceof NovelScalePlanningError &&
+          ["failed_expansion", "failed_under_target"].includes(error.code);
+        if (!recoverableExpansionFailure) throw error;
+        completedSuggestions = latestValidSuggestions.length > 0
+          ? latestValidSuggestions
+          : resume.suggestions;
+        completionWarnings.push(`Optional novel expansion did not finish; the usable outline was preserved below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target.`);
         diagnostics = {
           ...diagnostics,
-          expansionError: error instanceof Error ? error.message : String(error),
-          novelScale: evaluateNovelScale(resume.suggestions, body.existingSections ?? []),
+          expansionWarning: error.message,
+          expansionCheckpoint: diagnostics.expansionCheckpoint ?? buildExpansionCheckpoint(
+            completedSuggestions,
+            body.existingSections ?? [],
+            diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? resume.priorDiagnostics,
+          ),
+          novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
         };
-        throw error;
       }
-      // Expansion-resumed outlines use the same final completion gate as
-      // first-pass and obligation-repaired outlines.
-      await completeValidatedOutline(completedSuggestions, completionWarnings);
+      // Initial and resumed expansion use the same final completion gate.
+      await completeValidatedOutline(completedSuggestions, completionWarnings, true);
       return;
     }
     let storyMaterial: StoryMaterialEnrichment | null = null;

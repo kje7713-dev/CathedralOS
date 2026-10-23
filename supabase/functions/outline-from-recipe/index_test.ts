@@ -382,7 +382,7 @@ Deno.test("existing accepted sections satisfy obligation coverage", () => {
 Deno.test("planner prompt passes empty existingSectionsByBeat when no existing sections", () => {
   const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [] } as any);
   assertEquals(
-    system.includes("minSections represents the number of additional sections still required beyond existingSections"),
+    system.includes("minSections is only the additional sections still required"),
     true,
     "planner prompt must explicitly state the residual-count contract",
   );
@@ -433,6 +433,19 @@ Deno.test("allocator floors are scaled to the novel word budget", () => {
   assertEquals(maximumBudgetedNewSections(req), 29);
 });
 
+Deno.test("novel allocation budget uses the same chapter midpoint as scale validation", () => {
+  const req = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const chapterTokens = projectedExpectedTokens([{ container: "chapter" }]);
+  assertEquals(chapterTokens, 5500);
+  assertEquals(maximumBudgetedNewSections(req), Math.floor(125000 * 1.3 / chapterTokens));
+  const scale = evaluateNovelScale(
+    Array.from({ length: 28 }, () => ({ container: "chapter" })),
+  );
+  assertEquals(Math.round(scale.projectedWords), 118462);
+  assertEquals(scale.meetsPreferredMinimum, true);
+  assertEquals(scale.exceedsMaximum, false);
+});
+
 Deno.test("budget normalization preserves one-section coverage per uncovered beat", () => {
   const req = {
     ...sparseRequest,
@@ -458,7 +471,7 @@ Deno.test("budget normalization preserves one-section coverage per uncovered bea
 });
 
 Deno.test("budget normalization fails explicitly when uncovered beats cannot fit", () => {
-  const req = { ...sparseRequest, existingSections: Array.from({ length: 28 }, () => ({ container: "chapter" })) } as any;
+  const req = { ...sparseRequest, existingSections: Array.from({ length: 30 }, () => ({ container: "chapter" })) } as any;
   const allocation = new Map([
     ["beat-1", { minSections: 1, rationale: "opening" }],
     ["beat-2", { minSections: 1, rationale: "ending" }],
@@ -505,7 +518,7 @@ Deno.test("planner prompt groups one existing section onto its linked beat", () 
   const section = { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] };
   const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [section] } as any);
   assertEquals(
-    system.includes("existing coverage is already accounted for; do not include it in minSections"),
+    system.includes("when accepted sections already contribute to a beat, minSections is only the additional sections still required"),
     true,
     "planner prompt must instruct planner NOT to count existing coverage in minSections",
   );
@@ -520,7 +533,7 @@ Deno.test("planner prompt groups two existing sections onto the same beat", () =
   const s2 = { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R2"] };
   const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [s1, s2] } as any);
   assertEquals(
-    system.includes("minSections represents the number of additional sections still required beyond existingSections"),
+    system.includes("minSections is only the additional sections still required"),
     true,
   );
   const parsed: any = JSON.parse(user);
@@ -536,7 +549,7 @@ Deno.test("planner prompt groups mixed beats with different existing coverage pl
   const s4 = { storyArcBeatID: "beat-unknown" }; // unlinked to the arc template
   const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [s1, s2, s3, s4] } as any);
   assertEquals(
-    system.includes("minSections represents the number of additional sections still required beyond existingSections"),
+    system.includes("minSections is only the additional sections still required"),
     true,
   );
   const parsed: any = JSON.parse(user);
@@ -780,7 +793,7 @@ Deno.test("sparse recipe context is preserved for the single comprehensive outli
   assertEquals(user.includes("Douche"), true);
   assertEquals(system.includes("30-60"), false);
   assertEquals(system.includes("5-15"), false);
-  assertEquals(plannerPrompt.system.includes("minSections represents the number of additional sections still required beyond existingSections"), true);
+  assertEquals(plannerPrompt.system.includes("minSections is only the additional sections still required"), true);
   assertEquals(system.includes("minimum is a floor for dramatic coverage, not a target or maximum"), false);
   assertEquals(system.includes("targetSections"), false);
   assertEquals(system.includes("maxSections"), false);
@@ -901,7 +914,7 @@ Deno.test("deterministic allocation budget constraints do not trigger a paid ret
   const req = {
     ...sparseRequest,
     requestedFormat: "novel",
-    existingSections: Array.from({ length: 28 }, () => ({ container: "chapter" })),
+    existingSections: Array.from({ length: 30 }, () => ({ container: "chapter" })),
   } as any;
   await assertRejects(
     () => planSectionAllocation(req, "test-key", (async () => {
@@ -1367,11 +1380,14 @@ Deno.test("outline section contract assigns canonical plot decisions to the plan
 Deno.test("novel planning exposes container semantics and projected-size expansion", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
-  assertEquals(allocationPrompt.includes("plan toward 115,000 words"), true);
-  assertEquals(allocationPrompt.includes("minimum number of NEW dramatic sections still required"), true);
-  assertEquals(allocationPrompt.includes("floor, not a target or maximum"), true);
+  assertEquals(allocationPrompt.includes("complete first-pass book at approximately 115,000 projected words"), true);
+  assertEquals(allocationPrompt.includes("midpoint projection of each supported container"), true);
+  assertEquals(allocationPrompt.includes("minSections is the intended complete first-pass allocation"), true);
+  assertEquals(allocationPrompt.includes("a beat with sufficient existing coverage must remain at 0"), true);
+  assertEquals(allocationPrompt.includes("Do not add sections to a sufficiently covered beat"), true);
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);
+  assertEquals(source.includes("fitAllocationToNovelTarget"), false);
   assertEquals(source.includes("promptLimit"), false);
   assertEquals(source.includes("assertPromptWithinBudget"), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
@@ -1913,7 +1929,7 @@ Deno.test("failed expansion retains the first-pass suggestions in its checkpoint
 });
 
 Deno.test("successful round 1 plus failed round 2 retains the round-1 checkpoint", async () => {
-  const firstPass = sceneOutline(27);
+  const firstPass = sceneOutline(25);
   let checkpoint: any = null;
   let failure: unknown;
   try {
@@ -1921,7 +1937,7 @@ Deno.test("successful round 1 plus failed round 2 retains the round-1 checkpoint
       firstPass as any,
       new Set(["beat-1"]),
       async (_current, context) => {
-        if (context.round === 1) return Array.from({ length: 10 }, (_, i) => expansionSection(`Round 1 checkpoint ${i + 1}`));
+        if (context.round === 1) return Array.from({ length: 2 }, (_, i) => expansionSection(`Round 1 checkpoint ${i + 1}`));
         throw new ExpansionValidationError("round 2 failed");
       },
       async (_diagnostic, rounds, current) => {
@@ -1934,7 +1950,7 @@ Deno.test("successful round 1 plus failed round 2 retains the round-1 checkpoint
   assertEquals((failure as NovelScalePlanningError).code, "failed_expansion");
   assertEquals(checkpoint.nextRound, 2);
   assertEquals(checkpoint.expansionRounds.filter((round: any) => round.status === "completed").length, 1);
-  assertEquals(checkpoint.scale.projectedWords, evaluateNovelScale(Array.from({ length: 37 }, () => ({ container: "scene" }))).projectedWords);
+  assertEquals(checkpoint.scale.projectedWords, evaluateNovelScale(Array.from({ length: 27 }, () => ({ container: "scene" }))).projectedWords);
 });
 
 Deno.test("insufficient-credit expansion failures are resumable from their durable checkpoint", () => {
@@ -2734,6 +2750,9 @@ Deno.test("story material enrichment validates provenance and remains inspectabl
 Deno.test("enrichment prompt preserves sparse recipe facts and separates planner invention", () => {
   const prompt = buildEnrichmentPrompt(sparseRequest as any);
   assertEquals(prompt.system.includes("preserve, connect, and deepen supplied material"), true);
+  assertEquals(prompt.system.includes("support the approximately 115,000-word planning target"), true);
+  assertEquals(prompt.system.includes("conflict and opposition, escalation and reversals, character and relationship development"), true);
+  assertEquals(prompt.system.includes("Do not chase that target with filler, fixed item counts, or unrelated subplots"), true);
   assertEquals(prompt.system.includes("source=recipe"), false);
   assertEquals(prompt.system.includes("source=planner"), true);
   assertEquals(prompt.user.includes("Monsters kill humans"), true);
@@ -5065,6 +5084,136 @@ Deno.test("reclaimed worker trusts an intact persisted planning checkpoint after
   await run();
   assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
+});
+
+Deno.test("initial and resumed optional expansion preserve the newest valid checkpoint", async () => {
+  const shortBody = await executableWorkerBody();
+  const provenance = await recipeProvenance(shortBody.recipe as any);
+  const plannerItem = (id: string) => ({
+    id, source: "planner", sourceReference: null, label: id,
+    description: `${id} creates a concrete pressure, decision, and consequence.`,
+  });
+  const novelMaterial = attachRecipeProvenance({
+    ...repairStoryMaterialFromRecipe(shortBody.recipe, provenance, "novel"),
+    conflictSources: [plannerItem("conflict-1"), plannerItem("conflict-2")],
+    escalationLadder: [plannerItem("escalation-1"), plannerItem("escalation-2"), plannerItem("escalation-3")],
+    reversals: [plannerItem("reversal-1")],
+    consequences: [plannerItem("consequence-1")],
+  } as any, provenance);
+  const body = {
+    ...shortBody,
+    requestedFormat: "novel",
+    storyMaterialEnrichment: novelMaterial,
+  } as any;
+  const baseSection = (beat: string, title: string) => ({
+    title, summary: `${title} summary`, container: "chapter", pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends`, storyArcBeatID: beat,
+    dramaticFunction: beat === "beat-1" ? "setup" : "resolution",
+    recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`),
+    entryState: "The prior state holds.", dramaticEvent: `${title} happens.`,
+    resultingChange: `${title} changes the pressure.`, terminalState: `${title} hands forward pressure.`,
+  });
+  const firstPass = Array.from({ length: 25 }, (_, index) =>
+    baseSection(index === 24 ? "beat-2" : "beat-1", `First-pass chapter ${index + 1}`));
+  const initialDB = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const initialActions: string[] = [];
+  const initialBilling = validatedWorkerBilling(initialActions, (action) => {
+    if (action === "outline-suggestions") {
+      return {
+        beats: {
+          "beat-1": firstPass.filter((section) => section.storyArcBeatID === "beat-1"),
+          "beat-2": firstPass.filter((section) => section.storyArcBeatID === "beat-2"),
+        },
+      };
+    }
+    if (action === "outline-expansion-1-global") {
+      return { suggestions: [expansionSection("Checkpoint chapter 26", "chapter"), expansionSection("Checkpoint chapter 27", "chapter")] };
+    }
+    // A valid first expansion is followed by a recoverable under-target
+    // failure, exercising completion from the persisted 27-section state.
+    return { suggestions: [] };
+  });
+  const initialRun = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db: initialDB,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: initialBilling as any,
+    scheduleContinuation: async () => {},
+  });
+  await initialRun();
+  await initialRun();
+  await initialRun();
+  await initialRun();
+  assertEquals(initialDB.row.status, "completed");
+  assertEquals(initialDB.row.suggestions.length, 27);
+  assertEquals(initialDB.row.suggestions.map((section: any) => section.title), [
+    ...firstPass.slice(0, 24).map((section) => section.title),
+    "Checkpoint chapter 26",
+    "Checkpoint chapter 27",
+    firstPass[24].title,
+  ]);
+  assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global", "outline-expansion-2-global"]);
+  assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("Optional novel expansion did not finish")), true);
+
+  const completedRound = {
+    round: 1,
+    sectionCountBefore: 2,
+    projectedTokensBefore: 11000,
+    projectedWordsBefore: 8462,
+    additionsReturned: 0,
+    sectionCountAfter: 2,
+    projectedTokensAfter: 11000,
+    projectedWordsAfter: 8462,
+    remainingEstimatedDeficitTokens: 138500,
+    status: "completed",
+  } as const;
+  const resumedRow = {
+    ...initialDB.row,
+    status: "pending",
+    error: null,
+    error_code: null,
+    completed_at: null,
+    lease_owner: null,
+    lease_expires_at: null,
+    planning_state: {
+      ...initialDB.row.planning_state,
+      phase: "expansion",
+      nextAction: "expansion",
+      expansionCheckpoint: {
+        stage: "expansion",
+        nextRound: 2,
+        nextBeatIndex: 0,
+        scale: evaluateNovelScale(initialDB.row.suggestions),
+        expansionRounds: [completedRound],
+      },
+    },
+    diagnostics: {
+      ...initialDB.row.diagnostics,
+      expansionCheckpoint: {
+        stage: "expansion",
+        nextRound: 2,
+        nextBeatIndex: 0,
+        scale: evaluateNovelScale(initialDB.row.suggestions),
+        expansionRounds: [completedRound],
+      },
+    },
+  };
+  const resumedDB = new ExecutableRunDb(resumedRow);
+  const resumedActions: string[] = [];
+  const resumedRun = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db: resumedDB,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: fakeWorkerBilling(resumedActions) as any,
+    scheduleContinuation: async () => {},
+  });
+  await resumedRun();
+  assertEquals(resumedDB.row.status, "completed");
+  assertEquals(resumedDB.row.suggestions, initialDB.row.suggestions);
+  assertEquals(resumedDB.row.warnings, initialDB.row.warnings);
+  assertEquals(resumedActions, ["outline-expansion-2-global"]);
 });
 
 Deno.test("production checkpoint resume executes the single global outline call once", async () => {
