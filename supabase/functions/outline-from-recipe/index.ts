@@ -5411,6 +5411,9 @@ export async function runSuggestionJob(
               quality.causalScaleIssues.length > 0;
           },
           onBeat: async (round, nextBeatIndex, current, allDiagnostics) => {
+            // Beat-level checkpoints are validated additions too. Keep the
+            // latest one available if a later provider attempt fails.
+            latestValidSuggestions = current;
             const expansionCheckpoint = buildExpansionCheckpoint(
               current,
               body.existingSections ?? [],
@@ -5542,6 +5545,9 @@ export async function runSuggestionJob(
       assertDistinctOutlineTitles(initialSuggestions);
       let completedSuggestions = initialSuggestions;
       let completionWarnings = initialWarnings;
+      // Only callbacks after validation may advance this value. A provider
+      // response that fails validation must never replace the last checkpoint.
+      latestValidSuggestions = initialSuggestions;
       const initialScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
       if (requestedStoryMaterialFormat(body) === "novel" && initialScale.exceedsMaximum) {
         throw new NovelScalePlanningError(
@@ -5590,10 +5596,22 @@ export async function runSuggestionJob(
           };
         } catch (error) {
           if (!(error instanceof NovelScalePlanningError) || !["failed_expansion", "failed_under_target"].includes(error.code)) throw error;
+          // progressivelyExpandOutline invokes checkpoint callbacks only after
+          // additions pass structural, beat, and length validation. Prefer
+          // that newest validated state over the first-pass outline; invalid
+          // or partially parsed provider output never reaches this variable.
+          completedSuggestions = latestValidSuggestions.length > 0
+            ? latestValidSuggestions
+            : completedSuggestions;
           completionWarnings.push(`Optional novel expansion did not finish; the usable outline was preserved below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target.`);
           diagnostics = {
             ...diagnostics,
             expansionWarning: error.message,
+            expansionCheckpoint: diagnostics.expansionCheckpoint ?? buildExpansionCheckpoint(
+              completedSuggestions,
+              body.existingSections ?? [],
+              diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [],
+            ),
             novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
           };
         }
@@ -5783,6 +5801,8 @@ export async function runSuggestionJob(
         updateRun,
       });
       body = { ...body, storyMaterialEnrichment: resumedMaterial };
+      // The persisted checkpoint is already validated; it is the fallback if
+      // the resumed provider attempt fails before producing another checkpoint.
       latestValidSuggestions = resume.suggestions;
       // PR8 (revised): preserve the repair audit fields through the
       // subsequent diagnostics assignment so they actually land in the
@@ -5837,16 +5857,26 @@ export async function runSuggestionJob(
         };
       } catch (error) {
         if (isProviderBillingUnavailable(error)) throw error;
+        const recoverableExpansionFailure = error instanceof NovelScalePlanningError &&
+          ["failed_expansion", "failed_under_target"].includes(error.code);
+        if (!recoverableExpansionFailure) throw error;
+        completedSuggestions = latestValidSuggestions.length > 0
+          ? latestValidSuggestions
+          : resume.suggestions;
+        completionWarnings.push(`Optional novel expansion did not finish; the usable outline was preserved below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target.`);
         diagnostics = {
           ...diagnostics,
-          expansionError: error instanceof Error ? error.message : String(error),
-          novelScale: evaluateNovelScale(resume.suggestions, body.existingSections ?? []),
+          expansionWarning: error.message,
+          expansionCheckpoint: diagnostics.expansionCheckpoint ?? buildExpansionCheckpoint(
+            completedSuggestions,
+            body.existingSections ?? [],
+            diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? resume.priorDiagnostics,
+          ),
+          novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
         };
-        throw error;
       }
-      // Expansion-resumed outlines use the same final completion gate as
-      // first-pass and obligation-repaired outlines.
-      await completeValidatedOutline(completedSuggestions, completionWarnings);
+      // Initial and resumed expansion use the same final completion gate.
+      await completeValidatedOutline(completedSuggestions, completionWarnings, true);
       return;
     }
     let storyMaterial: StoryMaterialEnrichment | null = null;

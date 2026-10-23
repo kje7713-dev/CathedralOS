@@ -1929,7 +1929,7 @@ Deno.test("failed expansion retains the first-pass suggestions in its checkpoint
 });
 
 Deno.test("successful round 1 plus failed round 2 retains the round-1 checkpoint", async () => {
-  const firstPass = sceneOutline(27);
+  const firstPass = sceneOutline(25);
   let checkpoint: any = null;
   let failure: unknown;
   try {
@@ -1937,7 +1937,7 @@ Deno.test("successful round 1 plus failed round 2 retains the round-1 checkpoint
       firstPass as any,
       new Set(["beat-1"]),
       async (_current, context) => {
-        if (context.round === 1) return Array.from({ length: 10 }, (_, i) => expansionSection(`Round 1 checkpoint ${i + 1}`));
+        if (context.round === 1) return Array.from({ length: 2 }, (_, i) => expansionSection(`Round 1 checkpoint ${i + 1}`));
         throw new ExpansionValidationError("round 2 failed");
       },
       async (_diagnostic, rounds, current) => {
@@ -1950,7 +1950,7 @@ Deno.test("successful round 1 plus failed round 2 retains the round-1 checkpoint
   assertEquals((failure as NovelScalePlanningError).code, "failed_expansion");
   assertEquals(checkpoint.nextRound, 2);
   assertEquals(checkpoint.expansionRounds.filter((round: any) => round.status === "completed").length, 1);
-  assertEquals(checkpoint.scale.projectedWords, evaluateNovelScale(Array.from({ length: 37 }, () => ({ container: "scene" }))).projectedWords);
+  assertEquals(checkpoint.scale.projectedWords, evaluateNovelScale(Array.from({ length: 27 }, () => ({ container: "scene" }))).projectedWords);
 });
 
 Deno.test("insufficient-credit expansion failures are resumable from their durable checkpoint", () => {
@@ -5084,6 +5084,103 @@ Deno.test("reclaimed worker trusts an intact persisted planning checkpoint after
   await run();
   assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
+});
+
+Deno.test("initial and resumed optional expansion preserve the newest valid checkpoint", async () => {
+  const shortBody = await executableWorkerBody();
+  const provenance = await recipeProvenance(shortBody.recipe as any);
+  const plannerItem = (id: string) => ({
+    id, source: "planner", sourceReference: null, label: id,
+    description: `${id} creates a concrete pressure, decision, and consequence.`,
+  });
+  const novelMaterial = attachRecipeProvenance({
+    ...repairStoryMaterialFromRecipe(shortBody.recipe, provenance, "novel"),
+    conflictSources: [plannerItem("conflict-1"), plannerItem("conflict-2")],
+    escalationLadder: [plannerItem("escalation-1"), plannerItem("escalation-2"), plannerItem("escalation-3")],
+    reversals: [plannerItem("reversal-1")],
+    consequences: [plannerItem("consequence-1")],
+  } as any, provenance);
+  const body = {
+    ...shortBody,
+    requestedFormat: "novel",
+    storyMaterialEnrichment: novelMaterial,
+  } as any;
+  const initialDB = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const initialActions: string[] = [];
+  const initialRun = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db: initialDB,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: fakeWorkerBilling(initialActions) as any,
+    scheduleContinuation: async () => {},
+  });
+  await initialRun();
+  await initialRun();
+  await initialRun();
+  assertEquals(initialDB.row.status, "completed");
+  assertEquals(initialDB.row.suggestions.length, 2);
+  assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global"]);
+  assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("Optional novel expansion did not finish")), true);
+
+  const completedRound = {
+    round: 1,
+    sectionCountBefore: 2,
+    projectedTokensBefore: 11000,
+    projectedWordsBefore: 8462,
+    additionsReturned: 0,
+    sectionCountAfter: 2,
+    projectedTokensAfter: 11000,
+    projectedWordsAfter: 8462,
+    remainingEstimatedDeficitTokens: 138500,
+    status: "completed",
+  } as const;
+  const resumedRow = {
+    ...initialDB.row,
+    status: "pending",
+    error: null,
+    error_code: null,
+    completed_at: null,
+    lease_owner: null,
+    lease_expires_at: null,
+    planning_state: {
+      ...initialDB.row.planning_state,
+      phase: "expansion",
+      nextAction: "expansion",
+      expansionCheckpoint: {
+        stage: "expansion",
+        nextRound: 2,
+        nextBeatIndex: 0,
+        scale: evaluateNovelScale(initialDB.row.suggestions),
+        expansionRounds: [completedRound],
+      },
+    },
+    diagnostics: {
+      ...initialDB.row.diagnostics,
+      expansionCheckpoint: {
+        stage: "expansion",
+        nextRound: 2,
+        nextBeatIndex: 0,
+        scale: evaluateNovelScale(initialDB.row.suggestions),
+        expansionRounds: [completedRound],
+      },
+    },
+  };
+  const resumedDB = new ExecutableRunDb(resumedRow);
+  const resumedActions: string[] = [];
+  const resumedRun = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db: resumedDB,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: fakeWorkerBilling(resumedActions) as any,
+    scheduleContinuation: async () => {},
+  });
+  await resumedRun();
+  assertEquals(resumedDB.row.status, "completed");
+  assertEquals(resumedDB.row.suggestions, initialDB.row.suggestions);
+  assertEquals(resumedDB.row.warnings, initialDB.row.warnings);
+  assertEquals(resumedActions, ["outline-expansion-2-global"]);
 });
 
 Deno.test("production checkpoint resume executes the single global outline call once", async () => {
