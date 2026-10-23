@@ -5405,13 +5405,21 @@ const finalQualityTestSection = (beatID: string, title: string, dramaticFunction
   dramaticEvent: `${title} happens.`, resultingChange, terminalState,
 });
 
-Deno.test("final quality includes accepted sections for required Story Arc functions", () => {
-  const acceptedResolution = finalQualityTestSection("final", "Accepted resolution", "resolution", "The central conflict is resolved and the cost is accepted.", "The new normal holds without the former conflict continuing.");
+Deno.test("final quality includes legacy accepted sections without semantic metadata", () => {
+  const { dramaticFunction: _dramaticFunction, ...acceptedResolution } = finalQualityTestSection("final", "Accepted resolution", "resolution", "The central conflict is resolved and the cost is accepted.", "The new normal holds without the former conflict continuing.");
   const generatedSetup = finalQualityTestSection("setup", "New setup", "setup", "The pressure changes.", "The next pressure begins.");
   const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedSetup as any]);
-  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, new Map([["setup", { minSections: 1, rationale: "test" }], ["final", { minSections: 0, rationale: "accepted coverage" }]]) as any);
+  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, new Map([["setup", { minSections: 1, rationale: "test" }], ["final", { minSections: 0, rationale: "accepted coverage" }]]) as any, new Set([acceptedResolution as any]));
   assertEquals(complete.map((section) => section.title), ["New setup", "Accepted resolution"]);
   assertEquals(quality.semanticArcIssues, []);
+});
+
+Deno.test("mixed legacy accepted and generated sections still report generated defects", () => {
+  const { dramaticFunction: _dramaticFunction, ...acceptedResolution } = finalQualityTestSection("final", "Accepted narrative resolution", "resolution", "The central conflict is resolved.", "The new normal holds.");
+  const generatedSetup = finalQualityTestSection("final", "Generated aftermath", "aftermath", "The residue continues.", "The old conflict remains unresolved.");
+  const complete = composeFinalQualitySuggestions(["setup", "final"], [acceptedResolution as any], [generatedSetup as any]);
+  const quality = collectAdvisoryOutlineQuality(complete as any, undefined, "shortStory", finalQualityTestTemplate as any, undefined, new Set([acceptedResolution as any]));
+  assertEquals(quality.semanticArcIssues.some((issue) => issue.includes("final") && issue.includes("resolution")), true);
 });
 
 Deno.test("final quality still reports a truly missing Story Arc requirement", () => {
