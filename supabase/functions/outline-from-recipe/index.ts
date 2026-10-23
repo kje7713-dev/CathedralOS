@@ -5548,24 +5548,37 @@ export async function runSuggestionJob(
         await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
         throw new SuggestionWorkerYield();
       }
-      const finalQualitySuggestions = composeFinalQualitySuggestions(
-        body.arcTemplate.beats.map((beat) => beat.id),
-        (body.existingSections ?? []) as unknown as Suggestion[],
-        completedSuggestions,
-      );
-      const legacyAcceptedSections = new Set(
-        (body.existingSections ?? []).filter((section) =>
-          body.arcTemplate.beats.some((beat) => beat.id === section.storyArcBeatID)
-        ) as unknown as Suggestion[],
-      );
-      const finalQuality = collectAdvisoryOutlineQuality(
-        finalQualitySuggestions,
-        body.storyMaterialEnrichment,
-        requestedStoryMaterialFormat(body),
-        body.arcTemplate,
-        effectiveAllocation,
-        legacyAcceptedSections,
-      );
+      let finalQuality: OutlineQualityDiagnostic;
+      try {
+        const finalQualitySuggestions = composeFinalQualitySuggestions(
+          body.arcTemplate.beats.map((beat) => beat.id),
+          (body.existingSections ?? []) as unknown as Suggestion[],
+          completedSuggestions,
+        );
+        const legacyAcceptedSections = new Set(
+          (body.existingSections ?? []).filter((section) =>
+            body.arcTemplate.beats.some((beat) => beat.id === section.storyArcBeatID)
+          ) as unknown as Suggestion[],
+        );
+        finalQuality = collectAdvisoryOutlineQuality(
+          finalQualitySuggestions,
+          body.storyMaterialEnrichment,
+          requestedStoryMaterialFormat(body),
+          body.arcTemplate,
+          effectiveAllocation,
+          legacyAcceptedSections,
+        );
+      } catch (error) {
+        const advisoryValidationError = error instanceof Error ? error.message : String(error);
+        finalQuality = {
+          distinctnessIssues: [],
+          causalScaleIssues: [],
+          semanticArcIssues: [],
+          supportingEntities: [],
+          unusedStoryMaterialItems: 0,
+          advisoryValidationError,
+        };
+      }
       diagnostics = { ...diagnostics, finalAdvisoryQuality: finalQuality };
       const advisoryWarnings = [
         ...(Array.isArray(diagnostics.semanticWarnings)

@@ -5360,6 +5360,50 @@ Deno.test("production checkpoint resume executes the single global outline call 
   assertEquals(scheduled.length, 1);
 });
 
+Deno.test("composition failure after validation completes with the generated outline unchanged", async () => {
+  const body = await executableWorkerBody() as any;
+  body.existingSections = [{
+    title: "Accepted section", summary: "Accepted summary", container: "scene", storyArcBeatID: "beat-1", recipeRequirementIDs: [],
+  }] as any;
+  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const actions: string[] = [];
+  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
+  });
+  await run();
+  const expectedSuggestions = structuredClone(db.row.suggestions);
+  Object.defineProperty(body.existingSections[0], "title", { configurable: true, get: () => { throw new Error("simulated final quality composition failure"); } });
+  await run();
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.suggestions, expectedSuggestions);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(typeof db.row.diagnostics.finalAdvisoryQuality.advisoryValidationError, "string");
+  assertEquals(db.row.warnings.some((warning: string) => warning.includes("Final advisory quality validation was unavailable")), true);
+});
+
+Deno.test("advisory validator failure completes without another provider call", async () => {
+  const body = await executableWorkerBody() as any;
+  body.existingSections = [
+    { title: "Accepted one", summary: "Accepted summary one", container: "scene", storyArcBeatID: "beat-1", recipeRequirementIDs: [] },
+    { title: "Accepted two", summary: "Accepted summary two", container: "scene", storyArcBeatID: "beat-1", recipeRequirementIDs: [] },
+  ] as any;
+  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const actions: string[] = [];
+  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
+  });
+  await run();
+  const expectedSuggestions = structuredClone(db.row.suggestions);
+  await run();
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.suggestions, expectedSuggestions);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(typeof db.row.diagnostics.finalAdvisoryQuality.advisoryValidationError, "string");
+  assertEquals(db.row.warnings.some((warning: string) => warning.includes("Final advisory quality validation was unavailable")), true);
+});
+
 Deno.test("global outline completion preserves advisory quality and obligation audit diagnostics", async () => {
   const body = await executableWorkerBody();
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
