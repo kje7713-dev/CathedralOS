@@ -586,11 +586,11 @@ Deno.test("production prompt uses planner residual allocation unchanged (no doub
     ["beat-3", { minSections: 2, rationale: "needs 2 new" }],
   ]);
   const { system } = buildPrompt(sparseWithThirdBeat, residual as any);
-  assertEquals(system.includes("Opening Image: minimum 3 sections"), true,
+  assertEquals(system.includes("Opening Image: complete first-pass allocation: 3 sections"), true,
     "beat-1 residual 3 must reach buildPrompt unchanged (pre-fix would have produced 1)");
-  assertEquals(system.includes("Break into Two: minimum 0 sections"), true,
+  assertEquals(system.includes("Break into Two: complete first-pass allocation: 0 sections"), true,
     "beat-2 residual 0 must reach buildPrompt unchanged (pre-fix would have clamped -1 to 0)");
-  assertEquals(system.includes("Midpoint: minimum 2 sections"), true,
+  assertEquals(system.includes("Midpoint: complete first-pass allocation: 2 sections"), true,
     "beat-3 residual 2 must reach buildPrompt unchanged");
 });
 
@@ -657,9 +657,9 @@ Deno.test("planner→generation handoff: 2 existing + planner returns 3 → gene
 
   // Production handoff: buildPrompt receives the planner's residual counts unchanged.
   const { system } = buildPrompt(reqWithExisting, plannedAllocation);
-  assertEquals(system.includes("Opening Image: minimum 3 sections"), true,
+  assertEquals(system.includes("Opening Image: complete first-pass allocation: 3 sections"), true,
     "beat-1 residual 3 must reach buildPrompt unchanged (pre-fix would have produced 1)");
-  assertEquals(system.includes("Break into Two: minimum 2 sections"), true,
+  assertEquals(system.includes("Break into Two: complete first-pass allocation: 2 sections"), true,
     "beat-2 residual 2 must reach buildPrompt unchanged");
 
   // The planner was called exactly once (no retry triggered).
@@ -697,9 +697,9 @@ Deno.test("planner→generation handoff: planner returns 0 → generation receiv
     "planner must return 0 for beat-2 (fully covered)");
 
   const { system } = buildPrompt(reqWithExisting, plannedAllocation);
-  assertEquals(system.includes("Opening Image: minimum 0 sections"), true,
+  assertEquals(system.includes("Opening Image: complete first-pass allocation: 0 sections"), true,
     "beat-1 residual 0 must reach buildPrompt unchanged (pre-fix would have clamped -1 to 0)");
-  assertEquals(system.includes("Break into Two: minimum 0 sections"), true,
+  assertEquals(system.includes("Break into Two: complete first-pass allocation: 0 sections"), true,
     "beat-2 residual 0 must reach buildPrompt unchanged (pre-fix would have clamped -1 to 0)");
 });
 
@@ -1377,6 +1377,37 @@ Deno.test("outline section contract assigns canonical plot decisions to the plan
   assertEquals(prompt.includes("Make entryState, resultingChange, and terminalState similarly concrete"), true);
 });
 
+Deno.test("novel outline handoff treats allocation as complete and projects mixed containers honestly", () => {
+  const allocation = new Map([
+    ["beat-1", { minSections: 15, rationale: "rising material" }],
+    ["beat-2", { minSections: 14, rationale: "resolution material" }],
+  ]);
+  const novelPrompt = buildPrompt({ ...sparseRequest, requestedFormat: "novel" } as any, allocation).system;
+  assertEquals(novelPrompt.includes("## Complete first-pass allocation"), true);
+  assertEquals(novelPrompt.includes("not a minimum-only Story Arc coverage floor"), true);
+  assertEquals(novelPrompt.includes("complete first-pass allocation: 15 sections"), true);
+  assertEquals(novelPrompt.includes("5,500 tokens"), true);
+  assertEquals(novelPrompt.includes("Their lower midpoints reduce the authoritative projected total"), true);
+  assertEquals(novelPrompt.includes("29 mixed containers"), true);
+  assertEquals(novelPrompt.includes("## Use the minimum-only allocation"), false);
+
+  // Production-shaped deterministic fixture: 29 allocated units, only eight
+  // chapters, with the remainder using shorter but valid container types.
+  const productionShape = [
+    ...Array.from({ length: 8 }, () => ({ container: "chapter" })),
+    ...Array.from({ length: 15 }, () => ({ container: "developedScene" })),
+    ...Array.from({ length: 5 }, () => ({ container: "setPiece" })),
+    { container: "sceneSequence" },
+  ];
+  assertEquals(productionShape.length, 29);
+  assertEquals(Math.round(projectedExpectedTokens(productionShape) / 1.3), 77115);
+  assertEquals(Math.round(projectedExpectedTokens(Array.from({ length: 29 }, () => ({ container: "chapter" }))) / 1.3), 122692);
+
+  const nonNovelPrompt = buildPrompt({ ...sparseRequest, requestedFormat: "shortStory" } as any, allocation).system;
+  assertEquals(nonNovelPrompt.includes("## Use the minimum-only allocation"), true);
+  assertEquals(nonNovelPrompt.includes("## Complete first-pass allocation"), false);
+});
+
 Deno.test("novel planning exposes container semantics and projected-size expansion", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
@@ -1407,6 +1438,9 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(outlinePrompt.includes("Preserve creative freedom over how and when the requirement is realized"), true);
   assertEquals(outlinePrompt.includes("125,000-word hard cap"), true);
   assertEquals(outlinePrompt.includes("Fit the complete story package into the budget"), true);
+  assertEquals(outlinePrompt.includes("Existing accepted sections already contribute to the complete projection"), true);
+  assertEquals(outlinePrompt.includes("Do not treat a shorter container as chapter-scale"), true);
+  assertEquals(outlinePrompt.includes("5,500-token chapter midpoint"), true);
   assertEquals(outlinePrompt.includes("do not drop story material"), true);
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
   assertEquals(outlinePrompt.includes("Recipe realization priority"), true);
