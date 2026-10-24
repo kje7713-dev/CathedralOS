@@ -39,6 +39,8 @@ import {
   isRetryableInsufficientCreditFailure,
   fitAllocationToNovelBudget,
   maximumBudgetedNewSections,
+  maximumContainerPlannedNewSections,
+  allocationPlanningDiagnostics,
   allocationDeficits,
   allocationShortfalls,
   allocationRepairExhausted,
@@ -92,6 +94,11 @@ import {
   attachRecipeProvenance,
   isCompatibleStoryMaterialEnrichment,
   findDramaticDistinctnessIssues,
+  validateNarrativeStructureQuality,
+  assertNarrativeStructureQuality,
+  validatePersistedAllocationCheckpoint,
+  AllocationCheckpointValidationError,
+  OutlineNarrativeQualityError,
   findCausalScaleIssues,
   validateOutlinePlanningQuality,
   collectAdvisoryOutlineQuality,
@@ -565,10 +572,171 @@ Deno.test("container-aware allocation safely falls back on inconsistent counts a
   const req = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
   const fitted = fitAllocationToNovelBudget(allocation, req);
   assertEquals(Array.from(fitted.values()).reduce((n, a) => n + a.minSections, 0), 29);
-  assertEquals(Array.from(fitted.values()).every((a) => !a.containerCounts), true);
-  const legacySchema: any = buildSuggestionResponseSchema(beats, fitted, [], "", "novel");
-  assertEquals(legacySchema.properties.beats.properties["beat-1"].type, "array");
-  assertEquals(Array.from(fitted.values()).every((a) => a.rationale.includes("conservative sizing fallback")), true);
+  assertEquals(Array.from(fitted.values()).every((a) => a.containerCounts?.chapter === a.minSections), true);
+  assertEquals(Array.from(fitted.values()).every((a) => a.allocationFit === "normalized"), true);
+});
+
+Deno.test("novel section allowance uses the global guard, not a container benchmark", () => {
+  const req = { ...sparseRequest, requestedFormat: "novel" } as any;
+  assertEquals(projectedExpectedTokens([{ container: "scene" }]), 1300);
+  assertEquals(projectedExpectedTokens([{ container: "developedScene" }]), 2250);
+  assertEquals(projectedExpectedTokens([{ container: "setPiece" }]), 3500);
+  assertEquals(projectedExpectedTokens([{ container: "sceneSequence" }]), 5000);
+  assertEquals(projectedExpectedTokens([{ container: "chapter" }]), 5500);
+  assertEquals(maximumContainerPlannedNewSections(req), 200);
+  const prompt = buildAllocationPrompt(req).system;
+  assertStringIncludes(prompt, "upper allowance for NEW substantive units is 200");
+  assertStringIncludes(prompt, "Determine the required dramatic progression");
+  assertStringIncludes(prompt, "not a quota or per-beat target");
+});
+
+Deno.test("scene-heavy production allocation preserves its requested mix and skips expansion", async () => {
+  const countsByBeat = [10, 11, 10, 12, 11, 13, 11, 14, 15, 7];
+  const beats = countsByBeat.map((_, index) => ({ id: `beat-${index + 1}` }));
+  const requested = countsByBeat.map((minSections, index) => ({
+    beatIndex: index,
+    minSections,
+    containerCounts: { scene: minSections, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 },
+    rationale: `beat ${index + 1}`,
+  }));
+  let providerCalls = 0;
+  const req = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  const allocation = await planSectionAllocation(req, "unused", async () => {
+    providerCalls++;
+    return { content: JSON.stringify({ allocations: requested }), creditCostCharged: 0, remainingCredits: 0 };
+  });
+  const acceptedCount = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
+  const planned = Array.from(allocation.values()).flatMap((plan) =>
+    Object.entries(plan.containerCounts ?? {}).flatMap(([container, count]) =>
+      Array.from({ length: count }, () => ({ container }))));
+  assertEquals(providerCalls, 1);
+  assertEquals(acceptedCount, 114);
+  assertEquals(Array.from(allocation.values()).every((plan) => plan.allocationFit === "preserved"), true);
+  assertEquals(Math.round(projectedExpectedTokens(planned) / 1.3), 114000);
+  assertEquals(evaluateNovelScale(planned).exceedsMaximum, false);
+  assertEquals(needsNovelExpansion(planned), false);
+  let expansionCalls = 0;
+  const expanded = await progressivelyExpandOutline(
+    planned as any,
+    new Set(beats.map((beat) => beat.id)),
+    async () => { expansionCalls++; return []; },
+  );
+  assertEquals(expansionCalls, 0);
+  assertEquals(expanded.diagnostics.length, 0);
+});
+
+Deno.test("overgrown valid mixed allocations normalize by actual tokens without relabeling", () => {
+  const beats = [{ id: "beat-1" }, { id: "beat-2" }, { id: "beat-3" }];
+  const counts = { scene: 8, developedScene: 8, setPiece: 8, sceneSequence: 8, chapter: 8 };
+  const allocation = new Map(beats.map((beat) => [beat.id, {
+    minSections: 40,
+    containerCounts: counts,
+    rationale: "material-rich movement",
+  }]));
+  const req = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  const first = fitAllocationToNovelBudget(allocation, req);
+  const second = fitAllocationToNovelBudget(allocation, req);
+  assertEquals(first, second);
+  assertEquals(Array.from(first.values()).every((plan) => plan.allocationFit === "normalized"), true);
+  assertEquals(Array.from(first.values()).every((plan) => plan.minSections > 0), true);
+  assertEquals(Array.from(first.values()).every((plan) =>
+    Object.values(plan.containerCounts ?? {}).reduce((sum, count) => sum + count, 0) === plan.minSections), true);
+  assertEquals(Array.from(first.values()).reduce((sum, plan) => sum + plan.minSections, 0) <= 120, true);
+  const projectedTokens = Array.from(first.values()).reduce((sum, plan) => sum +
+    Object.entries(plan.containerCounts ?? {}).reduce((inner, [container, count]) => inner + count * projectedExpectedTokens([{ container }]), 0), 0);
+  assertEquals(projectedTokens + projectedExpectedTokens(req.existingSections ?? []) <= 125000 * 1.3, true);
+  assertEquals(Array.from(first.values()).every((plan) => plan.allocationMinimum === plan.minSections), true);
+});
+
+Deno.test("partially fitted allocation checkpoints are revalidated before resume", () => {
+  const counts = { scene: 20, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 };
+  const partial = new Map([
+    ["beat-1", { minSections: 20, containerCounts: counts, allocationFit: "preserved", rationale: "opening" }],
+    ["beat-2", { minSections: 20, containerCounts: counts, rationale: "ending" }],
+  ] as any);
+  const req = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const revalidated = fitAllocationToNovelBudget(partial, req);
+  assertEquals(Array.from(revalidated.values()).every((plan) => plan.allocationFit === "preserved"), true);
+  assertEquals(Array.from(revalidated.values()).every((plan) => plan.containerCounts?.scene === plan.minSections), true);
+});
+
+Deno.test("allocation diagnostics distinguish requested and accepted projected mixes", () => {
+  const counts = { scene: 2, developedScene: 2, setPiece: 2, sceneSequence: 2, chapter: 2 };
+  const allocation = fitAllocationToNovelBudget(new Map([
+    ["beat-1", { minSections: 10, containerCounts: counts, rationale: "opening" }],
+    ["beat-2", { minSections: 10, containerCounts: counts, rationale: "ending" }],
+  ]), { ...sparseRequest, requestedFormat: "novel" } as any);
+  const diagnostics = allocationPlanningDiagnostics(allocation, [{ container: "chapter" }]);
+  assertEquals(diagnostics.plannerAllocationRequestedCountsByBeat, { "beat-1": 10, "beat-2": 10 });
+  assertEquals(diagnostics.plannerAllocationAcceptedCountsByBeat, { "beat-1": 10, "beat-2": 10 });
+  assertEquals(diagnostics.plannerAllocationFitByBeat, { "beat-1": "preserved", "beat-2": "preserved" });
+  assertEquals(typeof diagnostics.plannerAllocationFitReasonByBeat["beat-1"], "string");
+  assertEquals(diagnostics.plannerAllocationRequestedProjectedTokens, diagnostics.plannerAllocationAcceptedProjectedTokens);
+});
+
+Deno.test("persisted allocation checkpoints reject incomplete or inconsistent beat state", () => {
+  const req = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const plan = { minSections: 2, containerCounts: { scene: 1, developedScene: 1, setPiece: 0, sceneSequence: 0, chapter: 0 }, rationale: "connected movement" };
+  assertThrows(
+    () => validatePersistedAllocationCheckpoint([["beat-1", plan]], req),
+    AllocationCheckpointValidationError,
+  );
+  assertThrows(
+    () => validatePersistedAllocationCheckpoint([["beat-1", plan], ["beat-1", plan]], req),
+    AllocationCheckpointValidationError,
+  );
+  assertThrows(
+    () => validatePersistedAllocationCheckpoint([
+      ["beat-1", { ...plan, containerCounts: { ...plan.containerCounts, scene: 0 } }],
+      ["beat-2", plan],
+      ["beat-3", plan],
+      ["beat-4", plan],
+      ["beat-5", plan],
+      ["beat-6", plan],
+      ["beat-7", plan],
+      ["beat-8", plan],
+      ["beat-9", plan],
+      ["beat-10", plan],
+    ], req),
+    AllocationCheckpointValidationError,
+  );
+});
+
+Deno.test("partially completed novels preserve uncovered beat coverage under the hard cap", () => {
+  const beats = ["beat-1", "beat-2", "beat-3"].map((id) => ({ id }));
+  const existingSections = Array.from({ length: 18 }, (_, index) => ({
+    container: "chapter",
+    storyArcBeatID: index < 6 ? "beat-1" : undefined,
+  }));
+  const req = { ...sparseRequest, requestedFormat: "novel", existingSections,
+    arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  const allocation = new Map([
+    ["beat-1", { minSections: 0, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 }, rationale: "already covered" }],
+    ["beat-2", { minSections: 20, containerCounts: { scene: 20, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 }, rationale: "escalation" }],
+    ["beat-3", { minSections: 20, containerCounts: { scene: 20, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 }, rationale: "resolution" }],
+  ]);
+  const fitted = fitAllocationToNovelBudget(allocation, req);
+  assertEquals(fitted.get("beat-1")?.minSections, 0);
+  assertEquals((fitted.get("beat-2")?.minSections ?? 0) > 0, true);
+  assertEquals((fitted.get("beat-3")?.minSections ?? 0) > 0, true);
+  const accepted = Array.from(fitted.values()).flatMap((plan) =>
+    Object.entries(plan.containerCounts ?? {}).flatMap(([container, count]) =>
+      Array.from({ length: count }, () => ({ container }))));
+  assertEquals(evaluateNovelScale(accepted, existingSections).exceedsMaximum, false);
+});
+
+Deno.test("existing accepted sections use actual residual capacity once", () => {
+  const existingSections = Array.from({ length: 10 }, () => ({ container: "setPiece" }));
+  const req = { ...sparseRequest, requestedFormat: "novel", existingSections } as any;
+  assertEquals(maximumContainerPlannedNewSections(req), 200);
+  const counts = { scene: 0, developedScene: 0, setPiece: 40, sceneSequence: 0, chapter: 0 };
+  const allocation = fitAllocationToNovelBudget(new Map([
+    ["beat-1", { minSections: 40, containerCounts: counts, rationale: "remaining story" }],
+  ]), req);
+  const newTokens = Array.from(allocation.values()).reduce((sum, plan) => sum +
+    (plan.containerCounts?.setPiece ?? 0) * projectedExpectedTokens([{ container: "setPiece" }]), 0);
+  assertEquals(allocation.get("beat-1")!.minSections < 40, true);
+  assertEquals(newTokens + projectedExpectedTokens(existingSections) <= 125000 * 1.3, true);
 });
 
 Deno.test("2% novel tolerance skips length-only expansion without weakening the hard cap", async () => {
@@ -3112,6 +3280,35 @@ Deno.test("PR2 distinctness gate identifies repeated dramatic work without delet
   assertEquals(findDramaticDistinctnessIssues([repeated[0], ...distinct]).length, 0);
 });
 
+Deno.test("ordinary mixed-container narrative quality is accepted without fragmentation", () => {
+  const coherent: any[] = [
+    { title: "Crossing", summary: "The group crosses the flooded rail yard.", dramaticEvent: "The group crosses the flooded rail yard under watch.", resultingChange: "They reach the depot but lose their supplies.", terminalState: "The depot becomes a contested refuge.", container: "scene", storyArcBeatID: "beat-1" },
+    { title: "Bargain", summary: "The group bargains with the depot's watch.", dramaticEvent: "The group bargains with the depot's watch for shelter.", resultingChange: "The watch demands the route map.", terminalState: "The map becomes leverage against the group.", container: "developedScene", storyArcBeatID: "beat-1" },
+    { title: "Betrayal", summary: "A courier sells the route map.", dramaticEvent: "A courier sells the route map to the pursuing force.", resultingChange: "The pursuers learn the group's next destination.", terminalState: "The group must leave before dawn.", container: "setPiece", storyArcBeatID: "beat-1" },
+  ];
+  assertEquals(validateNarrativeStructureQuality(coherent, "novel"), { accepted: true, fragmentationIssues: [] });
+  assertNarrativeStructureQuality(coherent, "novel");
+});
+
+Deno.test("overfragmented 114-scene outline fails narrative quality despite acceptable projected length", () => {
+  const overfragmented: any[] = Array.from({ length: 114 }, (_, index) => ({
+    title: `Route beat ${index + 1}`,
+    summary: "The group discusses the route and reaches the same conclusion.",
+    dramaticEvent: "The group discusses the route and reaches the same conclusion.",
+    resultingChange: "The route remains unchanged.",
+    terminalState: "The route remains unchanged.",
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: `The route remains unchanged ${index + 1}.`,
+    storyArcBeatID: `beat-${Math.floor(index / 12) + 1}`,
+  }));
+  assertEquals(Math.round(projectedExpectedTokens(overfragmented) / 1.3), 114000);
+  const quality = validateNarrativeStructureQuality(overfragmented, "novel");
+  assertEquals(quality.accepted, false);
+  assertEquals(quality.fragmentationIssues.length > 0, true);
+  assertThrows(() => assertNarrativeStructureQuality(overfragmented, "novel"), OutlineNarrativeQualityError);
+});
+
 Deno.test("PR3 causal-scale gate is general and records material-backed diagnostics", () => {
   const material = enrichmentFixture();
   material.escalationLadder = [
@@ -5326,8 +5523,9 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
     entryState: "The prior state holds.", dramaticEvent: `${title} happens.`,
     resultingChange: `${title} changes the pressure.`, terminalState: `${title} hands forward pressure.`,
   });
+  const dramaticLabels = ["river", "gate", "signal", "market", "bridge", "tower", "archive", "quarry", "harbor", "orchard", "station", "canal", "foundry", "observatory", "courthouse", "clinic", "warehouse", "viaduct", "workshop", "reservoir", "theater", "schoolhouse", "greenhouse", "watchpost", "citadel"];
   const firstPass = Array.from({ length: 25 }, (_, index) =>
-    baseSection(index === 24 ? "beat-2" : "beat-1", `First-pass chapter ${index + 1}`));
+    baseSection(index === 24 ? "beat-2" : "beat-1", `First-pass ${dramaticLabels[index]}`));
   const initialDB = new ExecutableRunDb(checkpointedWorkerRow(body));
   const initialActions: string[] = [];
   const initialBilling = validatedWorkerBilling(initialActions, (action) => {
@@ -5449,6 +5647,43 @@ Deno.test("production checkpoint resume executes the single global outline call 
   assertEquals(billableActions, ["outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
   assertEquals(scheduled.length, 1);
+});
+
+Deno.test("worker revalidates a partially fitted allocation checkpoint before generation", async () => {
+  const fixture = await executableWorkerBody();
+  const body = {
+    ...fixture,
+    arcTemplate: {
+      ...fixture.arcTemplate,
+      beats: fixture.arcTemplate.beats.map((beat: any) => ({ ...beat, role: undefined })),
+    },
+  } as any;
+  const counts = { scene: 1, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 };
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    request_json: body,
+    planning_state: {
+      version: 2,
+      phase: "allocation_complete",
+      nextAction: "outline-suggestions",
+      allocationEntries: [
+        ["beat-1", { minSections: 1, containerCounts: counts, allocationFit: "preserved", rationale: "opening" }],
+        ["beat-2", { minSections: 1, containerCounts: counts, rationale: "ending" }],
+      ],
+    },
+  });
+  const actions: string[] = [];
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db,
+    model: { provider_model: "fixture-model" },
+    provider: {},
+    creditStore: {},
+    billableLLM: fakeWorkerBilling(actions) as any,
+    scheduleContinuation: async () => {},
+  });
+  assertEquals(actions.includes("outline-plan"), false);
+  assertEquals(db.row.planning_state.allocationEntries.every(([, plan]: any) => plan.allocationFit === "preserved"), true, JSON.stringify({ row: db.row, patches: db.patchHistory.filter((patch: any) => patch.planning_state) }));
+  assertEquals(db.patchHistory.some((patch: any) => patch.diagnostics?.stage === "allocation_revalidated"), true);
 });
 
 Deno.test("global outline completion preserves advisory quality and obligation audit diagnostics", async () => {
@@ -6383,7 +6618,7 @@ Deno.test("final global provider call completes without an extra continuation", 
   assertEquals(providerCalls.length, 2, JSON.stringify({ providerCalls, planningState: db.row.planning_state, diagnostics: db.row.diagnostics }));
   assertEquals(providerCalls, ["outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed", JSON.stringify({ providerCalls, planningState: db.row.planning_state, diagnostics: db.row.diagnostics }));
-  assertEquals(db.row.diagnostics.completedStages, ["outline"]);
+  assertEquals(db.row.diagnostics.completedStages, ["allocation", "outline"]);
   assertEquals(scheduleCount, 1);
 });
 

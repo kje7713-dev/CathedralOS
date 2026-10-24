@@ -2999,6 +2999,11 @@ type Allocation = {
   allocationMinimum?: number;
   /** The container-aware budget chosen by the novel planner. */
   containerCounts?: NovelContainerCounts;
+  /** Original planner request, retained for truthful allocation diagnostics. */
+  requestedMinSections?: number;
+  requestedContainerCounts?: NovelContainerCounts;
+  allocationFit?: "preserved" | "normalized" | "conservative_fallback";
+  allocationFitReason?: string;
   rationale: string;
 };
 
@@ -3030,13 +3035,11 @@ export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): numbe
   );
 }
 
-/** The mixed-container budget counts the smallest novel leaf, not chapters.
- * Legacy allocations without a type mix still use chapter-equivalent limits. */
-export function maximumContainerPlannedNewSections(req: OutlineFromRecipeRequest): number {
-  if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
-  const remaining = NOVEL_MAX_PROJECTED_TOKENS - projectedExpectedTokens(req.existingSections ?? []);
-  const minTokens = projectedExpectedTokens([{ container: "scene" }]);
-  return Math.max(0, Math.min(MAX_PLANNED_SECTIONS, Math.floor(Math.max(0, remaining) / minTokens)));
+/** Novel allocations are bounded by the global safety guard and by the
+ * projected contribution of their actual container mix. A container midpoint
+ * is not converted into a universal section-count ceiling. */
+export function maximumContainerPlannedNewSections(_req: OutlineFromRecipeRequest): number {
+  return MAX_PLANNED_SECTIONS;
 }
 
 function projectedPlannedContainerTokens(allocation: Map<string, Allocation>): number {
@@ -3045,32 +3048,299 @@ function projectedPlannedContainerTokens(allocation: Map<string, Allocation>): n
       sum + (plan.containerCounts?.[container] ?? 0) * projectedExpectedTokens([{ container }]), 0), 0);
 }
 
+function cloneNovelContainerCounts(counts: NovelContainerCounts): NovelContainerCounts {
+  return Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((container) => [container, counts[container]])) as NovelContainerCounts;
+}
+
+function hasValidNovelContainerMix(plan: Allocation): plan is Allocation & { containerCounts: NovelContainerCounts } {
+  const counts = plan.containerCounts;
+  if (!counts) return false;
+  return NOVEL_LEAF_CONTAINERS.reduce((sum, container) => sum + counts[container], 0) === plan.minSections;
+}
+
+function annotateAllocationFit(
+  allocation: Map<string, Allocation>,
+  original: Map<string, Allocation>,
+  fit: Allocation["allocationFit"],
+  reason: string,
+): Map<string, Allocation> {
+  return new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
+    const requested = original.get(beatID);
+    return [beatID, {
+      ...plan,
+      requestedMinSections: requested?.requestedMinSections ?? requested?.minSections,
+      ...(requested?.requestedContainerCounts
+        ? { requestedContainerCounts: cloneNovelContainerCounts(requested.requestedContainerCounts) }
+        : requested?.containerCounts
+        ? { requestedContainerCounts: cloneNovelContainerCounts(requested.containerCounts) }
+        : {}),
+      allocationFit: fit,
+      allocationFitReason: reason,
+      // Removed planning slots are not generation shortfalls. The accepted
+      // count is the truthful floor for repair and completion telemetry.
+      allocationMinimum: plan.minSections,
+    }];
+  }));
+}
+
+type MixedAllocationCell = {
+  beatID: string;
+  container: typeof NOVEL_LEAF_CONTAINERS[number];
+  requested: number;
+  selected: number;
+};
+
+function normalizeMixedAllocation(
+  allocation: Map<string, Allocation>,
+  req: OutlineFromRecipeRequest,
+): Map<string, Allocation> {
+  const cells: MixedAllocationCell[] = [];
+  for (const [beatID, plan] of allocation.entries()) {
+    for (const container of NOVEL_LEAF_CONTAINERS) {
+      const requested = plan.containerCounts?.[container] ?? 0;
+      cells.push({ beatID, container, requested, selected: requested });
+    }
+  }
+  const positiveBeats = Array.from(allocation.entries())
+    .filter(([, plan]) => plan.minSections > 0)
+    .map(([beatID]) => beatID);
+  const requestedWeight = cells.reduce((sum, cell) => sum + cell.requested, 0) || 1;
+
+  const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
+  const availableTokens = Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens);
+  const projectedSelectedTokens = () => cells.reduce((sum, cell) =>
+    sum + cell.selected * projectedExpectedTokens([{ container: cell.container }]), 0);
+  // The actual requested mix is authoritative when it fits. Only the hard
+  // projected-word cap may remove units, and it must not relabel them.
+  while (projectedSelectedTokens() > availableTokens) {
+    const selectedByBeat = new Map<string, number>();
+    for (const cell of cells) selectedByBeat.set(cell.beatID, (selectedByBeat.get(cell.beatID) ?? 0) + cell.selected);
+    const removable = cells.filter((cell) => {
+      const beatMinimum = positiveBeats.includes(cell.beatID) ? 1 : 0;
+      return cell.selected > 0 && (selectedByBeat.get(cell.beatID) ?? 0) > beatMinimum;
+    });
+    if (removable.length === 0) {
+      throw new AllocationBudgetConstraintError(
+        "Novel hard word cap cannot preserve one substantive section for every uncovered Story Arc beat.",
+      );
+    }
+    const chosen = removable.reduce((best, cell) => {
+      const excess = cell.selected / Math.max(1, cell.requested) - 1 / requestedWeight;
+      const bestExcess = best.selected / Math.max(1, best.requested) - 1 / requestedWeight;
+      const tokens = projectedExpectedTokens([{ container: cell.container }]);
+      const bestTokens = projectedExpectedTokens([{ container: best.container }]);
+      return excess > bestExcess || (excess === bestExcess && (tokens > bestTokens ||
+        (tokens === bestTokens && NOVEL_LEAF_CONTAINERS.indexOf(cell.container) > NOVEL_LEAF_CONTAINERS.indexOf(best.container))))
+        ? cell
+        : best;
+    });
+    chosen.selected--;
+  }
+
+  const normalized = new Map<string, Allocation>();
+  for (const [beatID, plan] of allocation.entries()) {
+    const containerCounts = Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((container) => [
+      container,
+      cells.find((cell) => cell.beatID === beatID && cell.container === container)?.selected ?? 0,
+    ])) as NovelContainerCounts;
+    const minSections = NOVEL_LEAF_CONTAINERS.reduce((sum, container) => sum + containerCounts[container], 0);
+    normalized.set(beatID, {
+      ...plan,
+      minSections,
+      containerCounts,
+      coverageMinimum: minSections > 0 ? 1 : 0,
+      allocationMinimum: minSections,
+      rationale: `${plan.rationale} Hard token cap normalized from ${plan.minSections} to ${minSections} substantive units without relabeling containers.`,
+    });
+  }
+  return normalized;
+}
+
 /** Keep every beat's coverage floor, but never let allocator floors make the
  * novel cap mathematically impossible. Relative allocation priority is
  * preserved through largest-remainder scaling; later stages can still combine
  * events inside each fuller section. */
+export function allocationPlanningDiagnostics(
+  allocation: Map<string, Allocation>,
+  existingSections: Array<{ container?: string | null }> = [],
+): Record<string, unknown> {
+  const existingTokens = projectedExpectedTokens(existingSections);
+  const requestedCountsByBeat: Record<string, number> = {};
+  const acceptedCountsByBeat: Record<string, number> = {};
+  const fitByBeat: Record<string, string> = {};
+  const fitReasonByBeat: Record<string, string> = {};
+  const requestedContainersByBeat: Record<string, NovelContainerCounts | null> = {};
+  const acceptedContainersByBeat: Record<string, NovelContainerCounts | null> = {};
+  let requestedNewTokens = 0;
+  let acceptedNewTokens = 0;
+  for (const [beatID, plan] of allocation.entries()) {
+    const requestedCounts = plan.requestedContainerCounts ?? plan.containerCounts;
+    const requestedSections = plan.requestedMinSections ?? plan.minSections;
+    requestedCountsByBeat[beatID] = requestedSections;
+    acceptedCountsByBeat[beatID] = plan.minSections;
+    fitByBeat[beatID] = plan.allocationFit ?? "preserved";
+    fitReasonByBeat[beatID] = plan.allocationFitReason ?? "allocation was already within the accepted budget";
+    requestedContainersByBeat[beatID] = requestedCounts ? cloneNovelContainerCounts(requestedCounts) : null;
+    acceptedContainersByBeat[beatID] = plan.containerCounts ? cloneNovelContainerCounts(plan.containerCounts) : null;
+    requestedNewTokens += requestedCounts
+      ? NOVEL_LEAF_CONTAINERS.reduce((sum, container) => sum + requestedCounts[container] * projectedExpectedTokens([{ container }]), 0)
+      : requestedSections * PROJECTED_CHAPTER_TOKENS;
+    acceptedNewTokens += plan.containerCounts
+      ? NOVEL_LEAF_CONTAINERS.reduce((sum, container) => sum + plan.containerCounts![container] * projectedExpectedTokens([{ container }]), 0)
+      : plan.minSections * PROJECTED_CHAPTER_TOKENS;
+  }
+  return {
+    plannerAllocationRequestedCountsByBeat: requestedCountsByBeat,
+    plannerAllocationAcceptedCountsByBeat: acceptedCountsByBeat,
+    plannerAllocationFitByBeat: fitByBeat,
+    plannerAllocationFitReasonByBeat: fitReasonByBeat,
+    plannerAllocationRequestedContainerCountsByBeat: requestedContainersByBeat,
+    plannerAllocationAcceptedContainerCountsByBeat: acceptedContainersByBeat,
+    plannerAllocationRequestedProjectedTokens: existingTokens + requestedNewTokens,
+    plannerAllocationAcceptedProjectedTokens: existingTokens + acceptedNewTokens,
+  };
+}
+
+export class AllocationCheckpointValidationError extends Error {
+  readonly code = "allocation_checkpoint_invalid";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "AllocationCheckpointValidationError";
+  }
+}
+
+export function validatePersistedAllocationCheckpoint(
+  entries: unknown,
+  req: OutlineFromRecipeRequest,
+): Map<string, Allocation> {
+  if (!Array.isArray(entries)) {
+    throw new AllocationCheckpointValidationError("persisted allocation checkpoint is not an array");
+  }
+  const beats = req.arcTemplate.beats;
+  if (entries.length !== beats.length) {
+    throw new AllocationCheckpointValidationError(
+      `persisted allocation checkpoint has ${entries.length} beats; expected ${beats.length}`
+    );
+  }
+  const expectedIDs = new Set(beats.map((beat) => beat.id));
+  const seen = new Set<string>();
+  const restored = new Map<string, Allocation>();
+  for (const entry of entries) {
+    if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") {
+      throw new AllocationCheckpointValidationError("persisted allocation checkpoint contains an invalid entry");
+    }
+    const [beatID, rawPlan] = entry;
+    if (!expectedIDs.has(beatID) || seen.has(beatID)) {
+      throw new AllocationCheckpointValidationError(`persisted allocation checkpoint has an unexpected or duplicate beat: ${beatID}`);
+    }
+    if (!rawPlan || typeof rawPlan !== "object" || Array.isArray(rawPlan)) {
+      throw new AllocationCheckpointValidationError(`persisted allocation checkpoint has no plan for beat ${beatID}`);
+    }
+    const plan = rawPlan as Partial<Allocation>;
+    const minSections = plan.minSections;
+    if (typeof minSections !== "number" || !Number.isInteger(minSections) || minSections < 0 || minSections > MAX_PLANNED_SECTIONS) {
+      throw new AllocationCheckpointValidationError(`persisted allocation checkpoint has an invalid minimum for beat ${beatID}`);
+    }
+    if (typeof plan.rationale !== "string" || plan.rationale.trim() === "") {
+      throw new AllocationCheckpointValidationError(`persisted allocation checkpoint has no rationale for beat ${beatID}`);
+    }
+    if (plan.containerCounts !== undefined) {
+      if (!plan.containerCounts || typeof plan.containerCounts !== "object" || Array.isArray(plan.containerCounts) ||
+        Object.keys(plan.containerCounts).length !== NOVEL_LEAF_CONTAINERS.length ||
+        !NOVEL_LEAF_CONTAINERS.every((container) => {
+          const value = plan.containerCounts?.[container];
+          return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_PLANNED_SECTIONS;
+        })) {
+        throw new AllocationCheckpointValidationError(`persisted allocation checkpoint has an incomplete container mix for beat ${beatID}`);
+      }
+      const mixTotal = NOVEL_LEAF_CONTAINERS.reduce((sum, container) => sum + plan.containerCounts![container], 0);
+      if (mixTotal !== minSections) {
+        throw new AllocationCheckpointValidationError(`persisted allocation checkpoint container mix disagrees with minSections for beat ${beatID}`);
+      }
+    }
+    seen.add(beatID);
+    restored.set(beatID, { ...plan } as Allocation);
+  }
+  if (seen.size !== expectedIDs.size) {
+    throw new AllocationCheckpointValidationError("persisted allocation checkpoint is missing a Story Arc beat");
+  }
+  // Re-run the same deterministic fit used for fresh planner responses. This
+  // preserves requested-vs-accepted diagnostics while making partial fit state
+  // harmless on resume.
+  return fitAllocationToNovelBudget(new Map(beats.map((beat) => [beat.id, restored.get(beat.id)!])), req);
+}
+
+function projectedAllocationTokens(allocation: Map<string, Allocation>): number {
+  return Array.from(allocation.values()).reduce((total, plan) => {
+    if (plan.containerCounts) {
+      return total + NOVEL_LEAF_CONTAINERS.reduce(
+        (sum, container) => sum + plan.containerCounts![container] * projectedExpectedTokens([{ container }]),
+        0,
+      );
+    }
+    return total + plan.minSections * PROJECTED_CHAPTER_TOKENS;
+  }, 0);
+}
+
+function isAuthoritativeFittedAllocation(
+  allocation: Map<string, Allocation>,
+  req: OutlineFromRecipeRequest,
+): boolean {
+  const values = Array.from(allocation.values());
+  if (values.length === 0 || values.some((plan) => !plan.allocationFit)) return false;
+  const fit = values[0].allocationFit;
+  if (values.some((plan) => plan.allocationFit !== fit)) return false;
+  const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
+  const projectedTokens = projectedAllocationTokens(allocation) + existingTokens;
+  if (projectedTokens > NOVEL_MAX_PROJECTED_TOKENS) return false;
+  if (fit === "conservative_fallback") {
+    return values.every((plan) => !plan.containerCounts);
+  }
+  return values.every((plan) => hasValidNovelContainerMix(plan));
+}
+
 export function fitAllocationToNovelBudget(
   allocation: Map<string, Allocation>,
   req: OutlineFromRecipeRequest,
 ): Map<string, Allocation> {
-  const mixes = Array.from(allocation.values()).map((plan) => plan.containerCounts);
+  const values = Array.from(allocation.values());
+  // A persisted post-fit checkpoint is authoritative only when every beat
+  // carries the same complete fit state and its actual projected mix remains
+  // within the hard cap. Partial/corrupt checkpoints are revalidated below.
+  if (isAuthoritativeFittedAllocation(allocation, req)) return allocation;
+  const mixes = values.map((plan) => plan.containerCounts);
   if (mixes.some(Boolean)) {
+    const original = new Map(allocation);
     const proposedTokens = projectedPlannedContainerTokens(allocation) +
       projectedExpectedTokens(req.existingSections ?? []);
-    const plannedCount = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
-    if (mixes.every(Boolean) &&
+    const plannedCount = values.reduce((sum, plan) => sum + plan.minSections, 0);
+    const structuralBudget = maximumContainerPlannedNewSections(req);
+    const validMixed = values.every(hasValidNovelContainerMix);
+    if (validMixed &&
         proposedTokens <= NOVEL_MAX_PROJECTED_TOKENS &&
         plannedCount <= MAX_PLANNED_SECTIONS) {
-      return allocation;
+      return annotateAllocationFit(allocation, original, "preserved", "mixed allocation is within the structural and hard token budgets");
     }
-    // Planning an overlarge/partial container mix must NOT introduce a new
-    // terminal failure. Fall back to the existing conservative chapter-budget
-    // normalization, and preserve the optional expansion path for real deficits.
+    if (validMixed) {
+      const normalized = normalizeMixedAllocation(allocation, req);
+      const normalizedTokens = projectedPlannedContainerTokens(normalized) + projectedExpectedTokens(req.existingSections ?? []);
+      if (normalizedTokens <= NOVEL_MAX_PROJECTED_TOKENS) {
+        return annotateAllocationFit(normalized, original, "normalized", "mixed allocation exceeded the hard token cap and was reduced using actual container midpoints");
+      }
+    }
+    // Incomplete or otherwise unusable mixes retain the existing safe
+    // chapter-equivalent fallback. This is not a new terminal failure.
     const legacy = new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
       const { containerCounts: _ignored, ...rest } = plan;
       return [beatID, { ...rest, rationale: `${plan.rationale} (conservative sizing fallback)` }] as [string, Allocation];
     }));
-    return fitAllocationToNovelBudget(legacy, req);
+    return annotateAllocationFit(
+      fitAllocationToNovelBudget(legacy, req),
+      original,
+      "conservative_fallback",
+      "container mix was incomplete or could not be normalized under the hard token cap",
+    );
   }
   const budget = maximumBudgetedNewSections(req);
   const total = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
@@ -3311,7 +3581,7 @@ export function buildAllocationPrompt(
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
   const maxBudgetedSections = isNovel ? maximumContainerPlannedNewSections(req) : maximumBudgetedNewSections(req);
   const containerBudgetInstructions = isNovel
-    ? `The upper limit for NEW sections is ${maxBudgetedSections} only if all are small scenes; actual capacity is determined by the mix. BEFORE deciding counts, budget the story's real section sizes. Return containerCounts on each beat: scene=1,300 midpoint tokens, developedScene=2,250, setPiece=3,500, sceneSequence=5,000, chapter=5,500. minSections MUST equal the sum of its five containerCounts. Total proposed token midpoints PLUS existing section midpoints, divided by 1.3, should approach 115,000 projected words and must never exceed 125,000. Do not treat a scene as a chapter. Include enough causally distinct story to reach the goal without padding or relabeling scenes as chapters. The 125,000-word cap is absolute.`
+    ? `The structural upper allowance for NEW substantive units is ${maxBudgetedSections}, a global runaway guard only. This is an upper guardrail, not a quota or per-beat target; the actual container mix and its projected midpoint contribution are authoritative. Determine the required dramatic progression from the recipe, enrichment, and Story Arc; identify distinct causally connected units; consolidate adjacent events when there is no meaningful change; then choose containers based on each unit's true scope and distribute them proportionally across beats. Never subdivide one continuous event, duplicate a discovery/decision/consequence, or add a scene merely to reach the word target. Larger scenes, sequences, and chapters are preferred when the material is one coherent unit; short scenes remain valid only when they serve distinct dramatic purposes. Return containerCounts on each beat: scene=1,300 midpoint tokens, developedScene=2,250, setPiece=3,500, sceneSequence=5,000, chapter=5,500. minSections MUST equal the sum of its five containerCounts. Total proposed token midpoints PLUS existing section midpoints, divided by 1.3, should approach 115,000 projected words and must never exceed 125,000. Do not treat a scene as a chapter, pad, fragment, or relabel material to reach a number. The 125,000-word cap is absolute.`
     : "Allocate the number of format-appropriate sections needed for complete Story Arc coverage without the novel-only word or container budget.";
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
@@ -3812,7 +4082,10 @@ export function findDramaticDistinctnessIssues(suggestions: Suggestion[]): strin
   const issues: string[] = [];
   for (let index = 0; index < suggestions.length; index++) {
     const current = suggestions[index];
-    for (let otherIndex = Math.max(0, index - 1); otherIndex < index; otherIndex++) {
+    // Compare a short local run, not only the immediately preceding section.
+    // This catches a fragmented event split by a thin transition while keeping
+    // unrelated distant plot movements independent.
+    for (let otherIndex = Math.max(0, index - 3); otherIndex < index; otherIndex++) {
       const other = suggestions[otherIndex];
       if (other.storyArcBeatID !== current.storyArcBeatID) continue;
       const eventSimilarity = tokenSimilarity(
@@ -3829,6 +4102,33 @@ export function findDramaticDistinctnessIssues(suggestions: Suggestion[]): strin
     }
   }
   return issues;
+}
+
+export class OutlineNarrativeQualityError extends Error {
+  readonly code = "fragmented_outline";
+
+  constructor(public readonly issues: string[]) {
+    super(`Novel outline contains repeated dramatic work that should be consolidated or differentiated: ${issues.slice(0, 3).join("; ")}`);
+    this.name = "OutlineNarrativeQualityError";
+  }
+}
+
+export function validateNarrativeStructureQuality(
+  suggestions: Suggestion[],
+  format: StoryMaterialFormat = "novel",
+): { accepted: boolean; fragmentationIssues: string[] } {
+  const fragmentationIssues = format === "novel"
+    ? findDramaticDistinctnessIssues(suggestions)
+    : [];
+  return { accepted: fragmentationIssues.length === 0, fragmentationIssues };
+}
+
+export function assertNarrativeStructureQuality(
+  suggestions: Suggestion[],
+  format: StoryMaterialFormat = "novel",
+): void {
+  const quality = validateNarrativeStructureQuality(suggestions, format);
+  if (!quality.accepted) throw new OutlineNarrativeQualityError(quality.fragmentationIssues);
 }
 
 /** General causal-scale gate. It intentionally reports a planning defect rather
@@ -6238,8 +6538,10 @@ export async function runSuggestionJob(
     const persistedAllocation = Array.isArray(planningState.allocationEntries)
       ? planningState.allocationEntries as Array<[string, Allocation]>
       : null;
+    let restoredAllocation = false;
     if (persistedAllocation) {
-      allocation = new Map<string, Allocation>(persistedAllocation);
+      allocation = validatePersistedAllocationCheckpoint(persistedAllocation, body);
+      restoredAllocation = true;
     } else {
       const retryOnly = planningState.nextAction === "outline-plan-retry";
       diagnostics = { ...diagnostics, stage: "allocation_generation" };
@@ -6273,8 +6575,29 @@ export async function runSuggestionJob(
       };
       diagnostics = markCompletedStage(
         markMeaningfulProgress(
-          { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
+          { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])), ...allocationPlanningDiagnostics(allocation, body.existingSections ?? []) },
           `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
+        ),
+        "allocation",
+      );
+      await updateRun({ planning_state: planningState, diagnostics });
+    }
+    if (restoredAllocation) {
+      planningState = {
+        ...planningState,
+        phase: "allocation_complete",
+        nextAction: "outline-suggestions",
+        allocationEntries: Array.from(allocation.entries()),
+      };
+      diagnostics = markCompletedStage(
+        markMeaningfulProgress(
+          {
+            ...diagnostics,
+            stage: "allocation_revalidated",
+            plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])),
+            ...allocationPlanningDiagnostics(allocation, body.existingSections ?? []),
+          },
+          `allocation_revalidated:${stableJSONStringify(Array.from(allocation.entries()))}`,
         ),
         "allocation",
       );
@@ -6291,6 +6614,7 @@ export async function runSuggestionJob(
       plannerAllocationValidatedCountsByBeat: allocationCountsByBeat,
       plannerContainerCountsByBeat: Object.fromEntries(Array.from(allocation.entries())
         .map(([beatID, plan]) => [beatID, plan.containerCounts ?? null])),
+      ...allocationPlanningDiagnostics(allocation, body.existingSections ?? []),
       recipeObligations,
     };
     const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial);
@@ -6355,8 +6679,13 @@ export async function runSuggestionJob(
       body.arcTemplate,
       allocation,
     );
+    const narrativeQuality = validateNarrativeStructureQuality(
+      result.suggestions,
+      requestedStoryMaterialFormat(body),
+    );
     diagnostics = {
       ...diagnostics,
+      narrativeStructureQuality: narrativeQuality,
       sectionContractValidated: true,
       semanticArcRepairedSections: [],
       semanticArcUnresolvedSections: [],
@@ -6368,6 +6697,8 @@ export async function runSuggestionJob(
         ? { advisoryValidationError: initialQuality.advisoryValidationError }
         : {}),
     };
+
+    assertNarrativeStructureQuality(result.suggestions, requestedStoryMaterialFormat(body));
 
     const authoredSemanticBeatCount = body.arcTemplate.beats.filter((beat) => arcRoleContract(beat, body.arcTemplate.name).semanticObligations.length > 0).length;
     if ((authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null) && sectionAllocationDeficits(result.suggestions).length === 0) {
