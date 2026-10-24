@@ -544,15 +544,18 @@ Deno.test("non-novel allocation keeps its legacy strict planner schema and promp
   assertEquals(allocation.get("beat-2")?.minSections, 1);
 });
 
-Deno.test("container-aware allocation rejects inconsistent counts but falls back safely on oversize", () => {
+Deno.test("container-aware allocation safely falls back on inconsistent counts and oversize", () => {
   const beats = [{ id: "beat-1" }, { id: "beat-2" }];
   const counts = { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 20 };
-  assertThrows(() => parseAndValidateAllocation(JSON.stringify({
+  const inconsistent = parseAndValidateAllocation(JSON.stringify({
     allocations: [
       { beatIndex: 0, minSections: 19, containerCounts: counts, rationale: "bad" },
       { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "bad" },
     ],
-  }), beats), Error, "containerCounts must sum to minSections");
+  }), beats);
+  const safePlan = fitAllocationToNovelBudget(inconsistent, { ...sparseRequest, requestedFormat: "novel" } as any);
+  assertEquals(Array.from(safePlan.values()).every((a) => !a.containerCounts), true);
+  assertEquals(Array.from(safePlan.values()).reduce((sum, a) => sum + a.minSections, 0) <= 29, true);
   const allocation = parseAndValidateAllocation(JSON.stringify({
     allocations: [
       { beatIndex: 0, minSections: 20, containerCounts: counts, rationale: "large" },
