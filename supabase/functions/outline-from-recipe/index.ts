@@ -522,7 +522,7 @@ const SECTION_SCHEMA = {
     summary: { type: "string", minLength: 1, maxLength: 2000 },
     container: { type: "string", enum: ["beat", "moment", "vignette", "microScene", "scene", "developedScene", "setPiece", "sceneSequence", "shortStory", "chapter", "episode"] },
     pov: { type: "string", enum: ["firstPerson", "secondPerson", "thirdPersonLimited", "thirdPersonOmniscient"] },
-    terminalBeat: { type: "string", minLength: 1, maxLength: 500 },
+    terminalBeat: { type: "string", minLength: 1, maxLength: 500, description: "The concrete closing dramatic action or moment of this section; never a Story Arc ID, beat label, or END." },
     entryState: { type: "string", minLength: 1, maxLength: 1200 },
     dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
     resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
@@ -1935,7 +1935,7 @@ const EXPANSION_SCHEMA = {
           summary: { type: "string", minLength: 1, maxLength: 2000 },
           container: { type: "string", enum: ["beat", "moment", "vignette", "microScene", "scene", "developedScene", "setPiece", "sceneSequence", "shortStory", "chapter", "episode"] },
           pov: { type: "string", enum: ["firstPerson", "secondPerson", "thirdPersonLimited", "thirdPersonOmniscient"] },
-          terminalBeat: { type: "string", minLength: 1, maxLength: 500 },
+          terminalBeat: { type: "string", minLength: 1, maxLength: 500, description: "The concrete closing dramatic action or moment of this added section; never a Story Arc ID, beat label, or END." },
           entryState: { type: "string", minLength: 1, maxLength: 1200 },
           dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
           resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
@@ -2079,7 +2079,7 @@ const OBLIGATION_REPAIR_SECTION_PROPERTIES = {
   summary: { type: "string", minLength: 1, maxLength: 2000 },
   container: { type: "string", enum: ["beat", "moment", "vignette", "microScene", "scene", "developedScene", "setPiece", "sceneSequence", "shortStory", "chapter", "episode"] },
   pov: { type: "string", enum: ["firstPerson", "secondPerson", "thirdPersonLimited", "thirdPersonOmniscient"] },
-  terminalBeat: { type: "string", minLength: 1, maxLength: 500 },
+  terminalBeat: { type: "string", minLength: 1, maxLength: 500, description: "The concrete closing dramatic action or moment of this repaired section; never a Story Arc ID, beat label, or END." },
   entryState: { type: "string", minLength: 1, maxLength: 1200 },
   dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
   resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
@@ -2578,7 +2578,7 @@ export function buildExpansionPrompt(
     ? `This is beat-local expansion for Story Arc beat ${beatContext.beatID}${beatContext.beatLabel ? ` (${beatContext.beatLabel})` : ""}. Develop only this beat; every returned section must use storyArcBeatID ${beatContext.beatID}. The beat currently contains approximately ${Math.round(beatContext.projectedWords).toLocaleString()} projected words. Its description is: ${beatContext.beatDescription ?? "(not supplied)"}. ${semanticContract}`
     : "Expand across the supplied outline while preserving each section's Story Arc beat.";
   return {
-    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. The current sections and the supplied recipe together form a used-event ledger: do not replay an existing title, revelation, confrontation, relationship turn, solution, or resulting state under another Story Arc beat. Every addition must advance the recipe's authored premise, character/relationship material, tone, and ending intent when applicable—not merely increase word-count. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Every Story Non-Negotiable is a must-do acceptance criterion. Preserve and materially realize any unmet must-do before adding optional expansion; if a must-do contains a number, produce that many distinct realized events. Never attach a must-do ID to an unrelated section. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a plannedWordRange as a soft literary target subordinate to the container and natural stopping point, and must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
+    system: `The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. The current sections and the supplied recipe together form a used-event ledger: do not replay an existing title, revelation, confrontation, relationship turn, solution, or resulting state under another Story Arc beat. Every addition must advance the recipe's authored premise, character/relationship material, tone, and ending intent when applicable—not merely increase word-count. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Every Story Non-Negotiable is a must-do acceptance criterion. Preserve and materially realize any unmet must-do before adding optional expansion; if a must-do contains a number, produce that many distinct realized events. Never attach a must-do ID to an unrelated section. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a terminalBeat naming the concrete closing dramatic action or moment, plus a plannedWordRange as a soft literary target subordinate to the container and natural stopping point. Never use a Story Arc UUID, beat label, or END as terminalBeat; storyArcBeatID is the separate structural identity. Every addition must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.`,
@@ -2856,7 +2856,7 @@ Write each section title as a concise, specific, evocative working title suitabl
 Favor specific, memorable events and evocative section titles over functional briefing, regrouping, mapping, or explanatory scenes. Titles should suggest image, tension, place, or dramatic irony rather than summarize the section's purpose.
 
 ## Generation-ready section contract
-For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. Also return exactly one server-validated dramaticFunction from the allowed functions for that beat; the function must agree with the event and resulting change, not merely repeat the beat label. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. Do not copy an arc-beat label into these fields. Do not provide plannedWordRange; the server derives it deterministically from container; it never overrides the Section Contract, container, or natural stopping point.
+For every section, explicitly state entryState, dramaticEvent, resultingChange, and terminalState. Also return exactly one server-validated dramaticFunction from the allowed functions for that beat; the function must agree with the event and resulting change, not merely repeat the beat label. The dramaticEvent must be a specific objective, confrontation, discovery, decision, reversal, or consequence; resultingChange must alter the protagonist, opposition, relationship, information, resources, or stakes. The terminalState is the concrete condition handed to the next section. The terminalBeat is the concrete closing dramatic action or moment of this section, consistent with those contract fields. Never use the Story Arc UUID, beat label, or END as terminalBeat; storyArcBeatID is the separate structural identity assigned by the server. Do not copy an arc-beat label into these fields. Do not provide plannedWordRange; the server derives it deterministically from container; it never overrides the Section Contract, container, or natural stopping point.
 
 Canonical dramatic event responsibility: each section must commit to one canonical dramatic realization of what happens. The outline planner owns plot decisions; the later prose generator owns execution. When needed to make the section generation-ready, choose the concrete location, participating characters, triggering action, confrontation, discovery, failure or reversal, and immediate consequence. Do not leave those decisions as interchangeable possibilities for the prose generator. Avoid unresolved planner alternatives such as “at the school or arcade,” “a road, bridge, school, or home,” “a chase or near-miss,” “an object or sound,” “someone is attacked,” “something happens,” “may/could/might reveal,” or “such as X or Y.” Do not mechanically ban words such as “or,” “may,” or “could”: they remain valid when uncertainty or choice is itself part of the canonical dramatic event, such as “Brody must decide whether to confess or keep lying.” The prohibited case is the planner leaving multiple interchangeable plot realizations undecided. As a useful standard, two prose generators following the same section contract should dramatize substantially the same plot event, even though dialogue, prose, blocking, sensory detail, pacing, and moment-to-moment execution may differ. Make entryState, resultingChange, and terminalState similarly concrete enough to constrain continuity, without turning them into prose or over-specifying incidental details. The outline should define the event and its continuity consequences, not pre-write the novel.
 
@@ -3490,6 +3490,30 @@ export function assertAllocationCoverage(
   }
 }
 
+const STRUCTURAL_TERMINAL_BEAT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Structural identifiers are not usable closing actions. Keep the outline
+ * usable by deriving the field from the already-authoritative Section Contract
+ * instead of rejecting or re-calling the provider. */
+export function normalizeTerminalBeat(
+  suggestion: Partial<Suggestion>,
+  beatIds: Set<string>,
+): string {
+  const terminalBeat = typeof suggestion.terminalBeat === "string" ? suggestion.terminalBeat.trim() : "";
+  const isStructural = terminalBeat.length === 0 ||
+    terminalBeat.toUpperCase() === "END" ||
+    STRUCTURAL_TERMINAL_BEAT_UUID.test(terminalBeat) ||
+    beatIds.has(terminalBeat);
+  if (!isStructural) return terminalBeat.slice(0, 1000);
+  const fallback = [
+    suggestion.terminalState,
+    suggestion.resultingChange,
+    suggestion.dramaticEvent,
+    suggestion.summary,
+  ].find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return (fallback ?? terminalBeat).trim().slice(0, 1000);
+}
+
 export function validateSuggestions(
   parsed: any,
   beatIds: Set<string>,
@@ -3568,7 +3592,7 @@ export function validateSuggestions(
       summary: String(s.summary).slice(0, 4000),
       container: s.container,
       pov: s.pov,
-      terminalBeat: String(s.terminalBeat).slice(0, 1000),
+      terminalBeat: normalizeTerminalBeat(s, beatIds),
       // Preserve legacy payload shape when older callers omit the additive
       // contract; new structured responses retain all four explicit fields.
       ...(typeof s.entryState === "string" ? { entryState: s.entryState.slice(0, 1200) } : {}),
