@@ -3013,10 +3013,11 @@ export class AllocationBudgetConstraintError extends Error {
   }
 }
 
-// Novel scale is evaluated using the midpoint of a container's literary
-// range, not its floor. Allocation safety uses the same projection basis as
-// evaluateNovelScale so first-pass planning cannot exceed the final hard cap.
-const PROJECTED_CHAPTER_TOKENS = projectedExpectedTokens([{ container: "chapter" }]);
+// Novel scale is evaluated using the midpoint of a known container's literary
+// range, not its floor. When no reliable container mix is available, planning
+// uses the observed mixed-section estimate below; typed allocations remain
+// subject to their actual container midpoints.
+export const NOVEL_MIXED_SECTION_ESTIMATE_TOKENS = 3500;
 
 export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): number {
   if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
@@ -3025,18 +3026,17 @@ export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): numbe
     0,
     Math.min(
       MAX_PLANNED_SECTIONS,
-      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / PROJECTED_CHAPTER_TOKENS),
+      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / NOVEL_MIXED_SECTION_ESTIMATE_TOKENS),
     ),
   );
 }
 
-/** The mixed-container budget counts the smallest novel leaf, not chapters.
- * Legacy allocations without a type mix still use chapter-equivalent limits. */
+/** Unknown-mix planning uses the observed typical mixed-section estimate.
+ * Typed allocations are priced separately by their actual container mix. */
 export function maximumContainerPlannedNewSections(req: OutlineFromRecipeRequest): number {
   if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
   const remaining = NOVEL_MAX_PROJECTED_TOKENS - projectedExpectedTokens(req.existingSections ?? []);
-  const minTokens = projectedExpectedTokens([{ container: "scene" }]);
-  return Math.max(0, Math.min(MAX_PLANNED_SECTIONS, Math.floor(Math.max(0, remaining) / minTokens)));
+  return Math.max(0, Math.min(MAX_PLANNED_SECTIONS, Math.floor(Math.max(0, remaining) / NOVEL_MIXED_SECTION_ESTIMATE_TOKENS)));
 }
 
 function projectedPlannedContainerTokens(allocation: Map<string, Allocation>): number {
@@ -3063,14 +3063,18 @@ export function fitAllocationToNovelBudget(
         plannedCount <= MAX_PLANNED_SECTIONS) {
       return allocation;
     }
-    // Planning an overlarge/partial container mix must NOT introduce a new
-    // terminal failure. Fall back to the existing conservative chapter-budget
-    // normalization, and preserve the optional expansion path for real deficits.
-    const legacy = new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
+    if (mixes.every(Boolean)) {
+      throw new AllocationBudgetConstraintError(
+        `The explicit novel container mix projects above the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap; revise the container mix instead of applying the unknown-mix estimate.`,
+      );
+    }
+    // An incomplete container mix is not reliable enough to price by type.
+    // Strip the partial metadata and use the typical mixed-section estimate.
+    const unknownMix = new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
       const { containerCounts: _ignored, ...rest } = plan;
-      return [beatID, { ...rest, rationale: `${plan.rationale} (conservative sizing fallback)` }] as [string, Allocation];
+      return [beatID, { ...rest, rationale: `${plan.rationale} (mixed-section sizing fallback)` }] as [string, Allocation];
     }));
-    return fitAllocationToNovelBudget(legacy, req);
+    return fitAllocationToNovelBudget(unknownMix, req);
   }
   const budget = maximumBudgetedNewSections(req);
   const total = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
@@ -3311,12 +3315,12 @@ export function buildAllocationPrompt(
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
   const maxBudgetedSections = isNovel ? maximumContainerPlannedNewSections(req) : maximumBudgetedNewSections(req);
   const containerBudgetInstructions = isNovel
-    ? `The upper limit for NEW sections is ${maxBudgetedSections} only if all are small scenes; actual capacity is determined by the mix. BEFORE deciding counts, budget the story's real section sizes. Return containerCounts on each beat: scene=1,300 midpoint tokens, developedScene=2,250, setPiece=3,500, sceneSequence=5,000, chapter=5,500. minSections MUST equal the sum of its five containerCounts. Total proposed token midpoints PLUS existing section midpoints, divided by 1.3, should approach 115,000 projected words and must never exceed 125,000. Do not treat a scene as a chapter. Include enough causally distinct story to reach the goal without padding or relabeling scenes as chapters. The 125,000-word cap is absolute.`
+    ? `When no reliable container mix is available, use approximately ${NOVEL_MIXED_SECTION_ESTIMATE_TOKENS.toLocaleString()} tokens per typical mixed section; this gives an upper planning estimate of about ${Math.round(NOVEL_PREFERRED_MIN_WORDS * TOKENS_PER_WORD / NOVEL_MIXED_SECTION_ESTIMATE_TOKENS)} sections at the preferred target and about ${maxBudgetedSections} at the hard maximum, not a quota. When choosing a reliable mix, budget the story's real section sizes instead. Return containerCounts on each beat: scene=1,300 midpoint tokens, developedScene=2,250, setPiece=3,500, sceneSequence=5,000, chapter=5,500. minSections MUST equal the sum of its five containerCounts. Total proposed token midpoints PLUS existing section midpoints, divided by 1.3, should approach 115,000 projected words and must never exceed 125,000. Do not treat a scene as a chapter. Include enough causally distinct story to reach the goal without padding or relabeling scenes as chapters. The 125,000-word cap is absolute.`
     : "Allocate the number of format-appropriate sections needed for complete Story Arc coverage without the novel-only word or container budget.";
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 115,000 projected words while staying below the 125,000-word maximum. Use the midpoint projection of each supported container, including 5,500 tokens for a chapter, as the authoritative planning estimate. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat, and the projected contribution of existing sections. Distribute distinct, substantial chapter-scale units according to the narrative material each movement requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. ${containerBudgetInstructions}
+This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 115,000 projected words while staying below the 125,000-word maximum. Use each known container's midpoint as the authoritative estimate; when the container mix is unknown, use the named 3,500-token mixed-section planning estimate rather than treating every section as a chapter. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat, and the projected contribution of existing sections. Distribute distinct, substantial chapter-scale units according to the narrative material each movement requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. ${containerBudgetInstructions}
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
