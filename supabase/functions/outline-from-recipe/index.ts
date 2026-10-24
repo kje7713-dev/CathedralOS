@@ -6289,6 +6289,8 @@ export async function runSuggestionJob(
       stage: "planner_complete",
       plannerAllocationFirstPassCountsByBeat: allocationCountsByBeat,
       plannerAllocationValidatedCountsByBeat: allocationCountsByBeat,
+      plannerContainerCountsByBeat: Object.fromEntries(Array.from(allocation.entries())
+        .map(([beatID, plan]) => [beatID, plan.containerCounts ?? null])),
       recipeObligations,
     };
     const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial);
@@ -6331,7 +6333,14 @@ export async function runSuggestionJob(
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true), warnings: validated.warnings };
       // Structural replay is removed before any durable checkpoint or semantic
       // provider stage. Never surface duplicate first-pass sections.
-      diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions), structuralDedupedSections: deduped.removed };
+      const firstPassActualContainerCountsByBeat = Object.fromEntries(body.arcTemplate.beats.map((beat) => [
+        beat.id,
+        Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((container) => [
+          container, result.suggestions.filter((section) =>
+            section.storyArcBeatID === beat.id && section.container === container).length,
+        ])),
+      ]));
+      diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions), firstPassActualContainerCountsByBeat, structuralDedupedSections: deduped.removed };
       if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
         throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
       }
