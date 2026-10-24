@@ -3253,11 +3253,15 @@ export function buildAllocationPrompt(
   req: OutlineFromRecipeRequest,
   obligations: RecipeObligation[] = [],
 ): { system: string; user: string } {
-  const maxBudgetedSections = maximumContainerPlannedNewSections(req);
+  const isNovel = requestedStoryMaterialFormat(req) === "novel";
+  const maxBudgetedSections = isNovel ? maximumContainerPlannedNewSections(req) : maximumBudgetedNewSections(req);
+  const containerBudgetInstructions = isNovel
+    ? `The upper limit for NEW sections is ${maxBudgetedSections} only if all are small scenes; actual capacity is determined by the mix. BEFORE deciding counts, budget the story's real section sizes. Return containerCounts on each beat: scene=1,300 midpoint tokens, developedScene=2,250, setPiece=3,500, sceneSequence=5,000, chapter=5,500. minSections MUST equal the sum of its five containerCounts. Total proposed token midpoints PLUS existing section midpoints, divided by 1.3, should approach 115,000 projected words and must never exceed 125,000. Do not treat a scene as a chapter. Include enough causally distinct story to reach the goal without padding or relabeling scenes as chapters. The 125,000-word cap is absolute.`
+    : "Allocate the number of format-appropriate sections needed for complete Story Arc coverage without the novel-only word or container budget.";
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 115,000 projected words while staying below the 125,000-word maximum. Use the midpoint projection of each supported container, including 5,500 tokens for a chapter, as the authoritative planning estimate. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat, and the projected contribution of existing sections. Distribute distinct, substantial chapter-scale units according to the narrative material each movement requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. The upper limit for NEW sections is ${maxBudgetedSections} only if all are small scenes; actual capacity is determined by the mix. BEFORE deciding counts, budget the story's real section sizes. Return containerCounts on each beat: scene=1,300 midpoint tokens, developedScene=2,250, setPiece=3,500, sceneSequence=5,000, chapter=5,500. minSections MUST equal the sum of its five containerCounts. Total proposed token midpoints PLUS existing section midpoints, divided by 1.3, should approach 115,000 projected words and must never exceed 125,000. Do not treat a scene as a chapter. Include enough causally distinct story to reach the goal without padding or relabeling scenes as chapters. The 125,000-word cap is absolute.
+This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 115,000 projected words while staying below the 125,000-word maximum. Use the midpoint projection of each supported container, including 5,500 tokens for a chapter, as the authoritative planning estimate. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat, and the projected contribution of existing sections. Distribute distinct, substantial chapter-scale units according to the narrative material each movement requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. ${containerBudgetInstructions}
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
@@ -3265,7 +3269,7 @@ Treat the supplied recipe as the governing creative brief. Required obligations 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
 
-Output exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Do not output any other root key. Provide all five containerCounts keys for every beat, including zeros.
+Output exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Do not output any other root key. ${isNovel ? "Provide all five containerCounts keys for every beat, including zeros." : "Do not return novel-only containerCounts."}
 
 Output JSON only. No commentary, no prose.`;
 
@@ -3291,11 +3295,32 @@ Output JSON only. No commentary, no prose.`;
     planningContext: planningView,
     existingSectionsByBeat,
     existingUnlinkedSections,
-    allocation: "For novels, choose containerCounts first and return minSections equal to their sum; allocate to ~115,000 projected words using each actual container midpoint. Accepted existing work counts once.",
-    containerMidpointTokens: Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((container) => [container, projectedExpectedTokens([{ container }])])),
+    allocation: isNovel
+      ? "Choose containerCounts first; minSections equals their sum, and their actual midpoints should project about 115,000 words. Accepted existing work counts once."
+      : "For non-novels, return format-appropriate residual minSections per beat without novel containerCounts.",
+    ...(isNovel ? { containerMidpointTokens: Object.fromEntries(
+      NOVEL_LEAF_CONTAINERS.map((container) => [container, projectedExpectedTokens([{ container }])]),
+    ) } : {}),
     hint: req.hint ?? null,
   }, null, 2);
   return { system, user };
+}
+
+/** Non-novel allocations retain their existing three-field strict contract. */
+function allocationSchemaForFormat(req: OutlineFromRecipeRequest) {
+  if (requestedStoryMaterialFormat(req) === "novel") return ALLOCATION_SCHEMA;
+  const { containerCounts: _novelOnly, ...properties } = ALLOCATION_SCHEMA.properties.allocations.items.properties;
+  return {
+    ...ALLOCATION_SCHEMA,
+    properties: { allocations: {
+      ...ALLOCATION_SCHEMA.properties.allocations,
+      items: {
+        ...ALLOCATION_SCHEMA.properties.allocations.items,
+        properties,
+        required: ["beatIndex", "minSections", "rationale"],
+      },
+    } },
+  };
 }
 
 export async function planSectionAllocation(
@@ -3306,12 +3331,13 @@ export async function planSectionAllocation(
   options: { retryOnly?: boolean; deferRetry?: boolean } = {},
 ): Promise<Map<string, Allocation>> {
   const { system, user } = buildAllocationPrompt(req, obligations);
+  const allocationSchema = allocationSchemaForFormat(req);
   const responseFormat = {
     type: "json_schema",
     json_schema: {
       name: "outline_section_allocations",
       strict: true,
-      schema: ALLOCATION_SCHEMA,
+      schema: allocationSchema,
     },
   };
 
@@ -3333,7 +3359,7 @@ export async function planSectionAllocation(
           maxTokens: 2048,
           useJsonSchema: true,
           jsonSchemaName: "outline_section_allocations",
-          jsonSchema: ALLOCATION_SCHEMA,
+          jsonSchema: allocationSchema,
         }),
         creditCostCharged: 0,
         remainingCredits: 0,
