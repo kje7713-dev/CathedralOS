@@ -448,6 +448,55 @@ Deno.test("novel allocation budget uses the same chapter midpoint as scale valid
   assertEquals(scale.exceedsMaximum, false);
 });
 
+Deno.test("container-aware planner can allocate a mixed 120k-word first pass beyond 29 slots", () => {
+  const beats = [{ id: "beat-1" }, { id: "beat-2" }];
+  const counts = { scene: 0, developedScene: 6, setPiece: 5, sceneSequence: 4, chapter: 5 };
+  const parsed = parseAndValidateAllocation(JSON.stringify({
+    allocations: [
+      { beatIndex: 0, minSections: 20, containerCounts: counts, rationale: "opening and development" },
+      { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "turns and resolution" },
+    ],
+  }), beats);
+  const req = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  assertEquals(maximumBudgetedNewSections(req), 29, "legacy chapter-only safety budget remains available");
+  const fitted = fitAllocationToNovelBudget(parsed, req);
+  assertEquals(Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0), 40);
+  const plannedContainers = Array.from({ length: 2 }).flatMap(() =>
+    Object.entries(counts).flatMap(([container, count]) =>
+      Array.from({ length: count }, () => ({ container }))));
+  const scale = evaluateNovelScale(plannedContainers);
+  assertEquals(scale.meetsPreferredMinimum, true);
+  assertEquals(scale.exceedsMaximum, false);
+  assertEquals(Math.round(scale.projectedWords), 120769);
+  const schema: any = buildSuggestionResponseSchema(beats, fitted, [], "", "novel");
+  assertEquals(schema.properties.beats.properties["beat-1"].minItems, 20);
+  assertEquals(schema.properties.beats.properties["beat-1"].maxItems, 20);
+  assertEquals(schema.properties.beats.properties["beat-1"].items.properties.container.enum.includes("scene"), false);
+  assertEquals(schema.properties.beats.properties["beat-1"].items.properties.container.enum.includes("chapter"), true);
+  const { system } = buildPrompt(req, fitted);
+  assertEquals(system.includes("planned containers: developedScene=6, setPiece=5, sceneSequence=4, chapter=5"), true);
+  assertEquals(buildAllocationPrompt(req).system.includes("containerCounts"), true);
+});
+
+Deno.test("container-aware allocation rejects inconsistent sums and hard-cap overflow", () => {
+  const beats = [{ id: "beat-1" }, { id: "beat-2" }];
+  const counts = { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 20 };
+  assertThrows(() => parseAndValidateAllocation(JSON.stringify({
+    allocations: [
+      { beatIndex: 0, minSections: 19, containerCounts: counts, rationale: "bad" },
+      { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "bad" },
+    ],
+  }), beats), Error, "containerCounts must sum to minSections");
+  const allocation = parseAndValidateAllocation(JSON.stringify({
+    allocations: [
+      { beatIndex: 0, minSections: 20, containerCounts: counts, rationale: "large" },
+      { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "large" },
+    ],
+  }), beats);
+  const req = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  assertThrows(() => fitAllocationToNovelBudget(allocation, req), Error, "planned novel exceeds 125000 words");
+});
+
 Deno.test("2% novel tolerance skips length-only expansion without weakening the hard cap", async () => {
   assertEquals(NOVEL_EXPANSION_MIN_WORDS, 112700);
   const nearTarget = Array.from({ length: 27 }, () => ({ container: "chapter" }));
