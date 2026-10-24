@@ -4131,6 +4131,174 @@ export function assertNarrativeStructureQuality(
   if (!quality.accepted) throw new OutlineNarrativeQualityError(quality.fragmentationIssues);
 }
 
+export interface NarrativeQualityDefect {
+  sectionIndexes: number[];
+  reason: string;
+  sourceBeatID: string;
+  targetBeatID: string;
+}
+
+const NARRATIVE_CALLBACK_SIGNALS = /\b(?:callback|echo|echoes|parallel|parallels|revisits?|recalls?|remembers?|motif|symbol|again)\b/i;
+const NARRATIVE_CANONICAL_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/\b(?:discovers?|learns?|finds?|uncovers?|realizes?)\b/gi, "discover"],
+  [/\b(?:escapes?|flees?|runs?|gets away)\b/gi, "escape"],
+  [/\b(?:confronts?|faces?|meets?|challenges?)\b/gi, "confront"],
+  [/\b(?:decides?|chooses?|agrees?|commits?)\b/gi, "decide"],
+  [/\b(?:loses?|surrenders?|abandons?|gives up)\b/gi, "loss"],
+  [/\b(?:wins?|defeats?|overcomes?|stops?)\b/gi, "victory"],
+  [/\b(?:reveals?|exposes?|confesses?|admits?)\b/gi, "reveal"],
+  [/\b(?:changes?|becomes?|turns?|shifts?)\b/gi, "change"],
+];
+
+function narrativeCanonicalText(value: string): string {
+  let text = value.toLowerCase();
+  for (const [pattern, replacement] of NARRATIVE_CANONICAL_REPLACEMENTS) text = text.replace(pattern, replacement);
+  return text.replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function narrativeMeaningfulTokens(value: string): Set<string> {
+  return contentTokens(narrativeCanonicalText(value));
+}
+
+function narrativeTokenSimilarity(left: string, right: string): number {
+  const a = narrativeMeaningfulTokens(left);
+  const b = narrativeMeaningfulTokens(right);
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) if (b.has(token)) intersection++;
+  return intersection / (a.size + b.size - intersection);
+}
+
+function narrativePurposeSimilarity(left: Suggestion, right: Suggestion): number {
+  const event = narrativeTokenSimilarity(left.dramaticEvent ?? left.summary, right.dramaticEvent ?? right.summary);
+  const change = narrativeTokenSimilarity(left.resultingChange ?? left.terminalBeat, right.resultingChange ?? right.terminalBeat);
+  const terminal = narrativeTokenSimilarity(left.terminalState ?? left.terminalBeat, right.terminalState ?? right.terminalBeat);
+  const functionMatch = left.dramaticFunction && left.dramaticFunction === right.dramaticFunction ? 0.2 : 0;
+  return Math.min(1, event * 0.4 + change * 0.35 + terminal * 0.25 + functionMatch);
+}
+
+export function findNarrativeQualityDefects(suggestions: Suggestion[]): NarrativeQualityDefect[] {
+  const defects: NarrativeQualityDefect[] = [];
+  for (let index = 0; index < suggestions.length; index++) {
+    const current = suggestions[index];
+    for (let otherIndex = 0; otherIndex < index; otherIndex++) {
+      const other = suggestions[otherIndex];
+      const sameBeat = current.storyArcBeatID === other.storyArcBeatID;
+      // A quality repair must reason about causal state changes, not generic
+      // legacy summaries or terminal labels. Older payloads without these
+      // fields remain structurally valid and are not falsely merged.
+      if (!current.resultingChange || !current.terminalState || !other.resultingChange || !other.terminalState) continue;
+      const local = sameBeat && index - otherIndex <= 3;
+      const eventSimilarity = narrativeTokenSimilarity(current.dramaticEvent ?? current.summary, other.dramaticEvent ?? other.summary);
+      const changeSimilarity = narrativeTokenSimilarity(current.resultingChange ?? current.terminalBeat, other.resultingChange ?? other.terminalBeat);
+      const terminalSimilarity = narrativeTokenSimilarity(current.terminalState ?? current.terminalBeat, other.terminalState ?? other.terminalBeat);
+      const purposeSimilarity = narrativePurposeSimilarity(other, current);
+      const intentionalCallback = NARRATIVE_CALLBACK_SIGNALS.test(`${current.title} ${current.summary}`) &&
+        (changeSimilarity < 0.78 || terminalSimilarity < 0.78);
+      const equivalent = !intentionalCallback && (
+        (local && eventSimilarity >= 0.72 && changeSimilarity >= 0.64 && terminalSimilarity >= 0.64) ||
+        (!sameBeat && purposeSimilarity >= 0.82 && changeSimilarity >= 0.78 && terminalSimilarity >= 0.78) ||
+        (!sameBeat && eventSimilarity >= 0.78 && changeSimilarity >= 0.82 && terminalSimilarity >= 0.82)
+      );
+      if (!equivalent) continue;
+      defects.push({
+        sectionIndexes: [otherIndex, index],
+        reason: `sections "${other.title}" and "${current.title}" repeat the same dramatic purpose and causal consequence; consolidate, differentiate, or rewrite one event`,
+        sourceBeatID: other.storyArcBeatID,
+        targetBeatID: current.storyArcBeatID,
+      });
+      break;
+    }
+  }
+  return defects;
+}
+
+export function repairNarrativeQualityDeterministically(
+  suggestions: Suggestion[],
+  defects: NarrativeQualityDefect[],
+): { suggestions: Suggestion[]; removedTitles: string[]; unresolved: NarrativeQualityDefect[] } {
+  const remove = new Set<number>();
+  const counts = countSuggestionsByBeat(suggestions);
+  for (const defect of defects) {
+    const target = defect.sectionIndexes[1];
+    const targetSection = suggestions[target];
+    if (!targetSection || remove.has(target)) continue;
+    // A repeated section can be safely consolidated only when its beat has
+    // another section left. Never remove the sole coverage for a beat.
+    if ((counts[targetSection.storyArcBeatID] ?? 0) > 1) {
+      remove.add(target);
+      counts[targetSection.storyArcBeatID] = (counts[targetSection.storyArcBeatID] ?? 1) - 1;
+    }
+  }
+  const repaired = suggestions.filter((_section, index) => !remove.has(index));
+  const unresolved = findNarrativeQualityDefects(repaired);
+  return {
+    suggestions: repaired,
+    removedTitles: [...remove].map((index) => suggestions[index]?.title).filter((title): title is string => Boolean(title)),
+    unresolved,
+  };
+}
+
+const NARRATIVE_REPAIR_SECTION_PROPERTIES = {
+  title: { type: "string", minLength: 1, maxLength: 120 },
+  summary: { type: "string", minLength: 1, maxLength: 2000 },
+  container: { type: "string", enum: ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"] },
+  pov: { type: "string", enum: ["firstPerson", "secondPerson", "thirdPersonLimited", "thirdPersonOmniscient"] },
+  terminalBeat: { type: "string", minLength: 1, maxLength: 500 },
+  entryState: { type: "string", minLength: 1, maxLength: 1200 },
+  dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
+  resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
+  terminalState: { type: "string", minLength: 1, maxLength: 1200 },
+  dramaticFunction: { type: "string", enum: [...DRAMATIC_FUNCTIONS] },
+  storyArcBeatID: { type: "string" },
+  recipeRequirementIDs: { type: "array", maxItems: 100, items: { type: "string", minLength: 1 } },
+} as const;
+
+export function buildNarrativeQualityRepairResponseSchema() {
+  return {
+    type: "object",
+    properties: {
+      operations: {
+        type: "array",
+        minItems: 1,
+        maxItems: 8,
+        items: {
+          type: "object",
+          properties: {
+            sectionIndex: { type: "integer", minimum: 0 },
+            section: { type: "object", properties: NARRATIVE_REPAIR_SECTION_PROPERTIES, required: Object.keys(NARRATIVE_REPAIR_SECTION_PROPERTIES).filter((key) => key !== "recipeRequirementIDs"), additionalProperties: false },
+          },
+          required: ["sectionIndex", "section"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["operations"],
+    additionalProperties: false,
+  } as const;
+}
+
+export function applyNarrativeQualityRepairOperations(
+  current: Suggestion[],
+  parsed: any,
+  req: Pick<OutlineFromRecipeRequest, "arcTemplate" | "recipe">,
+): Suggestion[] {
+  if (!parsed || !Array.isArray(parsed.operations)) throw new Error("narrative quality repair response missing operations");
+  const result = current.map((section) => ({ ...section }));
+  const replaced = new Set<number>();
+  for (const operation of parsed.operations) {
+    const index = Number(operation?.sectionIndex);
+    if (!Number.isInteger(index) || index < 0 || index >= result.length || replaced.has(index)) continue;
+    const original = result[index];
+    const candidate = { ...operation.section, storyArcBeatID: original.storyArcBeatID, recipeRequirementIDs: original.recipeRequirementIDs ?? operation.section?.recipeRequirementIDs ?? [] };
+    const validated = validateSuggestions({ suggestions: [candidate] }, new Set([original.storyArcBeatID]), undefined, [], { ...req.arcTemplate, beats: req.arcTemplate.beats.filter((beat) => beat.id === original.storyArcBeatID) }).suggestions[0];
+    if (!validated) continue;
+    result[index] = validated;
+    replaced.add(index);
+  }
+  return mergeSuggestionsByBeatOrder(req.arcTemplate.beats.map((beat) => beat.id), result, []);
+}
+
 /** General causal-scale gate. It intentionally reports a planning defect rather
  * than enforcing a Brody-specific vocabulary or deleting sections. */
 export function findCausalScaleIssues(
@@ -5932,11 +6100,38 @@ export async function runSuggestionJob(
     const provenance = await recipeProvenance(body.recipe);
     const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
 
+    const queueNarrativeQualityRepair = async (suggestions: Suggestion[], stage: string): Promise<never | void> => {
+      const defects = findNarrativeQualityDefects(suggestions);
+      if (requestedStoryMaterialFormat(body) !== "novel" || defects.length === 0) return;
+      planningState = {
+        ...planningState,
+        phase: "narrative_quality_repair_pending",
+        nextAction: "narrative-quality-repair",
+        narrativeQualityRepair: {
+          version: 1,
+          strategy: "deterministic-consolidation",
+          attempt: 0,
+          defects,
+          checkpointSuggestions: suggestions,
+          lastOutcome: null,
+        },
+      };
+      diagnostics = {
+        ...diagnostics,
+        stage: "narrative_quality_repair_pending",
+        narrativeQuality: { accepted: false, stage, defects },
+      };
+      latestValidSuggestions = suggestions;
+      await updateRun({ suggestions, planning_state: planningState, diagnostics });
+      throw new SuggestionWorkerYield();
+    };
+
     const completeValidatedOutline = async (
       completedSuggestions: Suggestion[],
       completionWarnings: string[],
       allowUnderTarget = false,
     ) => {
+      await queueNarrativeQualityRepair(completedSuggestions, "completion");
       const finalCoverage = obligationCoverage([...(body.existingSections ?? []), ...completedSuggestions], recipeObligations);
       diagnostics = {
         ...diagnostics,
@@ -6094,6 +6289,28 @@ export async function runSuggestionJob(
           completedSuggestions = latestValidSuggestions.length > 0
             ? latestValidSuggestions
             : completedSuggestions;
+          if (needsNovelExpansion(completedSuggestions, body.existingSections ?? [])) {
+            planningState = {
+              ...planningState,
+              phase: "paused_recoverable",
+              nextAction: "expansion",
+              expansionCheckpoint: diagnostics.expansionCheckpoint ?? buildExpansionCheckpoint(
+                completedSuggestions,
+                body.existingSections ?? [],
+                diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [],
+              ),
+            };
+            diagnostics = {
+              ...diagnostics,
+              stage: "paused_recoverable",
+              recoveryState: "paused_recoverable",
+              expansionWarning: error.message,
+              novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
+            };
+            latestValidSuggestions = completedSuggestions;
+            await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics, status: "pending", lease_owner: null, lease_expires_at: null });
+            return;
+          }
           completionWarnings.push(`Optional novel expansion did not finish; the usable outline was preserved below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target.`);
           diagnostics = {
             ...diagnostics,
@@ -6157,6 +6374,114 @@ export async function runSuggestionJob(
       }
       await postValidatedOutline(suggestions, completionWarnings);
     };
+    if (planningState.nextAction === "narrative-quality-repair") {
+      const repairState = planningState.narrativeQualityRepair && typeof planningState.narrativeQualityRepair === "object"
+        ? planningState.narrativeQualityRepair as Record<string, unknown>
+        : {};
+      let current = persistedSemanticSuggestions;
+      const defects = findNarrativeQualityDefects(current);
+      const strategy = String(repairState.strategy ?? "deterministic-consolidation");
+      const attempt = Number(repairState.attempt ?? 0);
+      if (defects.length === 0) {
+        planningState = { ...planningState, phase: "narrative_quality_repaired", nextAction: "narrative-quality-completion" };
+        diagnostics = { ...diagnostics, stage: "narrative_quality_revalidated", narrativeQuality: { accepted: true, defects: [] } };
+        await updateRun({ suggestions: current, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(current);
+        return;
+      }
+      if (strategy === "deterministic-consolidation") {
+        const deterministic = repairNarrativeQualityDeterministically(current, defects);
+        current = deterministic.suggestions;
+        const remaining = findNarrativeQualityDefects(current);
+        if (remaining.length === 0) {
+          planningState = {
+            ...planningState,
+            phase: "narrative_quality_repaired",
+            nextAction: "narrative-quality-completion",
+            narrativeQualityRepair: { ...repairState, strategy, attempt: 0, defects, lastOutcome: { strategy, removedTitles: deterministic.removedTitles, remaining: 0 } },
+          };
+          diagnostics = { ...diagnostics, stage: "narrative_quality_repaired", narrativeQuality: { accepted: true, strategy, removedTitles: deterministic.removedTitles, defects } };
+          await updateRun({ suggestions: current, planning_state: planningState, diagnostics });
+          await continueAfterSemanticVerification(current);
+          return;
+        }
+        planningState = {
+          ...planningState,
+          phase: "narrative_quality_repair_pending",
+          nextAction: "narrative-quality-repair",
+          narrativeQualityRepair: { ...repairState, strategy: "localized-revision", attempt: 1, defects: remaining, checkpointSuggestions: current, lastOutcome: { strategy, removedTitles: deterministic.removedTitles, remaining: remaining.length } },
+        };
+        diagnostics = { ...diagnostics, stage: "narrative_quality_repair_checkpointed", narrativeQuality: { accepted: false, strategy, removedTitles: deterministic.removedTitles, defects: remaining } };
+        latestValidSuggestions = current;
+        await updateRun({ suggestions: current, planning_state: planningState, diagnostics });
+        throw new SuggestionWorkerYield();
+      }
+      const nextStrategy = strategy === "localized-revision" && attempt > 1 ? "targeted-replan" : strategy;
+      const action = `outline-narrative-quality-repair-${nextStrategy}`;
+      const repairPrompt = {
+        system: `Repair only the defective dramatic material in the supplied outline. Preserve all unaffected sections, existing author material, Story Arc beat identity, recipe requirement IDs, causal continuity, and valid container assignments. For each target section, rewrite its dramaticEvent, resultingChange, and terminalState so it performs a distinct meaningful dramatic job. Do not use callbacks, motifs, or recurring circumstances as a duplicate; preserve intentional callbacks when their consequence differs. Return only JSON operations keyed by zero-based section index.`,
+        user: JSON.stringify({
+          strategy: nextStrategy,
+          defects,
+          currentSuggestions: current.map((section, sectionIndex) => ({ sectionIndex, section })),
+          existingAcceptedSections: body.existingSections ?? [],
+          arcTemplate: body.arcTemplate,
+          recipe: body.recipe,
+        }),
+      };
+      const raw = await billableCall(
+        repairPrompt.system,
+        repairPrompt.user,
+        9000,
+        { type: "json_schema", json_schema: { name: `outline_narrative_quality_repair_${nextStrategy}`, strict: true, schema: buildNarrativeQualityRepairResponseSchema() } },
+        action,
+        (content, finishReason) => {
+          const parsed = parseOutlineJSON(content, finishReason);
+          const repaired = applyNarrativeQualityRepairOperations(current, parsed, body);
+          if (repaired.length > MAX_PLANNED_SECTIONS) throw new Error("narrative quality repair exceeded the global section safety cap");
+          return content;
+        },
+      );
+      const repaired = applyNarrativeQualityRepairOperations(current, parseOutlineJSON(raw.content, raw.finishReason), body);
+      const remaining = findNarrativeQualityDefects(repaired);
+      if (remaining.length === 0) {
+        planningState = {
+          ...planningState,
+          phase: "narrative_quality_repaired",
+          nextAction: "narrative-quality-completion",
+          narrativeQualityRepair: { ...repairState, strategy: nextStrategy, attempt: attempt + 1, defects, checkpointSuggestions: repaired, lastOutcome: { strategy: nextStrategy, remaining: 0 } },
+        };
+        diagnostics = { ...diagnostics, stage: "narrative_quality_repaired", narrativeQuality: { accepted: true, strategy: nextStrategy, defects } };
+        await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(repaired);
+        return;
+      }
+      if (nextStrategy === "localized-revision") {
+        planningState = {
+          ...planningState,
+          phase: "narrative_quality_repair_pending",
+          nextAction: "narrative-quality-repair",
+          narrativeQualityRepair: { ...repairState, strategy: "targeted-replan", attempt: attempt + 1, defects: remaining, checkpointSuggestions: repaired, lastOutcome: { strategy: nextStrategy, remaining: remaining.length } },
+        };
+        diagnostics = { ...diagnostics, stage: "narrative_quality_repair_checkpointed", narrativeQuality: { accepted: false, strategy: nextStrategy, defects: remaining } };
+        latestValidSuggestions = repaired;
+        await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
+        throw new SuggestionWorkerYield();
+      }
+      // A second, different repair strategy did not make the artifact valid.
+      // Preserve it as explicitly paused/recoverable; never terminalize it as
+      // a failed outline and never spend indefinitely on the same defect.
+      planningState = {
+        ...planningState,
+        phase: "paused_recoverable",
+        nextAction: "narrative-quality-repair",
+        narrativeQualityRepair: { ...repairState, strategy: nextStrategy, attempt: attempt + 1, defects: remaining, checkpointSuggestions: repaired, lastOutcome: { strategy: nextStrategy, remaining: remaining.length } },
+      };
+      diagnostics = { ...diagnostics, stage: "paused_recoverable", narrativeQuality: { accepted: false, strategy: nextStrategy, defects: remaining, reason: "bounded repair strategies exhausted" } };
+      latestValidSuggestions = repaired;
+      await updateRun({ status: "pending", suggestions: repaired, planning_state: planningState, diagnostics, lease_owner: null, lease_expires_at: null });
+      return;
+    }
     if (planningState.nextAction === "semantic-verification") {
       let verification: SemanticVerificationResult | undefined;
       try {
@@ -6295,6 +6620,7 @@ export async function runSuggestionJob(
       // The persisted checkpoint is already validated; it is the fallback if
       // the resumed provider attempt fails before producing another checkpoint.
       latestValidSuggestions = resume.suggestions;
+      await queueNarrativeQualityRepair(resume.suggestions, "resumed_recovery");
       // PR8 (revised): preserve the repair audit fields through the
       // subsequent diagnostics assignment so they actually land in the
       // persisted row. The previous shape wrote audit fields into
@@ -6365,6 +6691,13 @@ export async function runSuggestionJob(
           ),
           novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
         };
+        if (needsNovelExpansion(completedSuggestions, body.existingSections ?? [])) {
+          planningState = { ...planningState, phase: "paused_recoverable", nextAction: "expansion", expansionCheckpoint: diagnostics.expansionCheckpoint };
+          diagnostics = { ...diagnostics, stage: "paused_recoverable", recoveryState: "paused_recoverable" };
+          latestValidSuggestions = completedSuggestions;
+          await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics, status: "pending", lease_owner: null, lease_expires_at: null });
+          return;
+        }
       }
       // Initial and resumed expansion use the same final completion gate.
       await completeValidatedOutline(completedSuggestions, completionWarnings, true);
@@ -6698,7 +7031,7 @@ export async function runSuggestionJob(
         : {}),
     };
 
-    assertNarrativeStructureQuality(result.suggestions, requestedStoryMaterialFormat(body));
+    await queueNarrativeQualityRepair(result.suggestions, "initial_generation");
 
     const authoredSemanticBeatCount = body.arcTemplate.beats.filter((beat) => arcRoleContract(beat, body.arcTemplate.name).semanticObligations.length > 0).length;
     if ((authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null) && sectionAllocationDeficits(result.suggestions).length === 0) {
@@ -6797,6 +7130,41 @@ export async function runSuggestionJob(
       ? `${settledCredits.toFixed(2)} credits were already settled for completed stages; no duplicate charge will be created.`
       : "No settled customer charge is recorded for this run.";
     const publicError = `${publicErrorBase} ${billingStatus}`;
+    const qualityRecoveryActive = planningState.nextAction === "narrative-quality-repair" ||
+      planningState.phase === "narrative_quality_repair_pending" ||
+      planningState.phase === "paused_recoverable";
+    if (qualityRecoveryActive) {
+      planningState = {
+        ...planningState,
+        phase: "paused_recoverable",
+        nextAction: "narrative-quality-repair",
+      };
+      const pausedDiagnostics = {
+        ...diagnostics,
+        stage: "paused_recoverable",
+        recoveryState: "paused_recoverable",
+        narrativeQualityRecovery: {
+          ...(diagnostics.narrativeQualityRecovery as Record<string, unknown> ?? {}),
+          errorCode,
+          reason: providerBillingUnavailable || providerOutage || providerRateLimited || providerErrorCode === "insufficient_credits"
+            ? "external_dependency"
+            : "repair_attempt_failed",
+          message: providerBillingUnavailable || providerOutage || providerRateLimited ? undefined : message.slice(0, 500),
+          pausedAt: new Date().toISOString(),
+        },
+      };
+      await updateRun({
+        status: "pending",
+        suggestions: latestValidSuggestions,
+        planning_state: planningState,
+        error_code: errorCode,
+        error: publicError,
+        diagnostics: pausedDiagnostics,
+        lease_owner: null,
+        lease_expires_at: null,
+      });
+      return;
+    }
     const failedDiagnostics = {
       ...diagnostics,
       billingReconciliation: settledCredits === null ? "unresolved" : settledCredits > 0 ? "settled" : "no_settled_charge",

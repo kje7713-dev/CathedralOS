@@ -94,6 +94,8 @@ import {
   attachRecipeProvenance,
   isCompatibleStoryMaterialEnrichment,
   findDramaticDistinctnessIssues,
+  findNarrativeQualityDefects,
+  repairNarrativeQualityDeterministically,
   validateNarrativeStructureQuality,
   assertNarrativeStructureQuality,
   validatePersistedAllocationCheckpoint,
@@ -3309,6 +3311,39 @@ Deno.test("overfragmented 114-scene outline fails narrative quality despite acce
   assertThrows(() => assertNarrativeStructureQuality(overfragmented, "novel"), OutlineNarrativeQualityError);
 });
 
+Deno.test("narrative quality detects paraphrased and cross-beat repetition", () => {
+  const repeated = [
+    qualitySection("beat-1", "Ledger discovery"),
+    { ...qualitySection("beat-2", "Ledger revelation"), dramaticEvent: "The survivors uncover the hidden route through the flooded yard.", resultingChange: "The group learns the route but nothing about the plan changes.", terminalState: "The group still faces the same route and pressure." },
+  ];
+  const defects = findNarrativeQualityDefects(repeated as any);
+  assertEquals(defects.length > 0, true);
+  assertEquals(defects[0].sourceBeatID, "beat-1");
+  assertEquals(defects[0].targetBeatID, "beat-2");
+});
+
+Deno.test("intentional callbacks and distinct short scenes are preserved", () => {
+  const callback = [
+    qualitySection("beat-1", "First crossing", "distinct"),
+    { ...qualitySection("beat-1", "Callback to the crossing", "distinct"), summary: "A callback reframes the earlier route.", dramaticEvent: "The group revisits the earlier crossing as a deliberate parallel.", resultingChange: "The remembered route reveals a new betrayal.", terminalState: "The betrayal changes who can be trusted." },
+  ];
+  const distinct = [
+    qualitySection("beat-1", "Short scene one", "distinct"),
+    { ...qualitySection("beat-1", "Short scene two", "distinct"), dramaticEvent: "The group negotiates for medicine at the eastern shelter.", resultingChange: "The shelter grants medicine but demands a future service.", terminalState: "The debt creates a new alliance." },
+  ];
+  assertEquals(findNarrativeQualityDefects(callback as any).length, 0);
+  assertEquals(findNarrativeQualityDefects(distinct as any).length, 0);
+});
+
+Deno.test("deterministic narrative consolidation removes only repeated generated sections", () => {
+  const current = [qualitySection("beat-1", "First"), qualitySection("beat-1", "Second"), qualitySection("beat-2", "Third")];
+  const defects = findNarrativeQualityDefects(current as any);
+  const repaired = repairNarrativeQualityDeterministically(current as any, defects);
+  assertEquals(repaired.suggestions.length, 2);
+  assertEquals(repaired.removedTitles, ["Second"]);
+  assertEquals(repaired.suggestions[1].title, "Third");
+});
+
 Deno.test("PR3 causal-scale gate is general and records material-backed diagnostics", () => {
   const material = enrichmentFixture();
   material.escalationLadder = [
@@ -5034,6 +5069,64 @@ function checkpointedWorkerRow(body: any) {
   };
 }
 
+async function qualityRecoveryBody(existingSections: any[] = []) {
+  const fixture = await executableWorkerBody();
+  const provenance = await recipeProvenance(fixture.recipe as any);
+  const novelMaterial = attachRecipeProvenance({
+    ...repairStoryMaterialFromRecipe(fixture.recipe as any, provenance, "novel"),
+    schema: "cathedralos.story_material_enrichment",
+    rationale: "Quality recovery fixture",
+    escalationLadder: [
+      { id: "quality-escalation-1", source: "planner", sourceReference: null, label: "First pressure", description: "The first pressure rises." },
+      { id: "quality-escalation-2", source: "planner", sourceReference: null, label: "Second pressure", description: "The second pressure rises." },
+      { id: "quality-escalation-3", source: "planner", sourceReference: null, label: "Final pressure", description: "The final pressure rises." },
+    ],
+    reversals: [{ id: "quality-reversal", source: "planner", sourceReference: null, label: "Reversal", description: "The plan turns." }],
+    consequences: [{ id: "quality-consequence", source: "planner", sourceReference: null, label: "Consequence", description: "The choice costs something." }],
+  } as any, provenance);
+  return {
+    ...fixture,
+    requestedFormat: "novel",
+    storyMaterialEnrichment: novelMaterial,
+    existingSections,
+    arcTemplate: {
+      id: "quality-arc",
+      name: "Quality Recovery Arc",
+      beats: [
+        { id: "beat-1", role: "setup", label: "Opening" },
+        { id: "beat-2", role: "setup", label: "Closing" },
+      ],
+    },
+  } as any;
+}
+
+function qualitySection(beat: string, title: string, variant = "duplicate") {
+  const distinct = variant === "distinct";
+  return {
+    title,
+    summary: distinct ? `${title} changes the route.` : `${title} repeats the route discovery.`,
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: distinct ? `${title} leaves a new obligation.` : "The route remains unchanged.",
+    entryState: "The group faces the blocked route.",
+    dramaticEvent: distinct ? `${title} forces the group to choose a different shelter.` : "The group discovers the hidden route through the flooded yard.",
+    resultingChange: distinct ? `${title} makes the shelter unsafe and redirects the journey.` : "The group learns the route but nothing about the plan changes.",
+    terminalState: distinct ? "The group must reach the eastern shelter before dawn." : "The group still faces the same route and pressure.",
+    storyArcBeatID: beat,
+    dramaticFunction: "setup",
+    recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`),
+  };
+}
+
+function qualityExistingSections(count = 27) {
+  return Array.from({ length: count }, (_, index) => ({
+    title: `Accepted chapter ${index + 1}`,
+    summary: `Accepted chapter ${index + 1} advances a distinct consequence.`,
+    container: "chapter",
+    storyArcBeatID: index % 2 === 0 ? "beat-1" : "beat-2",
+  }));
+}
+
 function fakeWorkerBilling(requestedActions: string[], providerCalls = requestedActions) {
   return async (request: any) => {
     requestedActions.push(request.action);
@@ -5805,7 +5898,7 @@ Deno.test("required-obligation repair is one billable stage and rechecks coverag
 Deno.test("durable worker lifecycle checkpoints missing obligations then completes through the common gate", async () => {
   const body = await executableWorkerBody();
   const obligations = deriveRecipeObligations(body.recipe as any);
-  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: "A section", container: "scene", pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before", dramaticEvent: "It happens", resultingChange: "Pressure changes", terminalState: "After", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
+  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: beat === "beat-1" ? "The route opens." : "The cost is accepted.", container: "scene", pov: "thirdPersonLimited", terminalBeat: beat === "beat-1" ? "The route opens." : "The cost is accepted.", entryState: beat === "beat-1" ? "The route is blocked." : "The survivors face the cost.", dramaticEvent: beat === "beat-1" ? "The survivors secure the route through the flooded yard." : "The survivors accept the cost of the crossing.", resultingChange: beat === "beat-1" ? "The route becomes usable." : "The survivors choose a lasting sacrifice.", terminalState: beat === "beat-1" ? "The group can move toward shelter." : "The new obligation shapes the next movement.", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
   const row: any = checkpointedWorkerRow(body);
   const db = new ExecutableRunDb(row);
   const actions: string[] = [];
@@ -5882,7 +5975,7 @@ Deno.test("successful obligation repair enters novel expansion instead of comple
   );
   const body = { ...fullBody, requestedFormat: "novel", storyMaterialEnrichment: novelMaterial } as any;
   const obligations = deriveRecipeObligations(body.recipe as any);
-  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: "A section", container: "scene", pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before", dramaticEvent: "It happens", resultingChange: "Pressure changes", terminalState: "After", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
+  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: beat === "beat-1" ? "The route opens." : "The cost is accepted.", container: "scene", pov: "thirdPersonLimited", terminalBeat: beat === "beat-1" ? "The route opens." : "The cost is accepted.", entryState: beat === "beat-1" ? "The route is blocked." : "The survivors face the cost.", dramaticEvent: beat === "beat-1" ? "The survivors secure the route through the flooded yard." : "The survivors accept the cost of the crossing.", resultingChange: beat === "beat-1" ? "The route becomes usable." : "The survivors choose a lasting sacrifice.", terminalState: beat === "beat-1" ? "The group can move toward shelter." : "The new obligation shapes the next movement.", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
   const actions: string[] = [];
   const billable = validatedWorkerBilling(actions, (action) => {
@@ -5900,6 +5993,75 @@ Deno.test("successful obligation repair enters novel expansion instead of comple
   assertEquals(db.row.planning_state.phase, "expansion");
   assertEquals(db.row.status === "completed", false);
   assertEquals(actions.slice(0, 3), ["outline-suggestions", "outline-semantic-verification", "outline-obligation-repair"]);
+});
+
+Deno.test("worker corrects a fragmented 114-scene outline without terminal failure", async () => {
+  const body = await qualityRecoveryBody();
+  const fragmented = Array.from({ length: 114 }, (_, index) => qualitySection(index % 2 === 0 ? "beat-1" : "beat-2", `Generated scene ${index + 1}`));
+  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const actions: string[] = [];
+  const billable = async (request: any) => {
+    actions.push(request.action);
+    if (request.action === "outline-suggestions") return { featureResult: JSON.stringify({ beats: { "beat-1": fragmented.filter((section) => section.storyArcBeatID === "beat-1"), "beat-2": fragmented.filter((section) => section.storyArcBeatID === "beat-2") } }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+    return { featureResult: JSON.stringify({ suggestions: [] }), charged: true, actualCharge: 1, remainingCredits: 98 } as any;
+  };
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", { db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {} });
+  await run();
+  assertEquals(db.row.status, "pending");
+  assertEquals(db.row.planning_state.nextAction, "narrative-quality-repair");
+  await run();
+  assertEquals(db.row.status, "pending");
+  assertEquals(db.row.planning_state.nextAction, "narrative-quality-repair");
+  await run();
+  assertEquals(db.row.status, "pending");
+  assertEquals(db.row.status === "failed", false);
+  assertEquals(db.row.planning_state.phase, "paused_recoverable");
+  assertEquals(db.row.suggestions.length < 114, true);
+  assertEquals(actions.filter((action) => action === "outline-suggestions").length, 1);
+});
+
+Deno.test("successful localized quality repair resumes normal completion", async () => {
+  const body = await qualityRecoveryBody(qualityExistingSections());
+  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const actions: string[] = [];
+  const billable = async (request: any) => {
+    actions.push(request.action);
+    if (request.action === "outline-suggestions") return { featureResult: JSON.stringify({ beats: { "beat-1": [qualitySection("beat-1", "Opening")], "beat-2": [qualitySection("beat-2", "Closing")] } }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+    if (request.action === "outline-narrative-quality-repair-localized-revision") return { featureResult: JSON.stringify({ operations: [{ sectionIndex: 1, section: qualitySection("beat-2", "Closing revised", "distinct") }] }), charged: true, actualCharge: 1, remainingCredits: 98 } as any;
+    throw new Error(`unexpected provider action ${request.action}`);
+  };
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", { db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {} });
+  await run();
+  await run();
+  await run();
+  assertEquals(db.row.status, "completed", JSON.stringify({ actions, error: db.row.error, planningState: db.row.planning_state }));
+  assertEquals(actions, ["outline-suggestions", "outline-narrative-quality-repair-localized-revision"]);
+  assertEquals(db.row.suggestions.some((section: any) => section.title === "Closing revised"), true);
+});
+
+Deno.test("quality repair escalates strategy and pauses on provider unavailability", async () => {
+  const body = await qualityRecoveryBody(qualityExistingSections());
+  const db = new ExecutableRunDb(checkpointedWorkerRow(body));
+  const actions: string[] = [];
+  const billable = async (request: any) => {
+    actions.push(request.action);
+    if (request.action === "outline-suggestions") return { featureResult: JSON.stringify({ beats: { "beat-1": [qualitySection("beat-1", "Opening")], "beat-2": [qualitySection("beat-2", "Closing")] } }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
+    if (request.action === "outline-narrative-quality-repair-localized-revision") return { featureResult: JSON.stringify({ operations: [{ sectionIndex: 1, section: qualitySection("beat-2", "Closing still repeated") }] }), charged: true, actualCharge: 1, remainingCredits: 98 } as any;
+    if (request.action === "outline-narrative-quality-repair-targeted-replan") throw new ProviderBillingUnavailableError({ code: "organization_spend_limit_exceeded", message: "temporary repair outage", status: 429 });
+    throw new Error(`unexpected provider action ${request.action}`);
+  };
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", { db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {} });
+  await run();
+  await run();
+  await run();
+  assertEquals(db.row.planning_state.nextAction, "narrative-quality-repair");
+  assertEquals(db.row.planning_state.narrativeQualityRepair.strategy, "targeted-replan");
+  await run();
+  assertEquals(db.row.status, "pending");
+  assertEquals(db.row.planning_state.phase, "paused_recoverable");
+  assertEquals(db.row.status === "failed", false);
+  assertEquals(actions.filter((action) => action === "outline-narrative-quality-repair-localized-revision").length, 1);
+  assertEquals(actions.filter((action) => action === "outline-narrative-quality-repair-targeted-replan").length, 1);
 });
 
 Deno.test("provider billing unavailable during allocation bypasses retry and fails safely", async () => {
