@@ -49,6 +49,7 @@ import {
   buildPrompt,
   assertDistinctOutlineTitles,
   buildSuggestionResponseSchema,
+  plannedNovelContainerSlots,
   buildObligationRepairPrompt,
   mergeObligationRepairOperations,
   buildObligationRepairResponseSchema,
@@ -469,10 +470,30 @@ Deno.test("container-aware planner can allocate a mixed 120k-word first pass bey
   assertEquals(scale.exceedsMaximum, false);
   assertEquals(Math.round(scale.projectedWords), 120769);
   const schema: any = buildSuggestionResponseSchema(beats, fitted, [], "", "novel");
-  assertEquals(schema.properties.beats.properties["beat-1"].minItems, 20);
-  assertEquals(schema.properties.beats.properties["beat-1"].maxItems, 20);
-  assertEquals(schema.properties.beats.properties["beat-1"].items.properties.container.enum.includes("scene"), false);
-  assertEquals(schema.properties.beats.properties["beat-1"].items.properties.container.enum.includes("chapter"), true);
+  const beatSchema = schema.properties.beats.properties["beat-1"];
+  assertEquals(beatSchema.type, "object");
+  assertEquals(Object.keys(beatSchema.properties).length, 20);
+  assertEquals(beatSchema.required.length, 20);
+  assertOpenAIStrictSchema(schema);
+  const slots = plannedNovelContainerSlots(counts);
+  for (let index = 0; index < slots.length; index++) {
+    const key = `section_${String(index + 1).padStart(3, "0")}`;
+    assertEquals(beatSchema.properties[key].properties.container.enum, [slots[index]]);
+  }
+  assertEquals(slots.filter((type) => type === "scene").length, 0);
+  assertEquals(slots.filter((type) => type === "chapter").length, 5);
+  // This exact mix projects >115k without depending on expansion. No new provider call.
+  const typedResponse = { beats: Object.fromEntries(beats.map((beat, beatIndex) => [
+    beat.id, Object.fromEntries(slots.map((container, index) => [
+      `section_${String(index + 1).padStart(3, "0")}`,
+      { title: `Section ${beatIndex * 20 + index + 1}`, summary: "Distinct event.", container, pov: "thirdPersonLimited", terminalBeat: "Mara shuts the door." },
+    ])),
+  ])) };
+  const flattened = flattenSuggestionResponse(typedResponse, beats);
+  assertEquals(flattened.suggestions.length, 40);
+  assertEquals(evaluateNovelScale(flattened.suggestions).meetsPreferredMinimum, true);
+  assertEquals(evaluateNovelScale(flattened.suggestions).exceedsMaximum, false);
+  assertEquals(flattened.suggestions[20].storyArcBeatID, "beat-2");
   const { system } = buildPrompt(req, fitted);
   assertEquals(system.includes("planned containers: developedScene=6, setPiece=5, sceneSequence=4, chapter=5"), true);
   assertEquals(buildAllocationPrompt(req).system.includes("containerCounts"), true);
@@ -523,7 +544,7 @@ Deno.test("non-novel allocation keeps its legacy strict planner schema and promp
   assertEquals(allocation.get("beat-2")?.minSections, 1);
 });
 
-Deno.test("container-aware allocation rejects inconsistent sums and hard-cap overflow", () => {
+Deno.test("container-aware allocation rejects inconsistent counts but falls back safely on oversize", () => {
   const beats = [{ id: "beat-1" }, { id: "beat-2" }];
   const counts = { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 20 };
   assertThrows(() => parseAndValidateAllocation(JSON.stringify({
@@ -539,7 +560,12 @@ Deno.test("container-aware allocation rejects inconsistent sums and hard-cap ove
     ],
   }), beats);
   const req = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
-  assertThrows(() => fitAllocationToNovelBudget(allocation, req), Error, "planned novel exceeds 125000 words");
+  const fitted = fitAllocationToNovelBudget(allocation, req);
+  assertEquals(Array.from(fitted.values()).reduce((n, a) => n + a.minSections, 0), 29);
+  assertEquals(Array.from(fitted.values()).every((a) => !a.containerCounts), true);
+  const legacySchema: any = buildSuggestionResponseSchema(beats, fitted, [], "", "novel");
+  assertEquals(legacySchema.properties.beats.properties["beat-1"].type, "array");
+  assertEquals(Array.from(fitted.values()).every((a) => a.rationale.includes("conservative sizing fallback")), true);
 });
 
 Deno.test("2% novel tolerance skips length-only expansion without weakening the hard cap", async () => {
