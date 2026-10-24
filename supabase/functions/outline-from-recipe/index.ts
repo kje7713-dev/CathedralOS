@@ -629,7 +629,7 @@ export function buildSuggestionResponseSchema(
         const propertiesForSlot = { ...beatSectionSchema.properties };
         // OpenAI strict objects must require every declared property. Omit
         // optional evidence metadata when this arc beat has no obligation.
-        if (!beatSectionSchema.required.includes("arcObligationEvidence")) {
+        if (contract.semanticObligations.length === 0) {
           delete (propertiesForSlot as Record<string, unknown>).arcObligationEvidence;
         }
         return [key, {
