@@ -626,10 +626,16 @@ export function buildSuggestionResponseSchema(
       const slots = plannedNovelContainerSlots(planned);
       const slotProperties = Object.fromEntries(slots.map((container, index) => {
         const key = plannedNovelSlotKey(index);
+        const propertiesForSlot = { ...beatSectionSchema.properties };
+        // OpenAI strict objects must require every declared property. Omit
+        // optional evidence metadata when this arc beat has no obligation.
+        if (!beatSectionSchema.required.includes("arcObligationEvidence")) {
+          delete (propertiesForSlot as Record<string, unknown>).arcObligationEvidence;
+        }
         return [key, {
           ...beatSectionSchema,
           properties: {
-            ...beatSectionSchema.properties,
+            ...propertiesForSlot,
             container: { type: "string", enum: [container] },
           },
         }];
