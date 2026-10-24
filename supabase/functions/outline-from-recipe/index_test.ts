@@ -478,6 +478,25 @@ Deno.test("container-aware planner can allocate a mixed 120k-word first pass bey
   assertEquals(buildAllocationPrompt(req).system.includes("containerCounts"), true);
 });
 
+Deno.test("non-novel allocation keeps its legacy strict planner schema and prompt", async () => {
+  let schema: any;
+  const req = { ...sparseRequest, requestedFormat: "shortStory" } as any;
+  const allocation = await planSectionAllocation(req, "unused", async (
+    system: string, _user: string, _tokens: number, responseFormat: any,
+  ) => {
+    assertEquals(system.includes("Return containerCounts on each beat"), false);
+    schema = responseFormat.json_schema.schema;
+    return { content: JSON.stringify({ allocations: [
+      { beatIndex: 0, minSections: 1, rationale: "opening" },
+      { beatIndex: 1, minSections: 1, rationale: "ending" },
+    ] }), creditCostCharged: 0, remainingCredits: 0 };
+  });
+  assertEquals("containerCounts" in schema.properties.allocations.items.properties, false);
+  assertEquals(schema.properties.allocations.items.required, ["beatIndex", "minSections", "rationale"]);
+  assertEquals(allocation.get("beat-1")?.minSections, 1);
+  assertEquals(allocation.get("beat-2")?.minSections, 1);
+});
+
 Deno.test("container-aware allocation rejects inconsistent sums and hard-cap overflow", () => {
   const beats = [{ id: "beat-1" }, { id: "beat-2" }];
   const counts = { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 20 };
