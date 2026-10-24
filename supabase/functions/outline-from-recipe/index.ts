@@ -3292,7 +3292,7 @@ Output JSON only. No commentary, no prose.`;
     existingSectionsByBeat,
     existingUnlinkedSections,
     allocation: "For novels, choose containerCounts first and return minSections equal to their sum; allocate to ~115,000 projected words using each actual container midpoint. Accepted existing work counts once.",
-    containerMidpointTokens: Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((container) => [container, projectedExpectedTokens([{ container })])),
+    containerMidpointTokens: Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((container) => [container, projectedExpectedTokens([{ container }])])),
     hint: req.hint ?? null,
   }, null, 2);
   return { system, user };
