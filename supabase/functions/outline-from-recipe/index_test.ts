@@ -1569,7 +1569,7 @@ Deno.test("novel outline handoff treats allocation as complete and projects mixe
   assertEquals(novelPrompt.includes("## Complete first-pass allocation"), true);
   assertEquals(novelPrompt.includes("not a minimum-only Story Arc coverage floor"), true);
   assertEquals(novelPrompt.includes("complete first-pass allocation: 15 sections"), true);
-  assertEquals(novelPrompt.includes("each planned container at its actual midpoint"), true);
+  assertEquals(novelPrompt.includes("The allocator already priced each planned section at its actual midpoint"), true);
   assertEquals(novelPrompt.includes("routine book-length development belongs in this first pass"), true);
   assertEquals(novelPrompt.includes("## Use the minimum-only allocation"), false);
 
