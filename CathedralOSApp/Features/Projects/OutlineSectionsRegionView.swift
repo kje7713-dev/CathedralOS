@@ -601,12 +601,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         suggestions = []
         suggestionSourceRecipe = nil
 
-        if let outlineID,
-           let outlines = try? modelContext.fetch(FetchDescriptor<Outline>()),
-           let refreshedOutline = outlines.first(where: { $0.id == outlineID }) {
-            sectionsOrder = refreshedOutline.sections
-                .filter { $0.parent == nil }
-                .sorted(by: { $0.position < $1.position })
+        if let outlineID {
+            sectionsOrder = fetchTopLevelSections(for: outlineID)
         } else {
             syncSectionsOrder()
         }
@@ -671,14 +667,23 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         )
     }
 
+    /// SwiftData can retain a stale to-many relationship after a targeted
+    /// restore updates child rows in-place. Fetch the section entities directly
+    /// so Accept All completion cannot leave the UI showing the pre-acceptance
+    /// section count until navigation or relaunch.
+    private func fetchTopLevelSections(for outlineID: UUID) -> [OutlineSection] {
+        let sections = (try? modelContext.fetch(FetchDescriptor<OutlineSection>())) ?? []
+        return sections
+            .filter { $0.outline?.id == outlineID && $0.parent == nil }
+            .sorted(by: { $0.position < $1.position })
+    }
+
     private func syncSectionsOrder() {
         guard let outline = currentOutline else {
             sectionsOrder = []
             return
         }
-        sectionsOrder = outline.sections
-            .filter { $0.parent == nil }
-            .sorted(by: { $0.position < $1.position })
+        sectionsOrder = fetchTopLevelSections(for: outline.id)
     }
 
     private func consumeGenerationLaunch() {
