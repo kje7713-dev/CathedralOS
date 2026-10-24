@@ -550,6 +550,26 @@ export function validateNovelLeafContainers(
   }
 }
 
+/** Interleave a beat's planned containers rather than grouping similar
+ * sizes together. Counts and slot names remain deterministic on replay. */
+export function plannedNovelContainerSlots(counts: NovelContainerCounts): Array<typeof NOVEL_LEAF_CONTAINERS[number]> {
+  const total = NOVEL_LEAF_CONTAINERS.reduce((sum, type) => sum + counts[type], 0);
+  const used = Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((type) => [type, 0])) as NovelContainerCounts;
+  const slots: Array<typeof NOVEL_LEAF_CONTAINERS[number]> = [];
+  for (let i = 0; i < total; i++) {
+    const choices = NOVEL_LEAF_CONTAINERS.filter((type) => used[type] < counts[type]);
+    const chosen = choices.reduce((best, type) =>
+      (i + 1) * counts[type] / total - used[type] >
+        (i + 1) * counts[best] / total - used[best] ? type : best);
+    slots.push(chosen);
+    used[chosen]++;
+  }
+  return slots;
+}
+function plannedNovelSlotKey(index: number): string {
+  return `section_${String(index + 1).padStart(3, "0")}`;
+}
+
 export function buildSuggestionResponseSchema(
   beats: Array<{ id: string; role?: string; label?: string; description?: string }>,
   allocation: Map<string, Allocation>,
@@ -597,18 +617,44 @@ export function buildSuggestionResponseSchema(
         ? [...sectionSchema.required, "arcObligationEvidence"]
         : sectionSchema.required,
     };
-    properties[beat.id] = {
-      type: "array",
-      // The first pass must realize the bounded allocation, not invent an
-      // unbounded number of full chapter sections. Optional scale expansion
-      // happens later through the budget-aware progressive expansion path.
-      minItems: minimum,
-      // Only novels use the allocation as an exact first-pass budget. Other
-      // formats have no novel expansion stage, so their allocation is a floor
-      // and must not silently cap the provider's format-appropriate coverage.
-      maxItems: requestedFormat === "novel" ? minimum : MAX_PLANNED_SECTIONS,
-      items: beatSectionSchema,
-    };
+    const planned = requestedFormat === "novel" ? allocation.get(beat.id)?.containerCounts : undefined;
+    if (planned) {
+      // A per-beat array can restrict the allowed types but CANNOT enforce
+      // their quantities. Fixed named slots give each section its own strict
+      // container enum, so first-pass size is priced BEFORE the provider call.
+      // The flattened app payload remains the same ordered Suggestion[].
+      const slots = plannedNovelContainerSlots(planned);
+      const slotProperties = Object.fromEntries(slots.map((container, index) => {
+        const key = plannedNovelSlotKey(index);
+        const propertiesForSlot = { ...beatSectionSchema.properties };
+        // OpenAI strict objects must require every declared property. Omit
+        // optional evidence metadata when this arc beat has no obligation.
+        if (contract.semanticObligations.length === 0) {
+          delete (propertiesForSlot as Record<string, unknown>).arcObligationEvidence;
+        }
+        return [key, {
+          ...beatSectionSchema,
+          properties: {
+            ...propertiesForSlot,
+            container: { type: "string", enum: [container] },
+          },
+        }];
+      }));
+      properties[beat.id] = {
+        type: "object", properties: slotProperties,
+        required: Object.keys(slotProperties),
+        additionalProperties: false,
+      };
+    } else {
+      // Legacy persisted allocations and non-novel formats use their original
+      // array schema without changing recovery, billing or acceptance.
+      properties[beat.id] = {
+        type: "array",
+        minItems: minimum,
+        maxItems: requestedFormat === "novel" ? minimum : MAX_PLANNED_SECTIONS,
+        items: beatSectionSchema,
+      };
+    }
     required.push(beat.id);
   }
   return {
@@ -631,8 +677,18 @@ export function flattenSuggestionResponse(
   const suggestions: Suggestion[] = [];
   for (const beat of beats) {
     const rawSections = (beatObject as Record<string, unknown>)[beat.id];
-    if (!Array.isArray(rawSections)) throw new Error(`response missing beat ${beat.id}`);
-    for (const raw of rawSections) {
+    // New novel plans use named, container-typed slots. Legacy persisted
+    // checkpoints and all non-novel plans still return arrays.
+    const sections = Array.isArray(rawSections)
+      ? rawSections
+      : rawSections && typeof rawSections === "object"
+      ? Object.entries(rawSections as Record<string, unknown>)
+        .filter(([slot]) => /^section_\d{3}$/.test(slot))
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([, value]) => value)
+      : null;
+    if (!sections) throw new Error(`response missing beat ${beat.id}`);
+    for (const raw of sections) {
       if (!raw || typeof raw !== "object") throw new Error(`beat ${beat.id} contains an invalid section`);
       const { storyArcBeatID: _ignored, ...section } = raw as Partial<Suggestion>;
       suggestions.push({ ...(section as Omit<Suggestion, "storyArcBeatID">), storyArcBeatID: beat.id });
@@ -2767,11 +2823,14 @@ export function buildPrompt(
       const sectionLabel = isNovel
         ? `complete first-pass allocation: ${info.minSections} section${info.minSections === 1 ? "" : "s"}`
         : `minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"}`;
-      return `- ${beat?.label ?? beatId}: ${sectionLabel} (${info.rationale})`;
+      const typePlan = isNovel && info.containerCounts
+        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; ordered slots: ${plannedNovelContainerSlots(info.containerCounts).map((type, index) => `${plannedNovelSlotKey(index)}=${type}`).join(", ")}`
+        : "";
+      return `- ${beat?.label ?? beatId}: ${sectionLabel}${typePlan} (${info.rationale})`;
     })
     .join("\n");
   const allocationDirective = isNovel
-    ? `## Complete first-pass allocation\n\nThe allocation above is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. The allocation assumes a chapter-scale midpoint of 5,500 tokens (the midpoint of the server's 3,000-8,000 chapter range), so account for the actual projected contribution of every selected container. Do not treat a shorter container as chapter-scale, and do not leave routine book-length development to later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
+    ? `## Complete first-pass allocation\n\nThe allocation above is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Match the planned section container and narrative scale for each ordered named slot. When typed slots are present, return a JSON object of sections per beat keyed by those slot names; every slot has exactly one allowed container type. The allocator already priced each planned section at its actual midpoint. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
     : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
@@ -2825,7 +2884,7 @@ Choose a container for the scale of one dramatic unit, not to fake novel length:
 - sceneSequence: several connected scenes, locations, or times pursuing one coherent objective, 3,000-7,000
 - chapter: a publishing unit containing multiple substantial movements that belong together, 3,000-8,000+
 
-${isNovel ? `For novel planning, reason about the complete 115,000-word budget before choosing containers. The allocation's 5,500-token chapter midpoint is a planning assumption, not a label: prefer chapter when an allocated unit contains multiple connected movements such as setup, resistance, escalation, consequence, and character development pursuing one coherent narrative purpose. Combine related material when it belongs together, while preserving distinct events and irreversible state changes. Use scene, developedScene, setPiece, or sceneSequence when the dramatic material genuinely requires a smaller or differently shaped unit. Their lower midpoints reduce the authoritative projected total, so never count a shorter container as if it were a chapter and never relabel or pad material to hide that reduction. A deterministic projection of 29 mixed containers must use the actual container midpoints, not 29 chapter midpoints.` : `Use the container whose range fits the material. Preserve the existing format's allocation semantics and do not use containers to inflate or fragment the outline.`}
+${isNovel ? `For novel planning, follow the allocator's per-beat container counts and keep the actual midpoint projection near 115,000 words without exceeding 125,000. Treat every container as its real narrative scale: chapters can hold coherent multi-movement developments, while scenes, developed scenes, set pieces, and scene sequences must earn their individual shape. Preserve distinct irreversible developments without padding, relabeling small scenes as chapters, or splitting one continuous objective into redundant leaves. This first-pass allocation already reflects the different container sizes.` : `Use the container whose range fits the material. Preserve the existing format's allocation semantics and do not use containers to inflate or fragment the outline.`}
 For a new novel, prefer the chapter container: each chapter-scale section targets the existing chapter minimum of 3,000 planned tokens. Use scene, developedScene, setPiece, or sceneSequence only when the material genuinely requires a smaller or differently shaped dramatic unit; never use them to fragment one chapter or inflate section counts. Do not create moment, vignette, microScene, beat, shortStory, or episode leaves. Do not split one continuous dramatic objective into several short sections merely because each tactic can be named as its own event: setup → attempt → resistance → changed tactic → consequence usually belongs in one developedScene. A brief final image, kiss, gesture, or emotional beat should normally close the preceding substantive scene rather than become an isolated tiny novel section. Favor more developed story, never padding; preserve distinct state change, no duplicate revelations or resolutions, and no filler sections.
 The expected ranges are literary targets; runtime/provider headroom is not a desired length.
 
@@ -2910,9 +2969,20 @@ const ALLOCATION_SCHEMA = {
         properties: {
           beatIndex: { type: "integer", minimum: 0 },
           minSections: { type: "integer", minimum: 0, maximum: 20 },
+          containerCounts: {
+            type: "object", additionalProperties: false,
+            properties: {
+              scene: { type: "integer", minimum: 0, maximum: 20 },
+              developedScene: { type: "integer", minimum: 0, maximum: 20 },
+              setPiece: { type: "integer", minimum: 0, maximum: 20 },
+              sceneSequence: { type: "integer", minimum: 0, maximum: 20 },
+              chapter: { type: "integer", minimum: 0, maximum: 20 },
+            },
+            required: ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"],
+          },
           rationale: { type: "string", minLength: 1, maxLength: 500 },
         },
-        required: ["beatIndex", "minSections", "rationale"],
+        required: ["beatIndex", "minSections", "containerCounts", "rationale"],
         additionalProperties: false,
       },
     },
@@ -2927,8 +2997,12 @@ type Allocation = {
   coverageMinimum?: number;
   /** The planner's requested minimum, retained when budgeting scales extras. */
   allocationMinimum?: number;
+  /** The container-aware budget chosen by the novel planner. */
+  containerCounts?: NovelContainerCounts;
   rationale: string;
 };
+
+type NovelContainerCounts = Record<typeof NOVEL_LEAF_CONTAINERS[number], number>;
 
 export class AllocationBudgetConstraintError extends Error {
   readonly code = "allocation_budget_constraint";
@@ -2956,6 +3030,21 @@ export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): numbe
   );
 }
 
+/** The mixed-container budget counts the smallest novel leaf, not chapters.
+ * Legacy allocations without a type mix still use chapter-equivalent limits. */
+export function maximumContainerPlannedNewSections(req: OutlineFromRecipeRequest): number {
+  if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
+  const remaining = NOVEL_MAX_PROJECTED_TOKENS - projectedExpectedTokens(req.existingSections ?? []);
+  const minTokens = projectedExpectedTokens([{ container: "scene" }]);
+  return Math.max(0, Math.min(MAX_PLANNED_SECTIONS, Math.floor(Math.max(0, remaining) / minTokens)));
+}
+
+function projectedPlannedContainerTokens(allocation: Map<string, Allocation>): number {
+  return Array.from(allocation.values()).reduce((total, plan) =>
+    total + NOVEL_LEAF_CONTAINERS.reduce((sum, container) =>
+      sum + (plan.containerCounts?.[container] ?? 0) * projectedExpectedTokens([{ container }]), 0), 0);
+}
+
 /** Keep every beat's coverage floor, but never let allocator floors make the
  * novel cap mathematically impossible. Relative allocation priority is
  * preserved through largest-remainder scaling; later stages can still combine
@@ -2964,6 +3053,25 @@ export function fitAllocationToNovelBudget(
   allocation: Map<string, Allocation>,
   req: OutlineFromRecipeRequest,
 ): Map<string, Allocation> {
+  const mixes = Array.from(allocation.values()).map((plan) => plan.containerCounts);
+  if (mixes.some(Boolean)) {
+    const proposedTokens = projectedPlannedContainerTokens(allocation) +
+      projectedExpectedTokens(req.existingSections ?? []);
+    const plannedCount = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
+    if (mixes.every(Boolean) &&
+        proposedTokens <= NOVEL_MAX_PROJECTED_TOKENS &&
+        plannedCount <= MAX_PLANNED_SECTIONS) {
+      return allocation;
+    }
+    // Planning an overlarge/partial container mix must NOT introduce a new
+    // terminal failure. Fall back to the existing conservative chapter-budget
+    // normalization, and preserve the optional expansion path for real deficits.
+    const legacy = new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
+      const { containerCounts: _ignored, ...rest } = plan;
+      return [beatID, { ...rest, rationale: `${plan.rationale} (conservative sizing fallback)` }] as [string, Allocation];
+    }));
+    return fitAllocationToNovelBudget(legacy, req);
+  }
   const budget = maximumBudgetedNewSections(req);
   const total = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
   if (requestedStoryMaterialFormat(req) !== "novel" || total <= budget) return allocation;
@@ -3133,7 +3241,7 @@ export function parseAndValidateAllocation(
     }
     const candidate = item as Record<string, unknown>;
     const unexpectedKeys = Object.keys(candidate).filter((key) =>
-      !["beatIndex", "minSections", "rationale"].includes(key)
+      !["beatIndex", "minSections", "containerCounts", "rationale"].includes(key)
     );
     if (unexpectedKeys.length > 0) {
       throw new Error(
@@ -3158,11 +3266,32 @@ export function parseAndValidateAllocation(
     if (typeof rationale !== "string" || rationale.trim() === "") {
       throw new Error(`allocation has missing rationale for beat ${beatID}`);
     }
+    // Legacy tests/checkpoints may omit this additive field; strict live
+    // planner responses include all five numeric keys.
+    const rawCounts = candidate.containerCounts;
+    let containerCounts: NovelContainerCounts | undefined;
+    if (rawCounts && typeof rawCounts === "object" && !Array.isArray(rawCounts) &&
+      Object.keys(rawCounts).length === NOVEL_LEAF_CONTAINERS.length &&
+      NOVEL_LEAF_CONTAINERS.every((container) =>
+        Object.hasOwn(rawCounts, container) &&
+        Number.isInteger((rawCounts as Record<string, unknown>)[container]) &&
+        Number((rawCounts as Record<string, unknown>)[container]) >= 0 &&
+        Number((rawCounts as Record<string, unknown>)[container]) <= 20)) {
+      const counts = Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((container) =>
+        [container, Number((rawCounts as Record<string, number>)[container])])) as NovelContainerCounts;
+      if (NOVEL_LEAF_CONTAINERS.reduce((sum, container) => sum + counts[container], 0) === Number(minSections)) {
+        containerCounts = counts;
+      }
+    }
+    // A mistaken sum or incomplete mix is not a reason to fail a usable
+    // outline run. The budget fitter detects any missing/partial mix and
+    // conservatively falls back to the previous chapter-equivalent plan.
     seen.add(beatID);
     out.set(beatID, {
       minSections: Number(minSections),
       coverageMinimum: Number(minSections) > 0 ? 1 : 0,
       allocationMinimum: Number(minSections),
+      ...(containerCounts ? { containerCounts } : {}),
       rationale,
     });
   }
@@ -3179,11 +3308,15 @@ export function buildAllocationPrompt(
   req: OutlineFromRecipeRequest,
   obligations: RecipeObligation[] = [],
 ): { system: string; user: string } {
-  const maxBudgetedSections = maximumBudgetedNewSections(req);
+  const isNovel = requestedStoryMaterialFormat(req) === "novel";
+  const maxBudgetedSections = isNovel ? maximumContainerPlannedNewSections(req) : maximumBudgetedNewSections(req);
+  const containerBudgetInstructions = isNovel
+    ? `The upper limit for NEW sections is ${maxBudgetedSections} only if all are small scenes; actual capacity is determined by the mix. BEFORE deciding counts, budget the story's real section sizes. Return containerCounts on each beat: scene=1,300 midpoint tokens, developedScene=2,250, setPiece=3,500, sceneSequence=5,000, chapter=5,500. minSections MUST equal the sum of its five containerCounts. Total proposed token midpoints PLUS existing section midpoints, divided by 1.3, should approach 115,000 projected words and must never exceed 125,000. Do not treat a scene as a chapter. Include enough causally distinct story to reach the goal without padding or relabeling scenes as chapters. The 125,000-word cap is absolute.`
+    : "Allocate the number of format-appropriate sections needed for complete Story Arc coverage without the novel-only word or container budget.";
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 115,000 projected words while staying below the 125,000-word maximum. Use the midpoint projection of each supported container, including 5,500 tokens for a chapter, as the authoritative planning estimate. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat, and the projected contribution of existing sections. Distribute distinct, substantial chapter-scale units according to the narrative material each movement requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. The server budget for NEW sections in this request is at most ${maxBudgetedSections}; the sum of all minSections values must fit inside that budget. Treat 125,000 words as an absolute ceiling, not a normal target.
+This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 115,000 projected words while staying below the 125,000-word maximum. Use the midpoint projection of each supported container, including 5,500 tokens for a chapter, as the authoritative planning estimate. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat, and the projected contribution of existing sections. Distribute distinct, substantial chapter-scale units according to the narrative material each movement requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. ${containerBudgetInstructions}
 
 ## Recipe realization priority
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale.
@@ -3191,7 +3324,7 @@ Treat the supplied recipe as the governing creative brief. Required obligations 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
 
-Output exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Do not output any other root key.
+Output exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Do not output any other root key. ${isNovel ? "Provide all five containerCounts keys for every beat, including zeros." : "Do not return novel-only containerCounts."}
 
 Output JSON only. No commentary, no prose.`;
 
@@ -3217,10 +3350,32 @@ Output JSON only. No commentary, no prose.`;
     planningContext: planningView,
     existingSectionsByBeat,
     existingUnlinkedSections,
-    allocation: "For a fresh novel, return the complete first-pass allocation; with existing sections, return only the residual new allocation per beat.",
+    allocation: isNovel
+      ? "Choose containerCounts first; minSections equals their sum, and their actual midpoints should project about 115,000 words. Accepted existing work counts once."
+      : "For non-novels, return format-appropriate residual minSections per beat without novel containerCounts.",
+    ...(isNovel ? { containerMidpointTokens: Object.fromEntries(
+      NOVEL_LEAF_CONTAINERS.map((container) => [container, projectedExpectedTokens([{ container }])]),
+    ) } : {}),
     hint: req.hint ?? null,
   }, null, 2);
   return { system, user };
+}
+
+/** Non-novel allocations retain their existing three-field strict contract. */
+function allocationSchemaForFormat(req: OutlineFromRecipeRequest) {
+  if (requestedStoryMaterialFormat(req) === "novel") return ALLOCATION_SCHEMA;
+  const { containerCounts: _novelOnly, ...properties } = ALLOCATION_SCHEMA.properties.allocations.items.properties;
+  return {
+    ...ALLOCATION_SCHEMA,
+    properties: { allocations: {
+      ...ALLOCATION_SCHEMA.properties.allocations,
+      items: {
+        ...ALLOCATION_SCHEMA.properties.allocations.items,
+        properties,
+        required: ["beatIndex", "minSections", "rationale"],
+      },
+    } },
+  };
 }
 
 export async function planSectionAllocation(
@@ -3231,12 +3386,13 @@ export async function planSectionAllocation(
   options: { retryOnly?: boolean; deferRetry?: boolean } = {},
 ): Promise<Map<string, Allocation>> {
   const { system, user } = buildAllocationPrompt(req, obligations);
+  const allocationSchema = allocationSchemaForFormat(req);
   const responseFormat = {
     type: "json_schema",
     json_schema: {
       name: "outline_section_allocations",
       strict: true,
-      schema: ALLOCATION_SCHEMA,
+      schema: allocationSchema,
     },
   };
 
@@ -3258,7 +3414,7 @@ export async function planSectionAllocation(
           maxTokens: 2048,
           useJsonSchema: true,
           jsonSchemaName: "outline_section_allocations",
-          jsonSchema: ALLOCATION_SCHEMA,
+          jsonSchema: allocationSchema,
         }),
         creditCostCharged: 0,
         remainingCredits: 0,
@@ -6133,6 +6289,8 @@ export async function runSuggestionJob(
       stage: "planner_complete",
       plannerAllocationFirstPassCountsByBeat: allocationCountsByBeat,
       plannerAllocationValidatedCountsByBeat: allocationCountsByBeat,
+      plannerContainerCountsByBeat: Object.fromEntries(Array.from(allocation.entries())
+        .map(([beatID, plan]) => [beatID, plan.containerCounts ?? null])),
       recipeObligations,
     };
     const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial);
@@ -6175,7 +6333,14 @@ export async function runSuggestionJob(
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true), warnings: validated.warnings };
       // Structural replay is removed before any durable checkpoint or semantic
       // provider stage. Never surface duplicate first-pass sections.
-      diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions), structuralDedupedSections: deduped.removed };
+      const firstPassActualContainerCountsByBeat = Object.fromEntries(body.arcTemplate.beats.map((beat) => [
+        beat.id,
+        Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((container) => [
+          container, result.suggestions.filter((section) =>
+            section.storyArcBeatID === beat.id && section.container === container).length,
+        ])),
+      ]));
+      diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions), firstPassActualContainerCountsByBeat, structuralDedupedSections: deduped.removed };
       if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
         throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
       }

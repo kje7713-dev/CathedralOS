@@ -49,6 +49,7 @@ import {
   buildPrompt,
   assertDistinctOutlineTitles,
   buildSuggestionResponseSchema,
+  plannedNovelContainerSlots,
   buildObligationRepairPrompt,
   mergeObligationRepairOperations,
   buildObligationRepairResponseSchema,
@@ -446,6 +447,128 @@ Deno.test("novel allocation budget uses the same chapter midpoint as scale valid
   assertEquals(Math.round(scale.projectedWords), 118462);
   assertEquals(scale.meetsPreferredMinimum, true);
   assertEquals(scale.exceedsMaximum, false);
+});
+
+Deno.test("container-aware planner can allocate a mixed 120k-word first pass beyond 29 slots", () => {
+  const beats = [{ id: "beat-1" }, { id: "beat-2" }];
+  const counts = { scene: 0, developedScene: 6, setPiece: 5, sceneSequence: 4, chapter: 5 };
+  const parsed = parseAndValidateAllocation(JSON.stringify({
+    allocations: [
+      { beatIndex: 0, minSections: 20, containerCounts: counts, rationale: "opening and development" },
+      { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "turns and resolution" },
+    ],
+  }), beats);
+  const req = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  assertEquals(maximumBudgetedNewSections(req), 29, "legacy chapter-only safety budget remains available");
+  const fitted = fitAllocationToNovelBudget(parsed, req);
+  assertEquals(Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0), 40);
+  const plannedContainers = Array.from({ length: 2 }).flatMap(() =>
+    Object.entries(counts).flatMap(([container, count]) =>
+      Array.from({ length: count }, () => ({ container }))));
+  const scale = evaluateNovelScale(plannedContainers);
+  assertEquals(scale.meetsPreferredMinimum, true);
+  assertEquals(scale.exceedsMaximum, false);
+  assertEquals(Math.round(scale.projectedWords), 120769);
+  const schema: any = buildSuggestionResponseSchema(beats, fitted, [], "", "novel");
+  const beatSchema = schema.properties.beats.properties["beat-1"];
+  assertEquals(beatSchema.type, "object");
+  assertEquals(Object.keys(beatSchema.properties).length, 20);
+  assertEquals(beatSchema.required.length, 20);
+  assertOpenAIStrictSchema(schema);
+  const slots = plannedNovelContainerSlots(counts);
+  for (let index = 0; index < slots.length; index++) {
+    const key = `section_${String(index + 1).padStart(3, "0")}`;
+    assertEquals(beatSchema.properties[key].properties.container.enum, [slots[index]]);
+  }
+  assertEquals(slots.filter((type) => type === "scene").length, 0);
+  assertEquals(slots.filter((type) => type === "chapter").length, 5);
+  // This exact mix projects >115k without depending on expansion. No new provider call.
+  const typedResponse = { beats: Object.fromEntries(beats.map((beat, beatIndex) => [
+    beat.id, Object.fromEntries(slots.map((container, index) => [
+      `section_${String(index + 1).padStart(3, "0")}`,
+      { title: `Section ${beatIndex * 20 + index + 1}`, summary: "Distinct event.", container, pov: "thirdPersonLimited", terminalBeat: "Mara shuts the door." },
+    ])),
+  ])) };
+  const flattened = flattenSuggestionResponse(typedResponse, beats);
+  assertEquals(flattened.suggestions.length, 40);
+  assertEquals(evaluateNovelScale(flattened.suggestions).meetsPreferredMinimum, true);
+  assertEquals(evaluateNovelScale(flattened.suggestions).exceedsMaximum, false);
+  assertEquals(flattened.suggestions[20].storyArcBeatID, "beat-2");
+  const { system } = buildPrompt(req, fitted);
+  assertEquals(system.includes("planned containers: developedScene=6, setPiece=5, sceneSequence=4, chapter=5"), true);
+  assertEquals(buildAllocationPrompt(req).system.includes("containerCounts"), true);
+});
+
+Deno.test("novel planning provider receives strict typed budget and carries 40 section mix without scaling", async () => {
+  const beats = [{ id: "beat-1" }, { id: "beat-2" }];
+  const request = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  const counts = { scene: 0, developedScene: 6, setPiece: 5, sceneSequence: 4, chapter: 5 };
+  let providerCalls = 0;
+  const allocation = await planSectionAllocation(request, "unused", async (
+    system: string, user: string, _max: number, format: any, action: string,
+  ) => {
+    providerCalls++;
+    assertEquals(action, "outline-plan");
+    assertEquals(system.includes("Return containerCounts on each beat"), true);
+    assertEquals(user.includes("containerMidpointTokens"), true);
+    const schema = format.json_schema.schema;
+    const item = schema.properties.allocations.items;
+    assertEquals(item.required.includes("containerCounts"), true);
+    assertEquals(item.properties.containerCounts.required.length, 5);
+    return { content: JSON.stringify({ allocations: [
+      { beatIndex: 0, minSections: 20, containerCounts: counts, rationale: "opening" },
+      { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "resolution" },
+    ] }), creditCostCharged: 0, remainingCredits: 0 };
+  });
+  assertEquals(providerCalls, 1);
+  assertEquals(Array.from(allocation.values()).reduce((count, entry) => count + entry.minSections, 0), 40);
+  assertEquals(allocation.get("beat-1")?.containerCounts, counts);
+});
+
+Deno.test("non-novel allocation keeps its legacy strict planner schema and prompt", async () => {
+  let schema: any;
+  const req = { ...sparseRequest, requestedFormat: "shortStory" } as any;
+  const allocation = await planSectionAllocation(req, "unused", async (
+    system: string, _user: string, _tokens: number, responseFormat: any,
+  ) => {
+    assertEquals(system.includes("Return containerCounts on each beat"), false);
+    schema = responseFormat.json_schema.schema;
+    return { content: JSON.stringify({ allocations: [
+      { beatIndex: 0, minSections: 1, rationale: "opening" },
+      { beatIndex: 1, minSections: 1, rationale: "ending" },
+    ] }), creditCostCharged: 0, remainingCredits: 0 };
+  });
+  assertEquals("containerCounts" in schema.properties.allocations.items.properties, false);
+  assertEquals(schema.properties.allocations.items.required, ["beatIndex", "minSections", "rationale"]);
+  assertEquals(allocation.get("beat-1")?.minSections, 1);
+  assertEquals(allocation.get("beat-2")?.minSections, 1);
+});
+
+Deno.test("container-aware allocation safely falls back on inconsistent counts and oversize", () => {
+  const beats = [{ id: "beat-1" }, { id: "beat-2" }];
+  const counts = { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 20 };
+  const inconsistent = parseAndValidateAllocation(JSON.stringify({
+    allocations: [
+      { beatIndex: 0, minSections: 19, containerCounts: counts, rationale: "bad" },
+      { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "bad" },
+    ],
+  }), beats);
+  const safePlan = fitAllocationToNovelBudget(inconsistent, { ...sparseRequest, requestedFormat: "novel" } as any);
+  assertEquals(Array.from(safePlan.values()).every((a) => !a.containerCounts), true);
+  assertEquals(Array.from(safePlan.values()).reduce((sum, a) => sum + a.minSections, 0) <= 29, true);
+  const allocation = parseAndValidateAllocation(JSON.stringify({
+    allocations: [
+      { beatIndex: 0, minSections: 20, containerCounts: counts, rationale: "large" },
+      { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "large" },
+    ],
+  }), beats);
+  const req = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  const fitted = fitAllocationToNovelBudget(allocation, req);
+  assertEquals(Array.from(fitted.values()).reduce((n, a) => n + a.minSections, 0), 29);
+  assertEquals(Array.from(fitted.values()).every((a) => !a.containerCounts), true);
+  const legacySchema: any = buildSuggestionResponseSchema(beats, fitted, [], "", "novel");
+  assertEquals(legacySchema.properties.beats.properties["beat-1"].type, "array");
+  assertEquals(Array.from(fitted.values()).every((a) => a.rationale.includes("conservative sizing fallback")), true);
 });
 
 Deno.test("2% novel tolerance skips length-only expansion without weakening the hard cap", async () => {
@@ -1446,9 +1569,8 @@ Deno.test("novel outline handoff treats allocation as complete and projects mixe
   assertEquals(novelPrompt.includes("## Complete first-pass allocation"), true);
   assertEquals(novelPrompt.includes("not a minimum-only Story Arc coverage floor"), true);
   assertEquals(novelPrompt.includes("complete first-pass allocation: 15 sections"), true);
-  assertEquals(novelPrompt.includes("5,500 tokens"), true);
-  assertEquals(novelPrompt.includes("Their lower midpoints reduce the authoritative projected total"), true);
-  assertEquals(novelPrompt.includes("29 mixed containers"), true);
+  assertEquals(novelPrompt.includes("The allocator already priced each planned section at its actual midpoint"), true);
+  assertEquals(novelPrompt.includes("Routine book-length development belongs in the first pass"), true);
   assertEquals(novelPrompt.includes("## Use the minimum-only allocation"), false);
 
   // Production-shaped deterministic fixture: 29 allocated units, only eight
@@ -1499,8 +1621,6 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(outlinePrompt.includes("125,000-word hard cap"), true);
   assertEquals(outlinePrompt.includes("Fit the complete story package into the budget"), true);
   assertEquals(outlinePrompt.includes("Existing accepted sections already contribute to the complete projection"), true);
-  assertEquals(outlinePrompt.includes("Do not treat a shorter container as chapter-scale"), true);
-  assertEquals(outlinePrompt.includes("5,500-token chapter midpoint"), true);
   assertEquals(outlinePrompt.includes("do not drop story material"), true);
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
   assertEquals(outlinePrompt.includes("Recipe realization priority"), true);
