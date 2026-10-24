@@ -1185,8 +1185,8 @@ Deno.test("terminalBeat replaces UUID and END with the existing closing action",
     suggestions: [{ ...base, terminalBeat: "END", storyArcBeatID: "beat-2" }],
   }, beatIds).suggestions[0];
 
-  assertEquals(uuidResult.terminalBeat, base.dramaticEvent);
-  assertEquals(endResult.terminalBeat, base.dramaticEvent);
+  assertEquals(uuidResult.terminalBeat, base.terminalState);
+  assertEquals(endResult.terminalBeat, base.terminalState);
   assertEquals(uuidResult.storyArcBeatID, "beat-1");
   assertEquals(endResult.storyArcBeatID, "beat-2");
   assertEquals(uuidResult.entryState, base.entryState);

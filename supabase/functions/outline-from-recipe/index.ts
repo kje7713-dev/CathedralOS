@@ -3506,9 +3506,9 @@ export function normalizeTerminalBeat(
     beatIds.has(terminalBeat);
   if (!isStructural) return terminalBeat.slice(0, 1000);
   const fallback = [
-    suggestion.dramaticEvent,
-    suggestion.resultingChange,
     suggestion.terminalState,
+    suggestion.resultingChange,
+    suggestion.dramaticEvent,
     suggestion.summary,
   ].find((value): value is string => typeof value === "string" && value.trim().length > 0);
   return (fallback ?? terminalBeat).trim().slice(0, 1000);
