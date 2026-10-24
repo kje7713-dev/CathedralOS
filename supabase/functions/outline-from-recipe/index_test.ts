@@ -77,6 +77,7 @@ import {
   validateRequest,
   logicalSuggestionIdentity,
   validateSuggestions,
+  normalizeTerminalBeat,
   buildEnrichmentPrompt,
   countStoryMaterialItems,
   repairStoryMaterialFromRecipe,
@@ -1160,6 +1161,39 @@ Deno.test("existing beat coverage allows zero allocation and emits no duplicate"
     result.suggestions.some((s) => s.storyArcBeatID === "beat-1"),
     false,
   );
+});
+
+Deno.test("terminalBeat replaces UUID and END with the existing closing action", () => {
+  const beatIds = new Set(["beat-1", "beat-2"]);
+  const base = {
+    title: "Freezer Door",
+    summary: "Mara seals the freezer.",
+    container: "chapter",
+    pov: "thirdPersonLimited",
+    entryState: "The creature has entered the freezer.",
+    dramaticEvent: "Mara slams the freezer door and locks the ratcoon inside.",
+    resultingChange: "The freezer becomes a temporary containment point.",
+    terminalState: "The ratcoon scratches behind the sealed door.",
+    dramaticFunction: "escalation",
+    storyArcBeatID: "beat-1",
+    recipeRequirementIDs: [],
+  };
+  const uuidResult = validateSuggestions({
+    suggestions: [{ ...base, terminalBeat: "A77B4AFD-AEF0-40E9-983F-3CA5105E1DD6" }],
+  }, beatIds).suggestions[0];
+  const endResult = validateSuggestions({
+    suggestions: [{ ...base, terminalBeat: "END", storyArcBeatID: "beat-2" }],
+  }, beatIds).suggestions[0];
+
+  assertEquals(uuidResult.terminalBeat, base.dramaticEvent);
+  assertEquals(endResult.terminalBeat, base.dramaticEvent);
+  assertEquals(uuidResult.storyArcBeatID, "beat-1");
+  assertEquals(endResult.storyArcBeatID, "beat-2");
+  assertEquals(uuidResult.entryState, base.entryState);
+  assertEquals(uuidResult.dramaticEvent, base.dramaticEvent);
+  assertEquals(uuidResult.resultingChange, base.resultingChange);
+  assertEquals(uuidResult.terminalState, base.terminalState);
+  assertEquals(normalizeTerminalBeat({ ...base, terminalBeat: "The door clicks shut." }, beatIds), "The door clicks shut.");
 });
 
 Deno.test("zero allocation accepts an empty suggestion result", () => {
