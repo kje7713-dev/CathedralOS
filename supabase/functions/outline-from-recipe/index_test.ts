@@ -1514,9 +1514,9 @@ Deno.test("novel outline handoff treats allocation as complete and projects mixe
   assertEquals(novelPrompt.includes("## Complete first-pass allocation"), true);
   assertEquals(novelPrompt.includes("not a minimum-only Story Arc coverage floor"), true);
   assertEquals(novelPrompt.includes("complete first-pass allocation: 15 sections"), true);
-  assertEquals(novelPrompt.includes("5,500 tokens"), true);
-  assertEquals(novelPrompt.includes("Their lower midpoints reduce the authoritative projected total"), true);
-  assertEquals(novelPrompt.includes("29 mixed containers"), true);
+  assertEquals(novelPrompt.includes("Match the exact planned containerCounts"), true);
+  assertEquals(novelPrompt.includes("each planned container at its actual midpoint"), true);
+  assertEquals(novelPrompt.includes("routine book-length development belongs in this first pass"), true);
   assertEquals(novelPrompt.includes("## Use the minimum-only allocation"), false);
 
   // Production-shaped deterministic fixture: 29 allocated units, only eight
@@ -1567,8 +1567,8 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(outlinePrompt.includes("125,000-word hard cap"), true);
   assertEquals(outlinePrompt.includes("Fit the complete story package into the budget"), true);
   assertEquals(outlinePrompt.includes("Existing accepted sections already contribute to the complete projection"), true);
-  assertEquals(outlinePrompt.includes("Do not treat a shorter container as chapter-scale"), true);
-  assertEquals(outlinePrompt.includes("5,500-token chapter midpoint"), true);
+  assertEquals(outlinePrompt.includes("Match the exact planned containerCounts"), true);
+  assertEquals(outlinePrompt.includes("not just the total section count"), true);
   assertEquals(outlinePrompt.includes("do not drop story material"), true);
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
   assertEquals(outlinePrompt.includes("Recipe realization priority"), true);
