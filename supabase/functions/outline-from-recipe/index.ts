@@ -3270,23 +3270,22 @@ export function parseAndValidateAllocation(
     // planner responses include all five numeric keys.
     const rawCounts = candidate.containerCounts;
     let containerCounts: NovelContainerCounts | undefined;
-    if (rawCounts !== undefined) {
-      if (!rawCounts || typeof rawCounts !== "object" || Array.isArray(rawCounts) ||
-        Object.keys(rawCounts).length !== NOVEL_LEAF_CONTAINERS.length ||
-        NOVEL_LEAF_CONTAINERS.some((container) => !Object.hasOwn(rawCounts, container))) {
-        throw new Error(`invalid containerCounts for beat ${beatID}`);
-      }
-      const counts = rawCounts as Record<string, unknown>;
-      if (NOVEL_LEAF_CONTAINERS.some((container) => !Number.isInteger(counts[container]) ||
-        Number(counts[container]) < 0 || Number(counts[container]) > 20)) {
-        throw new Error(`invalid container count for beat ${beatID}`);
-      }
-      containerCounts = Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((container) =>
-        [container, Number(counts[container])])) as NovelContainerCounts;
-      if (NOVEL_LEAF_CONTAINERS.reduce((sum, container) => sum + containerCounts![container], 0) !== Number(minSections)) {
-        throw new Error(`containerCounts must sum to minSections for beat ${beatID}`);
+    if (rawCounts && typeof rawCounts === "object" && !Array.isArray(rawCounts) &&
+      Object.keys(rawCounts).length === NOVEL_LEAF_CONTAINERS.length &&
+      NOVEL_LEAF_CONTAINERS.every((container) =>
+        Object.hasOwn(rawCounts, container) &&
+        Number.isInteger((rawCounts as Record<string, unknown>)[container]) &&
+        Number((rawCounts as Record<string, unknown>)[container]) >= 0 &&
+        Number((rawCounts as Record<string, unknown>)[container]) <= 20)) {
+      const counts = Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((container) =>
+        [container, Number((rawCounts as Record<string, number>)[container])])) as NovelContainerCounts;
+      if (NOVEL_LEAF_CONTAINERS.reduce((sum, container) => sum + counts[container], 0) === Number(minSections)) {
+        containerCounts = counts;
       }
     }
+    // A mistaken sum or incomplete mix is not a reason to fail a usable
+    // outline run. The budget fitter detects any missing/partial mix and
+    // conservatively falls back to the previous chapter-equivalent plan.
     seen.add(beatID);
     out.set(beatID, {
       minSections: Number(minSections),
