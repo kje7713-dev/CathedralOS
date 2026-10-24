@@ -550,6 +550,26 @@ export function validateNovelLeafContainers(
   }
 }
 
+/** Interleave a beat's planned containers rather than grouping similar
+ * sizes together. Counts and slot names remain deterministic on replay. */
+export function plannedNovelContainerSlots(counts: NovelContainerCounts): Array<typeof NOVEL_LEAF_CONTAINERS[number]> {
+  const total = NOVEL_LEAF_CONTAINERS.reduce((sum, type) => sum + counts[type], 0);
+  const used = Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((type) => [type, 0])) as NovelContainerCounts;
+  const slots: Array<typeof NOVEL_LEAF_CONTAINERS[number]> = [];
+  for (let i = 0; i < total; i++) {
+    const choices = NOVEL_LEAF_CONTAINERS.filter((type) => used[type] < counts[type]);
+    const chosen = choices.reduce((best, type) =>
+      (i + 1) * counts[type] / total - used[type] >
+        (i + 1) * counts[best] / total - used[best] ? type : best);
+    slots.push(chosen);
+    used[chosen]++;
+  }
+  return slots;
+}
+function plannedNovelSlotKey(index: number): string {
+  return `section_${String(index + 1).padStart(3, "0")}`;
+}
+
 export function buildSuggestionResponseSchema(
   beats: Array<{ id: string; role?: string; label?: string; description?: string }>,
   allocation: Map<string, Allocation>,
@@ -597,24 +617,38 @@ export function buildSuggestionResponseSchema(
         ? [...sectionSchema.required, "arcObligationEvidence"]
         : sectionSchema.required,
     };
-    const plannedTypes = allocation.get(beat.id)?.containerCounts
-      ? NOVEL_LEAF_CONTAINERS.filter((type) => (allocation.get(beat.id)!.containerCounts?.[type] ?? 0) > 0)
-      : [];
-    if (requestedFormat === "novel" && plannedTypes.length > 0) {
-      beatSectionSchema.properties.container = { type: "string", enum: plannedTypes };
+    const planned = requestedFormat === "novel" ? allocation.get(beat.id)?.containerCounts : undefined;
+    if (planned) {
+      // A per-beat array can restrict the allowed types but CANNOT enforce
+      // their quantities. Fixed named slots give each section its own strict
+      // container enum, so first-pass size is priced BEFORE the provider call.
+      // The flattened app payload remains the same ordered Suggestion[].
+      const slots = plannedNovelContainerSlots(planned);
+      const slotProperties = Object.fromEntries(slots.map((container, index) => {
+        const key = plannedNovelSlotKey(index);
+        return [key, {
+          ...beatSectionSchema,
+          properties: {
+            ...beatSectionSchema.properties,
+            container: { type: "string", enum: [container] },
+          },
+        }];
+      }));
+      properties[beat.id] = {
+        type: "object", properties: slotProperties,
+        required: Object.keys(slotProperties),
+        additionalProperties: false,
+      };
+    } else {
+      // Legacy persisted allocations and non-novel formats use their original
+      // array schema without changing recovery, billing or acceptance.
+      properties[beat.id] = {
+        type: "array",
+        minItems: minimum,
+        maxItems: requestedFormat === "novel" ? minimum : MAX_PLANNED_SECTIONS,
+        items: beatSectionSchema,
+      };
     }
-    properties[beat.id] = {
-      type: "array",
-      // The first pass must realize the bounded allocation, not invent an
-      // unbounded number of full chapter sections. Optional scale expansion
-      // happens later through the budget-aware progressive expansion path.
-      minItems: minimum,
-      // Only novels use the allocation as an exact first-pass budget. Other
-      // formats have no novel expansion stage, so their allocation is a floor
-      // and must not silently cap the provider's format-appropriate coverage.
-      maxItems: requestedFormat === "novel" ? minimum : MAX_PLANNED_SECTIONS,
-      items: beatSectionSchema,
-    };
     required.push(beat.id);
   }
   return {
@@ -637,8 +671,18 @@ export function flattenSuggestionResponse(
   const suggestions: Suggestion[] = [];
   for (const beat of beats) {
     const rawSections = (beatObject as Record<string, unknown>)[beat.id];
-    if (!Array.isArray(rawSections)) throw new Error(`response missing beat ${beat.id}`);
-    for (const raw of rawSections) {
+    // New novel plans use named, container-typed slots. Legacy persisted
+    // checkpoints and all non-novel plans still return arrays.
+    const sections = Array.isArray(rawSections)
+      ? rawSections
+      : rawSections && typeof rawSections === "object"
+      ? Object.entries(rawSections as Record<string, unknown>)
+        .filter(([slot]) => /^section_\d{3}$/.test(slot))
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([, value]) => value)
+      : null;
+    if (!sections) throw new Error(`response missing beat ${beat.id}`);
+    for (const raw of sections) {
       if (!raw || typeof raw !== "object") throw new Error(`beat ${beat.id} contains an invalid section`);
       const { storyArcBeatID: _ignored, ...section } = raw as Partial<Suggestion>;
       suggestions.push({ ...(section as Omit<Suggestion, "storyArcBeatID">), storyArcBeatID: beat.id });
@@ -2774,13 +2818,13 @@ export function buildPrompt(
         ? `complete first-pass allocation: ${info.minSections} section${info.minSections === 1 ? "" : "s"}`
         : `minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"}`;
       const typePlan = isNovel && info.containerCounts
-        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}`
+        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; ordered slots: ${plannedNovelContainerSlots(info.containerCounts).map((type, index) => `${plannedNovelSlotKey(index)}=${type}`).join(", ")}`
         : "";
       return `- ${beat?.label ?? beatId}: ${sectionLabel}${typePlan} (${info.rationale})`;
     })
     .join("\n");
   const allocationDirective = isNovel
-    ? `## Complete first-pass allocation\n\nThe allocation above is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Match the exact planned containerCounts for each beat where supplied, not just the total section count. The allocator already priced each planned container at its actual midpoint, and routine book-length development belongs in this first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
+    ? `## Complete first-pass allocation\n\nThe allocation above is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Match the planned section container and narrative scale for each ordered named slot. When typed slots are present, return a JSON object of sections per beat keyed by those slot names; every slot has exactly one allowed container type. The allocator already priced each planned section at its actual midpoint. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
     : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
@@ -3005,16 +3049,22 @@ export function fitAllocationToNovelBudget(
 ): Map<string, Allocation> {
   const mixes = Array.from(allocation.values()).map((plan) => plan.containerCounts);
   if (mixes.some(Boolean)) {
-    if (mixes.some((counts) => !counts)) throw new Error("novel allocation must plan types for every beat");
     const proposedTokens = projectedPlannedContainerTokens(allocation) +
       projectedExpectedTokens(req.existingSections ?? []);
-    if (proposedTokens > NOVEL_MAX_PROJECTED_TOKENS) {
-      throw new Error(`planned novel exceeds ${NOVEL_MAX_WORDS} words with its container mix`);
+    const plannedCount = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
+    if (mixes.every(Boolean) &&
+        proposedTokens <= NOVEL_MAX_PROJECTED_TOKENS &&
+        plannedCount <= MAX_PLANNED_SECTIONS) {
+      return allocation;
     }
-    if (Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0) > MAX_PLANNED_SECTIONS) {
-      throw new Error("planned novel exceeds global section limit");
-    }
-    return allocation;
+    // Planning an overlarge/partial container mix must NOT introduce a new
+    // terminal failure. Fall back to the existing conservative chapter-budget
+    // normalization, and preserve the optional expansion path for real deficits.
+    const legacy = new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
+      const { containerCounts: _ignored, ...rest } = plan;
+      return [beatID, { ...rest, rationale: `${plan.rationale} (conservative sizing fallback)` }] as [string, Allocation];
+    }));
+    return fitAllocationToNovelBudget(legacy, req);
   }
   const budget = maximumBudgetedNewSections(req);
   const total = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
