@@ -478,6 +478,32 @@ Deno.test("container-aware planner can allocate a mixed 120k-word first pass bey
   assertEquals(buildAllocationPrompt(req).system.includes("containerCounts"), true);
 });
 
+Deno.test("novel planning provider receives strict typed budget and carries 40 section mix without scaling", async () => {
+  const beats = [{ id: "beat-1" }, { id: "beat-2" }];
+  const request = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  const counts = { scene: 0, developedScene: 6, setPiece: 5, sceneSequence: 4, chapter: 5 };
+  let providerCalls = 0;
+  const allocation = await planSectionAllocation(request, "unused", async (
+    system: string, user: string, _max: number, format: any, action: string,
+  ) => {
+    providerCalls++;
+    assertEquals(action, "outline-plan");
+    assertEquals(system.includes("Return containerCounts on each beat"), true);
+    assertEquals(user.includes("containerMidpointTokens"), true);
+    const schema = format.json_schema.schema;
+    const item = schema.properties.allocations.items;
+    assertEquals(item.required.includes("containerCounts"), true);
+    assertEquals(item.properties.containerCounts.required.length, 5);
+    return { content: JSON.stringify({ allocations: [
+      { beatIndex: 0, minSections: 20, containerCounts: counts, rationale: "opening" },
+      { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "resolution" },
+    ] }), creditCostCharged: 0, remainingCredits: 0 };
+  });
+  assertEquals(providerCalls, 1);
+  assertEquals(Array.from(allocation.values()).reduce((count, entry) => count + entry.minSections, 0), 40);
+  assertEquals(allocation.get("beat-1")?.containerCounts, counts);
+});
+
 Deno.test("non-novel allocation keeps its legacy strict planner schema and prompt", async () => {
   let schema: any;
   const req = { ...sparseRequest, requestedFormat: "shortStory" } as any;
@@ -1514,7 +1540,6 @@ Deno.test("novel outline handoff treats allocation as complete and projects mixe
   assertEquals(novelPrompt.includes("## Complete first-pass allocation"), true);
   assertEquals(novelPrompt.includes("not a minimum-only Story Arc coverage floor"), true);
   assertEquals(novelPrompt.includes("complete first-pass allocation: 15 sections"), true);
-  assertEquals(novelPrompt.includes("Match the exact planned containerCounts"), true);
   assertEquals(novelPrompt.includes("each planned container at its actual midpoint"), true);
   assertEquals(novelPrompt.includes("routine book-length development belongs in this first pass"), true);
   assertEquals(novelPrompt.includes("## Use the minimum-only allocation"), false);
@@ -1567,8 +1592,6 @@ Deno.test("novel planning exposes container semantics and projected-size expansi
   assertEquals(outlinePrompt.includes("125,000-word hard cap"), true);
   assertEquals(outlinePrompt.includes("Fit the complete story package into the budget"), true);
   assertEquals(outlinePrompt.includes("Existing accepted sections already contribute to the complete projection"), true);
-  assertEquals(outlinePrompt.includes("Match the exact planned containerCounts"), true);
-  assertEquals(outlinePrompt.includes("not just the total section count"), true);
   assertEquals(outlinePrompt.includes("do not drop story material"), true);
   assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
   assertEquals(outlinePrompt.includes("Recipe realization priority"), true);
