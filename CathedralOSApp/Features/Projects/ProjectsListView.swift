@@ -60,6 +60,7 @@ struct ProjectsListView: View {
                 .stroke(CathedralTheme.Colors.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+        .padding(.bottom, CathedralTheme.Spacing.sm)
     }
 
     // MARK: - Dedupe

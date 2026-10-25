@@ -3,13 +3,8 @@ import SwiftData
 
 // MARK: - Export mode for Recipe Card
 
-private enum RecipeCardViewMode: String, CaseIterable {
-    case prompt = "Prompt"
-    case json   = "JSON"
-}
-
-/// In-project recipe card. Passive display of a PromptPack: header, what-it-uses
-/// metadata, prompt preview, and outputs from this pack. Generation lives at the
+/// In-project recipe card. Passive display of a PromptPack: header, recipe
+/// metadata, and outputs from this pack. Generation lives at the
 /// project level in the Compile tab — see `ProjectDetailView.compileGenerateCTA`
 /// in `feat/ios/compile-tab-coherent` for context.
 struct RecipeCard: View {
@@ -24,13 +19,9 @@ struct RecipeCard: View {
     var showOutputs: Bool = true
 
     // Display state only — generation state moved up to ProjectDetailView.
-    @State private var viewMode = RecipeCardViewMode.prompt
     @State private var showSharePrompt = false
     @State private var showShareJSON = false
-    @State private var copiedPrompt = false
-    @State private var copiedJSON = false
     @State private var isElementsExpanded = true
-    @State private var isPromptPreviewExpanded = false
 
     init(
         project: StoryProject,
@@ -58,14 +49,6 @@ struct RecipeCard: View {
         PromptPackJSONAssembler.jsonString(payload: exportPayload)
     }
 
-    private var activeText: String {
-        viewMode == .prompt ? promptText : jsonText
-    }
-
-    private var contentFont: Font {
-        viewMode == .json ? CathedralTheme.Typography.mono(12) : CathedralTheme.Typography.body(14)
-    }
-
     // MARK: Body
 
     var body: some View {
@@ -77,8 +60,6 @@ struct RecipeCard: View {
             if isSparse {
                 sparsePackNotice
             }
-
-            promptJSONSection
 
             if showOutputs {
                 outputsSection
@@ -235,6 +216,9 @@ struct RecipeCard: View {
             if let bias = pack.instructionBias, !bias.isEmpty {
                 elementRow(label: "Instruction bias", value: bias)
             }
+            if !pack.storyNonNegotiables.isEmpty {
+                elementRow(label: "Non-negotiables", value: pack.storyNonNegotiables.joined(separator: " • "))
+            }
         }
     }
 
@@ -278,75 +262,6 @@ struct RecipeCard: View {
                 .stroke(CathedralTheme.Colors.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
-    }
-
-    // MARK: Prompt / JSON section
-
-    private var promptJSONSection: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-            Picker("View", selection: $viewMode) {
-                ForEach(RecipeCardViewMode.allCases, id: \.self) { mode in
-                    Text(mode.rawValue).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            Text(activeText)
-                .font(contentFont)
-                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-                .lineLimit(isPromptPreviewExpanded ? nil : 8)
-                .padding(CathedralTheme.Spacing.base)
-                .background(CathedralTheme.Colors.background)
-                .overlay(
-                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                        .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
-
-            HStack {
-                Button {
-                    isPromptPreviewExpanded.toggle()
-                } label: {
-                    Text(isPromptPreviewExpanded ? "Collapse" : "Show full")
-                        .font(CathedralTheme.Typography.label(11, weight: .regular))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                Spacer()
-                Button {
-                    copyActive()
-                } label: {
-                    Label(activeCopyLabel, systemImage: "doc.on.doc")
-                        .font(CathedralTheme.Typography.label(11, weight: .regular))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            }
-        }
-    }
-
-    private var activeCopyLabel: String {
-        switch viewMode {
-        case .prompt:
-            return copiedPrompt ? "Prompt copied" : "Copy prompt"
-        case .json:
-            return copiedJSON ? "JSON copied" : "Copy JSON"
-        }
-    }
-
-    private func copyActive() {
-        switch viewMode {
-        case .prompt:
-            UIPasteboard.general.string = promptText
-            copiedPrompt = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copiedPrompt = false }
-        case .json:
-            UIPasteboard.general.string = jsonText
-            copiedJSON = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copiedJSON = false }
-        }
     }
 
     // MARK: Outputs from this recipe
