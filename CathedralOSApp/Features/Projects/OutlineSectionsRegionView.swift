@@ -1026,7 +1026,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Outline Sections")
                     .font(CathedralTheme.Typography.headline(20, weight: .semibold))
@@ -1034,90 +1034,96 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 Button {
                     showingDeleteAllConfirm = true
                 } label: {
-                    Label("Delete All", systemImage: "trash")
+                    Image(systemName: "trash")
                         .font(CathedralTheme.Typography.body(13))
                         .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 }
+                .accessibilityLabel("Delete All Sections")
                 .disabled(sectionsOrder.isEmpty)
-                if recoverableSuggestions != nil {
-                    Button {
-                        openRecoverableSuggestions()
-                    } label: {
-                        Label("Resume Suggestions", systemImage: "arrow.uturn.backward.circle")
-                            .font(CathedralTheme.Typography.body(13, weight: .semibold))
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    if recoverableSuggestions != nil {
+                        Button {
+                            openRecoverableSuggestions()
+                        } label: {
+                            Label("Resume Suggestions", systemImage: "arrow.uturn.backward.circle")
+                                .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                        }
                     }
-                }
-                // PR 1: the recipe chooser is visible whenever the project has
-                // multiple recipes, not only when pending. Pending -> show
-                // "Choose Recipe"; selected -> show the current recipe name so
-                // the user can switch via the same menu.
-                if let recipes = recipeSelection?.recipes, recipes.count >= 2 {
-                    let chosenName = recipes
-                        .first(where: { $0.id == recipeSelection?.selectedRecipe?.id })?
-                        .name
-                    Menu {
-                        ForEach(recipes, id: \.id) { pack in
-                            Button(pack.name) {
-                                recipeSelectionService.setSelectedRecipe(id: pack.id, for: project)
-                                recipeSelection = recipeSelectionService.resolve(for: project)
-                                // Clear any stale recoverable suggestions from a prior recipe.
-                                if let prior = recoverableSuggestions,
-                                   prior.sourceRecipe.promptPack.id != pack.id {
-                                    recoverableSuggestions = nil
+                    // PR 1: the recipe chooser is visible whenever the project has
+                    // multiple recipes, not only when pending. Pending -> show
+                    // "Choose Recipe"; selected -> show the current recipe name so
+                    // the user can switch via the same menu.
+                    if let recipes = recipeSelection?.recipes, recipes.count >= 2 {
+                        let chosenName = recipes
+                            .first(where: { $0.id == recipeSelection?.selectedRecipe?.id })?
+                            .name
+                        Menu {
+                            ForEach(recipes, id: \.id) { pack in
+                                Button(pack.name) {
+                                    recipeSelectionService.setSelectedRecipe(id: pack.id, for: project)
+                                    recipeSelection = recipeSelectionService.resolve(for: project)
+                                    // Clear any stale recoverable suggestions from a prior recipe.
+                                    if let prior = recoverableSuggestions,
+                                       prior.sourceRecipe.promptPack.id != pack.id {
+                                        recoverableSuggestions = nil
+                                    }
                                 }
                             }
+                        } label: {
+                            if let chosenName {
+                                Label("Recipe: \(chosenName)", systemImage: "book.closed")
+                                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                                    .lineLimit(1)
+                            } else {
+                                Label("Choose Recipe", systemImage: "book.closed")
+                                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                            }
                         }
-                    } label: {
-                        if let chosenName {
-                            Label("Recipe: \(chosenName)", systemImage: "book.closed")
+                    }
+                    if outlineHasSections {
+                        Button {
+                            runAllSections()
+                        } label: {
+                            Label("Run Sections", systemImage: "play.fill")
                                 .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                                .lineLimit(1)
-                        } else {
-                            Label("Choose Recipe", systemImage: "book.closed")
+                        }
+                        // A completed or failed banner is historical, not an active run.
+                        .disabled((projectRunStatus?.blocksNewGeneration ?? false) || isGenerationStarting)
+                    }
+                    let connectionUnavailable = durabilityCoordinator.activeSuggestionRun(for: project.id)?.status == "connection_unavailable"
+                    if connectionUnavailable {
+                        Button {
+                            suggestionsLoading = true
+                            suggestionsError = nil
+                            suggestionsNotice = nil
+                            durabilityCoordinator.reconnectSuggestionRun(
+                                projectID: project.id,
+                                lineageID: project.stableLineageID
+                            )
+                        } label: {
+                            Label("Reconnect to Existing Run", systemImage: "arrow.clockwise")
                                 .font(CathedralTheme.Typography.body(13, weight: .semibold))
                         }
-                    }
-                }
-                if outlineHasSections {
-                    Button {
-                        runAllSections()
-                    } label: {
-                        Label("Run Sections", systemImage: "play.fill")
+                    } else {
+                        Button {
+                            if suggestionRunActive {
+                                suggestionsNotice = "Your outline suggestions are still running or reconnecting. The original job and selected model are preserved. No new generation was started."
+                            } else {
+                                prepareOutlinePlanning()
+                            }
+                        } label: {
+                            Label(
+                                suggestionRunActive ? "Suggestions Running" : "Suggest Sections",
+                                systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
+                            )
                             .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                    }
-                    // A completed or failed banner is historical, not an active run.
-                    .disabled((projectRunStatus?.blocksNewGeneration ?? false) || isGenerationStarting)
-                }
-                let connectionUnavailable = durabilityCoordinator.activeSuggestionRun(for: project.id)?.status == "connection_unavailable"
-                if connectionUnavailable {
-                    Button {
-                        suggestionsLoading = true
-                        suggestionsError = nil
-                        suggestionsNotice = nil
-                        durabilityCoordinator.reconnectSuggestionRun(
-                            projectID: project.id,
-                            lineageID: project.stableLineageID
-                        )
-                    } label: {
-                        Label("Reconnect to Existing Run", systemImage: "arrow.clockwise")
-                            .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                    }
-                } else {
-                    Button {
-                        if suggestionRunActive {
-                            suggestionsNotice = "Your outline suggestions are still running or reconnecting. The original job and selected model are preserved. No new generation was started."
-                        } else {
-                            prepareOutlinePlanning()
                         }
-                    } label: {
-                        Label(
-                            suggestionRunActive ? "Suggestions Running" : "Suggest Sections",
-                            systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
-                        )
-                        .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                        .disabled(!suggestionsReady)
                     }
-                    .disabled(!suggestionsReady)
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
             if let run = durabilityCoordinator.activeSuggestionRun(for: project.id) {
                 switch run.status {
