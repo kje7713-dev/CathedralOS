@@ -382,7 +382,8 @@ platform :ios do
       attributes: {
         description: read_metadata.call("description.txt"),
         keywords: read_metadata.call("keywords.txt"),
-        promotionalText: read_metadata.call("promotional_text.txt")
+        promotionalText: read_metadata.call("promotional_text.txt"),
+        supportUrl: read_metadata.call("support_url.txt")
       }
     )
 
@@ -395,10 +396,12 @@ platform :ios do
     info_localization.update(
       attributes: {
         name: read_metadata.call("name.txt"),
-        subtitle: read_metadata.call("subtitle.txt")
+        subtitle: read_metadata.call("subtitle.txt"),
+        privacyPolicyUrl: read_metadata.call("privacy_policy_url.txt")
       }
     )
-    UI.success("App Store text metadata applied without changing screenshots, binary, or submission state.")
+    UI.message("Terms URL is checked in at metadata/en-US/terms_url.txt; App Store Connect custom EULA remains a manual field.")
+    UI.success("App Store text, privacy, and support metadata applied without changing screenshots, binary, or submission state.")
   end
 
   # ---------------------------------------------------------------------------
