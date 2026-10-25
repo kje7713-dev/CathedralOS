@@ -663,35 +663,50 @@ private struct RecoveryModeView: View {
 }
 
 private struct SyncSplashView: View {
+    private let cinematicCharcoal = Color(red: 0.055, green: 0.052, blue: 0.048)
+    private let warmCharcoal = Color(red: 0.13, green: 0.115, blue: 0.095)
+    private let softWarmGray = Color(red: 0.91, green: 0.88, blue: 0.81)
+    private let amberHighlight = Color(red: 0.88, green: 0.54, blue: 0.22)
+
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                // Keep the active app visible behind the sync state instead of
-                // replacing it with a full-screen cropped landscape image.
-                Color.black.opacity(0.28)
-                    .ignoresSafeArea()
+                // A tonal, full-screen backdrop keeps the splash cinematic
+                // without turning the experience into a generic system sheet.
+                LinearGradient(
+                    colors: [cinematicCharcoal, warmCharcoal, Color(red: 0.075, green: 0.085, blue: 0.09)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+
+                // A restrained amber lift echoes the sunset artwork without
+                // competing with its warm highlights.
+                RadialGradient(
+                    colors: [amberHighlight.opacity(0.16), .clear],
+                    center: .bottomTrailing,
+                    startRadius: 8,
+                    endRadius: max(proxy.size.width, proxy.size.height) * 0.9
+                )
+                .ignoresSafeArea()
 
                 VStack(spacing: CathedralTheme.Spacing.sm) {
                     Image("StoryDonkeySplash")
                         .resizable()
                         .scaledToFit()
-                        // Give the image a real bounded canvas. `maxWidth` and
-                        // `maxHeight` alone still allow the flexible image to
-                        // claim the available screen in this overlay.
                         .frame(
                             width: min(proxy.size.width - 64, 320),
                             height: min(proxy.size.height * 0.42, 360)
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .shadow(color: .black.opacity(0.48), radius: 24, y: 12)
 
                     ProgressView()
-                        .tint(.white)
+                        .tint(amberHighlight)
                     Text("Syncing your stories…")
                         .font(CathedralTheme.Typography.body(16, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(softWarmGray)
                 }
-                .padding(CathedralTheme.Spacing.lg)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .padding(CathedralTheme.Spacing.lg)
             }
         }
