@@ -133,6 +133,7 @@ struct ProjectDetailView: View {
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
+    @AppStorage("cathedralos.showNovelWorkspace") private var showNovelWorkspace = true
 
     private var storyEditorMode: StoryEditorMode {
         StoryEditorMode(rawValue: storyEditorModeRaw) ?? .story
@@ -227,7 +228,7 @@ struct ProjectDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !advancedMode {
+            if !advancedMode && showNovelWorkspace {
                 novelWorkflowSection
             }
             modePicker
@@ -310,6 +311,15 @@ struct ProjectDetailView: View {
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    showNovelWorkspace.toggle()
+                } label: {
+                    Image(systemName: showNovelWorkspace ? "eye" : "eye.slash")
+                        .foregroundStyle(showNovelWorkspace ? CathedralTheme.Colors.accent : CathedralTheme.Colors.secondaryText)
+                }
+                .accessibilityLabel(showNovelWorkspace ? "Hide Novel Workspace" : "Show Novel Workspace")
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     advancedMode.toggle()

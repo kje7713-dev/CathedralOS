@@ -62,22 +62,6 @@ struct ProjectsListView: View {
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
     }
 
-    private var projectsPill: some View {
-        Text("Projects")
-            .font(CathedralTheme.Typography.body(15, weight: .semibold))
-            .foregroundStyle(CathedralTheme.Colors.primaryText)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, CathedralTheme.Spacing.sm)
-            .background(CathedralTheme.Colors.surface)
-            .clipShape(Capsule())
-            .padding(.horizontal, CathedralTheme.Spacing.xs)
-            .padding(.vertical, 3)
-            .background(CathedralTheme.Colors.border.opacity(0.45))
-            .clipShape(Capsule())
-            .padding(.horizontal, CathedralTheme.Spacing.base)
-            .padding(.top, CathedralTheme.Spacing.sm)
-    }
-
     // MARK: - Dedupe
 
     /// Projects with duplicate `id` values hidden: shows only the first occurrence from the
@@ -92,7 +76,6 @@ struct ProjectsListView: View {
             List {
                 Section {
                     welcomeSummary
-                    projectsPill
                 }
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
