@@ -1823,7 +1823,9 @@ final class DataDurabilityCoordinator: ObservableObject {
         do {
             let authoritative = try await runOutlineService.status(runID: cached.run_id)
             let authoritativeOutlineMatches = authoritative.outline_id.map { $0.caseInsensitiveCompare(outlineID.uuidString) == .orderedSame } == true
-            let authoritativeSectionsMatch = (authoritative.sections_total ?? 0) == currentSectionCount
+            let authoritativeSectionsMatch = authoritative.hasCompatibleSectionCount(
+                with: currentSectionCount
+            )
             guard authoritativeOutlineMatches && authoritativeSectionsMatch else {
                 clearPersistedRunStatus(for: projectLineageID)
                 if activeRunProjectLineageID == projectLineageID { activeRunStatus = nil }
