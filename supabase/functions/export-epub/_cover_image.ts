@@ -142,7 +142,7 @@ export function buildCoverPrompt(
 ): string {
   const brief = outline.storyBrief ?? {};
   return [
-    `Create cohesive literary cover art for the book "${bookTitle}", representing the whole story, not one isolated scene. The title is context only; do not render readable text, letters, logos, or words.`,
+    `Create a striking, original, publication-ready book cover image for "${bookTitle}", representing the whole story rather than one isolated scene. First distill the story into one unforgettable visual metaphor and make that metaphor the unmistakable focal point. The image should feel like a confident art director created a distinctive commercial cover, not like an illustration of a paragraph. The title is context only; do not render readable text, letters, logos, or words.`,
     brief.projectSummary ? `Premise: ${brief.projectSummary}` : "",
     brief.recipe ? `Recipe and story arc: ${brief.recipe}` : "",
     brief.setting ? `Setting and atmosphere: ${brief.setting}` : "",
@@ -150,6 +150,7 @@ export function buildCoverPrompt(
     brief.conflict ? `Central conflict and stakes: ${brief.conflict}` : "",
     brief.themes ? `Themes and motifs: ${brief.themes}` : "",
     brief.endingTexture ? `Emotional aftertaste: ${brief.endingTexture}` : "",
-    "Use the recurring visual idea that best unifies these signals; no spoilers.",
+    "Use a bold composition, strong silhouette, clear visual hierarchy, deliberate color palette, high contrast, and genre-appropriate texture and lighting. Favor a memorable image that suggests the story instead of depicting a literal scene; use one central visual hook and no spoilers.",
+    "Avoid watercolor, pastel wash, soft storybook illustration, generic fantasy art, stock imagery, literal scene depiction, visual clutter, collages, and forgettable decorative backgrounds.",
   ].filter(Boolean).join(" ");
 }
