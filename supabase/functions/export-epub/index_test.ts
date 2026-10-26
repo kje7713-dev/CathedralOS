@@ -132,13 +132,16 @@ Deno.test("AI cover prompt uses story-wide recipe signals", () => {
     },
   };
   const prompt = buildCoverPrompt(outline, "Tartaria Magna");
-  assertStringIncludes(prompt, 'book "Tartaria Magna"');
+  assertStringIncludes(prompt, '"Tartaria Magna"');
   assertEquals(prompt.includes('book "Outline"'), false);
   assertStringIncludes(prompt, "drowned city");
   assertStringIncludes(prompt, "saltwater gothic");
   assertStringIncludes(prompt, "Mara");
   assertStringIncludes(prompt, "memory versus truth");
   assertStringIncludes(prompt, "whole story");
+  assertStringIncludes(prompt, "unforgettable visual metaphor");
+  assertStringIncludes(prompt, "distinctive commercial cover");
+  assertStringIncludes(prompt, "Avoid watercolor, pastel wash");
   assertStringIncludes(
     prompt,
     "do not render readable text, letters, logos, or words",
