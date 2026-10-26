@@ -37,6 +37,7 @@ struct PaywallView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var entitlementState: StoreKitEntitlementState = .freeTier()
+    @State private var backendCreditState: BackendCreditState?
     @State private var products: [Product] = []
     @State private var isWorking = false
     @State private var isRestoring = false
@@ -56,7 +57,7 @@ struct PaywallView: View {
                 restoreSection
                 legalSection
             }
-            .navigationTitle("Upgrade")
+            .navigationTitle("Credits & Purchases")
             .navigationBarTitleDisplayMode(.large)
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .toolbar {
@@ -69,6 +70,7 @@ struct PaywallView: View {
                 await entitlementService.loadProducts()
                 products = entitlementService.availableProducts
                 entitlementState = entitlementService.entitlementState
+                try? await refreshBackendCreditState()
             }
         }
     }
@@ -91,9 +93,9 @@ struct PaywallView: View {
             HStack {
                 Text("Credits available")
                 Spacer()
-                Text("\(entitlementState.totalAvailableCredits)")
+                Text(formattedCredits(backendCreditState?.availableCredits ?? entitlementState.totalAvailableCredits))
                     .foregroundStyle(
-                        entitlementState.totalAvailableCredits > 0
+                        (backendCreditState?.availableCredits ?? entitlementState.totalAvailableCredits) > 0
                             ? CathedralTheme.Colors.primaryText
                             : CathedralTheme.Colors.destructive
                     )
@@ -101,7 +103,7 @@ struct PaywallView: View {
             HStack {
                 Text("Monthly allowance")
                 Spacer()
-                Text("\(entitlementState.monthlyCreditAllowance)")
+                Text(formattedCredits(backendCreditState?.monthlyCreditAllowance ?? entitlementState.monthlyCreditAllowance))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
             if let expiresAt = entitlementState.entitlementExpiresAt {
@@ -349,8 +351,15 @@ struct PaywallView: View {
 
     private func refreshBackendCreditState() async throws {
         let state = try await creditStateService.fetchCreditState()
+        backendCreditState = state
         usageLimitService.applyBackendCreditState(state)
         entitlementState = entitlementService.entitlementState
+    }
+
+    private func formattedCredits(_ value: Double) -> String {
+        value.truncatingRemainder(dividingBy: 1) == 0
+            ? String(Int(value))
+            : String(format: "%.2f", value)
     }
 
     private func shortDate(_ date: Date) -> String {
