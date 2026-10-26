@@ -832,6 +832,30 @@ final class RunAllBillingLifecycleTests: XCTestCase {
         XCTAssertEqual(status.userFacingError, "Generation failed. Please try again.")
     }
 
+    func testFromHereRunStatusSurvivesReconcileAgainstFullOutline() {
+        let status = RunOutlineStatus(
+            run_id: "run-suffix",
+            status: "running",
+            outline_id: "outline-1",
+            start_parent_section_id: "section-22",
+            sections_done: 15,
+            sections_total: 22,
+            sections_failed: 0,
+            current_section: nil,
+            sections: nil,
+            error: nil,
+            credits_reserved: 88,
+            credits_actual: 28.27,
+            created_at: nil,
+            updated_at: nil,
+            completed_at: nil
+        )
+
+        XCTAssertTrue(status.hasCompatibleSectionCount(with: 43))
+        XCTAssertTrue(status.hasCompatibleSectionCount(with: 22))
+        XCTAssertFalse(status.hasCompatibleSectionCount(with: 21))
+    }
+
     func testTerminalRunDoesNotBlockAnotherRunSectionsKickoff() {
         // The coordinator retains terminal run status for the banner after
         // relaunch; only nonterminal statuses may disable Run Sections.

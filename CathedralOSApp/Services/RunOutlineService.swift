@@ -138,6 +138,16 @@ extension RunOutlineStatus {
         return "Generation failed. Please try again."
     }
 
+    /// Run All may intentionally cover only a suffix of the outline (From Here).
+    /// Its tracked section count is therefore allowed to be smaller than the
+    /// full outline count when validating a persisted status after relaunch.
+    func hasCompatibleSectionCount(with currentSectionCount: Int) -> Bool {
+        guard currentSectionCount > 0, let trackedCount = sections_total, trackedCount > 0 else {
+            return false
+        }
+        return trackedCount <= currentSectionCount
+    }
+
     /// A persisted terminal banner must not disable starting a subsequent run.
     /// Unknown or nonterminal statuses remain protected from duplicate kickoff.
     var blocksNewGeneration: Bool {
