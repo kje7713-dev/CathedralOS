@@ -160,12 +160,20 @@ export function detectProviderBillingUnavailable(
   const message = typeof parsed?.error?.message === "string"
     ? parsed.error.message
     : undefined;
-  if (code === "credit_balance_exhausted") {
+  if (code === "credit_balance_exhausted" ||
+      code === "organization_spend_limit_exceeded" ||
+      code === "insufficient_quota") {
     return { code, message, status };
   }
   // Plain-text fallback: substring match against the raw errText.
-  if (typeof errText === "string" && errText.includes("credit_balance_exhausted")) {
-    return { code: "credit_balance_exhausted", message, status };
+  if (typeof errText === "string") {
+    const textCodes = [
+      "credit_balance_exhausted",
+      "organization_spend_limit_exceeded",
+      "insufficient_quota",
+    ];
+    const textCode = textCodes.find((candidate) => errText.includes(candidate));
+    if (textCode) return { code: textCode, message, status };
   }
   return null;
 }

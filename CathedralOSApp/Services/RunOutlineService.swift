@@ -115,6 +115,29 @@ extension RunOutlineStatus {
         status == "paused_insufficient_credits"
     }
 
+    /// Persisted run errors are server-controlled text and must never be
+    /// rendered directly in the customer UI. Provider responses can contain
+    /// quota, API-key, organization, email, and raw upstream diagnostics.
+    var userFacingError: String? {
+        guard let raw = error?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return nil }
+        let normalized = raw.lowercased()
+        let providerDetails = [
+            "sectionembeddingerror", "openai", "insufficient_quota",
+            "organization_spend_limit_exceeded", "credit_balance_exhausted",
+            "api key", "upstream", "provider", "429"
+        ]
+        if providerDetails.contains(where: normalized.contains) ||
+            normalized.contains("temporarily unavailable") {
+            return "Temporarily unavailable — try again later."
+        }
+        if normalized.contains("insufficient credit") ||
+            normalized.contains("more credits") {
+            return "More credits are needed to continue."
+        }
+        return "Generation failed. Please try again."
+    }
+
     /// A persisted terminal banner must not disable starting a subsequent run.
     /// Unknown or nonterminal statuses remain protected from duplicate kickoff.
     var blocksNewGeneration: Bool {
