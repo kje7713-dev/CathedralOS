@@ -2337,7 +2337,7 @@ struct ActiveRunBanner: View {
         if isPaused { return "\(done) of \(total) sections · \(spend) credits used · More credits needed" }
         if isCompleted { return "\(done) sections generated · Final cost: \(spend) credits" }
         if isFailed {
-            let message = status.error ?? "Generation failed"
+            let message = status.userFacingError ?? "Generation failed. Please try again."
             return spend == "0.00" ? message : "\(message) · \(spend) credits used"
         }
         if isRunning, let pollingError { return pollingError }

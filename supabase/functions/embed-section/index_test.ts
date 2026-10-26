@@ -14,7 +14,10 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { embedSectionErrorResponse } from "./index.ts";
-import { SectionEmbeddingError } from "../_shared/section-embedding.ts";
+import {
+  SectionEmbeddingError,
+  detectProviderBillingUnavailable,
+} from "../_shared/section-embedding.ts";
 
 // Stub EdgeRuntime globally — the alert path calls EdgeRuntime.waitUntil
 // but in test context the global is undefined. The try/catch in the
@@ -23,6 +26,20 @@ import { SectionEmbeddingError } from "../_shared/section-embedding.ts";
 // shim; we just don't import that shim in deno test runs.)
 // deno-lint-ignore no-explicit-any
 (globalThis as any).EdgeRuntime = { waitUntil: (_p: Promise<unknown>) => {} };
+
+Deno.test("section embedding: provider billing sibling codes are classified as unavailable", () => {
+  for (const code of [
+    "credit_balance_exhausted",
+    "organization_spend_limit_exceeded",
+    "insufficient_quota",
+  ]) {
+    const detected = detectProviderBillingUnavailable(
+      429,
+      JSON.stringify({ error: { code, message: "internal provider detail" } }),
+    );
+    assertEquals(detected?.code, code);
+  }
+});
 
 Deno.test("embed-section: SectionEmbeddingError(code=provider_billing_unavailable) → HTTP 503 + exact friendly message", async () => {
   const err = new SectionEmbeddingError(

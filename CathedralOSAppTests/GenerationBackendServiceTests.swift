@@ -786,6 +786,52 @@ final class RunAllBillingLifecycleTests: XCTestCase {
         XCTAssertFalse(status.isPausedForInsufficientCredits)
     }
 
+    func testFailedRunHidesProviderDiagnosticsFromCustomerUI() {
+        let status = RunOutlineStatus(
+            run_id: "run-provider",
+            status: "failed",
+            outline_id: nil,
+            start_parent_section_id: nil,
+            sections_done: 26,
+            sections_total: 30,
+            sections_failed: 1,
+            current_section: nil,
+            sections: nil,
+            error: "section 27 failed: SectionEmbeddingError: OpenAI embed 429: organization_spend_limit_exceeded; contact support@example.com",
+            credits_reserved: 100,
+            credits_actual: 31.49,
+            created_at: nil,
+            updated_at: nil,
+            completed_at: nil
+        )
+
+        XCTAssertEqual(status.userFacingError, "Temporarily unavailable — try again later.")
+        XCTAssertFalse(status.userFacingError?.contains("OpenAI") == true)
+        XCTAssertFalse(status.userFacingError?.contains("@") == true)
+    }
+
+    func testFailedRunUsesGenericSafeMessageForUnknownDiagnostics() {
+        let status = RunOutlineStatus(
+            run_id: "run-unknown",
+            status: "failed",
+            outline_id: nil,
+            start_parent_section_id: nil,
+            sections_done: 0,
+            sections_total: 1,
+            sections_failed: 1,
+            current_section: nil,
+            sections: nil,
+            error: "internal worker stack trace",
+            credits_reserved: nil,
+            credits_actual: 0,
+            created_at: nil,
+            updated_at: nil,
+            completed_at: nil
+        )
+
+        XCTAssertEqual(status.userFacingError, "Generation failed. Please try again.")
+    }
+
     func testTerminalRunDoesNotBlockAnotherRunSectionsKickoff() {
         // The coordinator retains terminal run status for the banner after
         // relaunch; only nonterminal statuses may disable Run Sections.
