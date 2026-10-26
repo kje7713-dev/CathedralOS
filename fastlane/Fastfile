@@ -405,6 +405,52 @@ platform :ios do
   end
 
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # appstore_screenshots — upload checked-in iPhone 6.1-inch screenshots.
+  # Refuses to append to an existing non-empty set to avoid duplicate listing
+  # images; delete/replace remains an explicit App Store Connect action.
+  # ---------------------------------------------------------------------------
+  lane :appstore_screenshots do
+    preflight_checks(%w[ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY APP_IDENTIFIER])
+
+    app_store_connect_api_key(
+      key_id:                ENV["ASC_KEY_ID"],
+      issuer_id:             ENV["ASC_ISSUER_ID"],
+      key_content:           ENV["ASC_API_KEY"],
+      is_key_content_base64: true,
+      in_house:              false
+    )
+
+    app = Spaceship::ConnectAPI::App.find(ENV["APP_IDENTIFIER"])
+    UI.user_error!("App Store Connect app not found for #{ENV['APP_IDENTIFIER']}") unless app
+    version = app.get_edit_app_store_version || app.get_latest_app_store_version
+    UI.user_error!("No App Store version exists yet for #{app.name}") unless version
+    localization = version.get_app_store_version_localizations.find { |item| item.locale == "en-US" } ||
+      version.get_app_store_version_localizations.find { |item| item.locale.to_s.start_with?("en") }
+    UI.user_error!("No English App Store localization found") unless localization
+
+    screenshot_dir = File.expand_path("screenshots/en-US/iphone_61", __dir__)
+    paths = Dir[File.join(screenshot_dir, "*.{png,jpg,jpeg}")].sort
+    UI.user_error!("No screenshots found in #{screenshot_dir}") if paths.empty?
+
+    display_type = Spaceship::ConnectAPI::AppScreenshotSet::DisplayType::APP_IPHONE_61
+    screenshot_set = localization.get_app_screenshot_sets.find do |set|
+      set.screenshot_display_type == display_type
+    end
+    if screenshot_set && screenshot_set.app_screenshots.to_a.any?
+      UI.user_error!("#{display_type} already has screenshots; refusing to append duplicates")
+    end
+    screenshot_set ||= localization.create_app_screenshot_set(
+      attributes: { screenshotDisplayType: display_type }
+    )
+
+    paths.each_with_index do |path, index|
+      UI.message("Uploading #{File.basename(path)} (#{index + 1}/#{paths.length}) …")
+      screenshot_set.upload_screenshot(path: path, wait_for_processing: true, position: index)
+    end
+    UI.success("Uploaded #{paths.length} iPhone 6.1-inch screenshots to App Store Connect.")
+  end
+
   # appstore_audit — read current App Store metadata and compare it with the
   # checked-in English metadata. This lane never writes to Apple.
   # ---------------------------------------------------------------------------

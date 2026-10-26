@@ -12,6 +12,7 @@ on:
           - audit
           - preview
           - apply
+          - screenshots
 
 permissions:
   contents: read
@@ -50,5 +51,6 @@ jobs:
             audit) bundle exec fastlane ios appstore_audit ;;
             preview) APPLY=false bundle exec fastlane ios appstore_metadata ;;
             apply) APPLY=true bundle exec fastlane ios appstore_metadata ;;
+            screenshots) bundle exec fastlane ios appstore_screenshots ;;
             *) echo "Unknown mode: $MODE"; exit 1 ;;
           esac
