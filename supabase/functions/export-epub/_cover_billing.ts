@@ -12,9 +12,9 @@ import {
   type PricingSnapshot,
 } from "../generate-story/_generation_models.ts";
 
-// gpt-image-1 charges image output as specialized image tokens. These are the
-// documented token counts for the current cover request (1024x1536/high).
-export const AI_COVER_MODEL = "gpt-image-1";
+// gpt-image-1.5 charges image output as specialized image tokens. These are
+// the documented token counts for the current cover request (1024x1536/high).
+export const AI_COVER_MODEL = "gpt-image-1.5";
 export const AI_COVER_SIZE = "1024x1536";
 export const AI_COVER_QUALITY = "high";
 export const AI_COVER_IMAGE_OUTPUT_TOKENS = 6240;
