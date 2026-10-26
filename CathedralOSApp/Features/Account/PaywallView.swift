@@ -82,7 +82,7 @@ struct PaywallView: View {
             HStack {
                 Text("Plan")
                 Spacer()
-                Text(entitlementState.plan.displayName)
+                Text(planDisplayName)
                     .foregroundStyle(
                         entitlementState.isPro
                             ? CathedralTheme.Colors.accent
@@ -354,6 +354,12 @@ struct PaywallView: View {
         backendCreditState = state
         usageLimitService.applyBackendCreditState(state)
         entitlementState = entitlementService.entitlementState
+    }
+
+    private var planDisplayName: String {
+        guard !entitlementState.isPro else { return entitlementState.plan.displayName }
+        let purchased = backendCreditState?.purchasedCreditBalance ?? entitlementState.purchasedCreditBalance
+        return purchased > 0 ? "Free plan · Purchased credits" : "Free plan"
     }
 
     private func formattedCredits(_ value: Double) -> String {
