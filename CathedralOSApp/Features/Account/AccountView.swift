@@ -62,6 +62,7 @@ struct AccountView: View {
 
     // MARK: Entitlement state
     @State private var entitlementState: StoreKitEntitlementState = .freeTier()
+    @State private var backendCreditState: BackendCreditState?
     @State private var isRestoring = false
     @State private var restoreError: String?
     @State private var restoreSuccess: String?
@@ -99,8 +100,9 @@ struct AccountView: View {
                     creditStateService: creditStateService
                 )
                 .onDisappear {
-                    // Refresh entitlement state after paywall is dismissed.
+                    // Refresh subscription projection and backend-owned consumable balance.
                     entitlementState = entitlementService.entitlementState
+                    Task { _ = await refreshBackendCreditState() }
                 }
             }
             .alert("Delete your StoryDonkey account?", isPresented: $showDeleteAccountConfirmation) {
@@ -229,7 +231,7 @@ struct AccountView: View {
     // MARK: - Subscription section
 
     private var subscriptionSection: some View {
-        Section("Subscription") {
+        Section("Credits & Purchases") {
             VStack(alignment: .leading, spacing: 8) {
 
                 // Plan row
@@ -245,6 +247,14 @@ struct AccountView: View {
                         .fontWeight(entitlementState.isPro ? .semibold : .regular)
                 }
 
+                // Backend-authoritative credit balance, including consumable packs.
+                HStack {
+                    Text("Credits available")
+                    Spacer()
+                    Text(formattedCredits(backendCreditState?.availableCredits ?? entitlementState.totalAvailableCredits))
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                }
+
                 // Subscription expiry (Pro only)
                 if let expiresAt = entitlementState.entitlementExpiresAt {
                     HStack {
@@ -255,15 +265,12 @@ struct AccountView: View {
                     }
                 }
 
-                // Upgrade button (shown when not Pro)
-                if !entitlementState.isPro {
-                    Button {
-                        showPaywall = true
-                    } label: {
-                        Label("Upgrade to Pro", systemImage: "sparkles")
-                    }
-                    .disabled(isWorking || isRestoring)
+                Button {
+                    showPaywall = true
+                } label: {
+                    Label("Buy Credits", systemImage: "plus.circle")
                 }
+                .disabled(isWorking || isRestoring)
 
                 // Restore purchases
                 Button {
@@ -302,6 +309,12 @@ struct AccountView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: date)
+    }
+
+    private func formattedCredits(_ value: Double) -> String {
+        value.truncatingRemainder(dividingBy: 1) == 0
+            ? String(Int(value))
+            : String(format: "%.2f", value)
     }
 
     private var blockedCreatorsSection: some View {
@@ -534,6 +547,7 @@ struct AccountView: View {
         guard authService.authState.isSignedIn else { return false }
         do {
             let state = try await creditStateService.fetchCreditState()
+            backendCreditState = state
             usageLimitService.applyBackendCreditState(state)
             return true
         } catch {
