@@ -238,7 +238,7 @@ struct AccountView: View {
                 HStack {
                     Text("Plan")
                     Spacer()
-                    Text(entitlementState.plan.displayName)
+                    Text(planDisplayName)
                         .foregroundStyle(
                             entitlementState.isPro
                                 ? CathedralTheme.Colors.accent
@@ -309,6 +309,12 @@ struct AccountView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: date)
+    }
+
+    private var planDisplayName: String {
+        guard !entitlementState.isPro else { return entitlementState.plan.displayName }
+        let purchased = backendCreditState?.purchasedCreditBalance ?? entitlementState.purchasedCreditBalance
+        return purchased > 0 ? "Free plan · Purchased credits" : "Free plan"
     }
 
     private func formattedCredits(_ value: Double) -> String {
