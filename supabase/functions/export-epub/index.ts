@@ -38,6 +38,7 @@ import {
   buildCoverPrompt,
   type CoverResult,
   generateOrFetchCover,
+  publicExportFailureMessage,
 } from "./_cover_image.ts";
 import {
   AiCoverInsufficientCreditsError,
@@ -472,7 +473,7 @@ async function processJob(
       await updateJobStatus(supabaseAdmin, jobId, {
         status: "failed_validation",
         completed_at: new Date().toISOString(),
-        error_message: String(err),
+        error_message: publicExportFailureMessage(err),
       });
       return;
     }

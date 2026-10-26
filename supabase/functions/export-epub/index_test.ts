@@ -30,7 +30,10 @@ import { writeEpub } from "./_epub_writer.ts";
 import { deriveBookParts, type StoryArcInfo } from "./_parts.ts";
 import JSZip from "https://esm.sh/jszip@3.10.1";
 import { assembleMetadata, type ExportRequest } from "./_metadata.ts";
-import { buildCoverPrompt } from "./_cover_image.ts";
+import {
+  buildCoverPrompt,
+  publicExportFailureMessage,
+} from "./_cover_image.ts";
 import { splitParagraphs } from "./_paragraphs.ts";
 import {
   stub,
@@ -423,6 +426,19 @@ Deno.test("validateEpub: timeout throws ValidatorFailureError(timeout), NOT vali
 // ---------------------------------------------------------------------------
 // Test: validator client — server outage distinguished from EPUB invalidity
 // ---------------------------------------------------------------------------
+
+Deno.test("publicExportFailureMessage: provider image details are redacted", () => {
+  const message = publicExportFailureMessage(
+    new Error(
+      'OpenAI image generation failed (gpt-image-1): 400 {"code":"invalid_value","message":"internal"}',
+    ),
+  );
+  assertEquals(
+    message,
+    "AI cover generation is temporarily unavailable. Try again later or choose an uploaded cover.",
+  );
+  assertEquals(message.includes("gpt-image"), false);
+});
 
 Deno.test("validateEpub: 503 server error throws ValidatorFailureError(server_error)", async () => {
   const fetchStub = stub(

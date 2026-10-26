@@ -21,6 +21,18 @@ export interface CoverResult {
   billing?: AiCoverBilling;
 }
 
+export function publicExportFailureMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const normalized = raw.toLowerCase();
+  if (normalized.includes("image generation") ||
+      normalized.includes("gpt-image") ||
+      normalized.includes("image_generation_user_error") ||
+      normalized.includes("invalid_value")) {
+    return "AI cover generation is temporarily unavailable. Try again later or choose an uploaded cover.";
+  }
+  return "Export failed. Please try again.";
+}
+
 export async function generateOrFetchCover(
   client: SupabaseClient,
   req: ExportRequest,
@@ -66,7 +78,7 @@ async function generateCoverWithDallE(
 
   const prompt = buildCoverPrompt(outline, bookTitle);
 
-  const model = Deno.env.get("OPENAI_IMAGE_MODEL") ?? "gpt-image-1";
+  const model = Deno.env.get("OPENAI_IMAGE_MODEL") ?? "gpt-image-1.5";
 
   const response = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
