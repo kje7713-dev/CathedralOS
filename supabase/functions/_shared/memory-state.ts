@@ -1,10 +1,85 @@
 // Canonical semantic fold used by both generate-story and run-outline.
 // It deliberately treats IDs as authoritative and falls back to semantic keys
 // only for legacy rows that predate server-owned lifecycle IDs.
+export type ProjectStateRelevance = {
+  query?: string | null;
+};
+
+const RELEVANCE_STOP_WORDS = new Set([
+  "about",
+  "after",
+  "already",
+  "among",
+  "because",
+  "before",
+  "being",
+  "could",
+  "current",
+  "discovering",
+  "during",
+  "from",
+  "into",
+  "must",
+  "only",
+  "that",
+  "their",
+  "there",
+  "these",
+  "they",
+  "this",
+  "through",
+  "under",
+  "what",
+  "when",
+  "where",
+  "which",
+  "while",
+  "with",
+]);
+
+function relevanceTokens(value: unknown): string[] {
+  return String(value ?? "")
+    .toLocaleLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 4 && !RELEVANCE_STOP_WORDS.has(token));
+}
+
+function relevantRecord(
+  record: Record<string, unknown>,
+  queryTokens: Set<string>,
+  forcedNames: Set<string>,
+): boolean {
+  const characterName = String(record.character_name ?? "").toLocaleLowerCase();
+  if (characterName && forcedNames.has(characterName)) return true;
+  const reference = String(record.reference ?? "").toLocaleLowerCase();
+  const searchable = relevanceTokens([
+    record.character_name,
+    record.thread_name,
+    record.reference,
+    record.fact,
+    record.description,
+    record.location,
+    record.possessions,
+    record.goals,
+    record.knowledge_delta,
+    record.relationship_delta,
+    record.injuries,
+    record.emotional_stance,
+    record.status,
+    record.type,
+  ].join(" "));
+  const matches = searchable.filter((token) => queryTokens.has(token));
+  if (reference && matches.some((token) => reference.includes(token))) {
+    return true;
+  }
+  return new Set(matches).size >= 2;
+}
+
 export function formatCanonicalProjectState(
   scenes: Array<Record<string, unknown>>,
   previousScene?: Record<string, unknown>,
   maxChars = 50_000,
+  relevance?: ProjectStateRelevance,
 ): string {
   const characters = new Map<string, Record<string, unknown>>();
   const threads = new Map<string, Record<string, unknown>>();
@@ -113,11 +188,54 @@ export function formatCanonicalProjectState(
     (item) => !isStableIdentityFact(item),
   );
 
-  if (stableIdentityFacts.length) {
+  // The database remains the complete canon ledger. Generation receives a
+  // deterministic scene-specific projection when a query is supplied. Hard
+  // facts are selected by their stable references/entities, not by an LLM.
+  let selectedCharacters = Array.from(characters.values());
+  let selectedThreads = Array.from(threads.values()).filter((item) =>
+    item.status !== "resolved"
+  );
+  let selectedIdentityFacts = stableIdentityFacts;
+  let selectedFacts = remainingFacts;
+  let selectedLoops = Array.from(loops.values());
+  if (relevance?.query) {
+    const queryTokens = new Set(relevanceTokens(relevance.query));
+    const forcedNames = new Set(
+      (Array.isArray(previousScene?.character_deltas)
+        ? previousScene.character_deltas
+        : [])
+        .filter((item) => item && typeof item === "object")
+        .map((item) =>
+          String((item as Record<string, unknown>).character_name ?? "")
+            .toLocaleLowerCase()
+        )
+        .filter(Boolean),
+    );
+    selectedCharacters = selectedCharacters.filter((item) =>
+      relevantRecord(item, queryTokens, forcedNames)
+    );
+    const selectedNames = new Set(
+      selectedCharacters.map((item) =>
+        String(item.character_name ?? "").toLocaleLowerCase()
+      ),
+    );
+    const relatedQueryTokens = new Set(queryTokens);
+    for (const name of selectedNames) {
+      for (const token of relevanceTokens(name)) relatedQueryTokens.add(token);
+    }
+    const selectRelated = (item: Record<string, unknown>) =>
+      relevantRecord(item, relatedQueryTokens, selectedNames);
+    selectedThreads = selectedThreads.filter(selectRelated);
+    selectedIdentityFacts = stableIdentityFacts.filter(selectRelated);
+    selectedFacts = remainingFacts.filter(selectRelated);
+    selectedLoops = selectedLoops.filter(selectRelated);
+  }
+
+  if (selectedIdentityFacts.length) {
     lines.push(
       "## Stable Identity Facts",
       "",
-      ...stableIdentityFacts.map((item) =>
+      ...selectedIdentityFacts.map((item) =>
         `- ${String(item.reference ?? "no-reference")}: ${
           String(item.fact ?? "")
         }`
@@ -127,18 +245,32 @@ export function formatCanonicalProjectState(
   }
 
   lines.push("## Cumulative Story State", "");
-  if (characters.size) {
-    lines.push(
-      "Characters:",
-      ...Array.from(characters.values()).map((item) =>
-        `- **${item.character_name}**: ${JSON.stringify(item)}`
-      ),
-      "",
-    );
+  if (selectedCharacters.length) {
+    const selectedCharacterLines = selectedCharacters.map((item) => {
+      if (!relevance?.query) {
+        return `- **${item.character_name}**: ${JSON.stringify(item)}`;
+      }
+      const compact = Object.fromEntries(
+        [
+          "character_name",
+          "location",
+          "knowledge_delta",
+          "possessions",
+          "goals",
+          "injuries",
+          "relationship_delta",
+          "emotional_stance",
+        ].filter((field) =>
+          item[field] !== null && item[field] !== undefined &&
+          item[field] !== ""
+        )
+          .map((field) => [field, item[field]]),
+      );
+      return `- **${item.character_name}**: ${JSON.stringify(compact)}`;
+    });
+    lines.push("Characters:", ...selectedCharacterLines, "");
   }
-  const activeThreads = Array.from(threads.values()).filter((item) =>
-    item.status !== "resolved"
-  );
+  const activeThreads = selectedThreads;
   if (activeThreads.length) {
     lines.push(
       "Plot threads:",
@@ -150,10 +282,10 @@ export function formatCanonicalProjectState(
       "",
     );
   }
-  if (remainingFacts.length) {
+  if (selectedFacts.length) {
     lines.push(
       "Continuity Facts:",
-      ...remainingFacts.map((item) =>
+      ...selectedFacts.map((item) =>
         `- ${String(item.reference ?? "no-reference")}: ${
           String(item.fact ?? "")
         }`
@@ -161,10 +293,10 @@ export function formatCanonicalProjectState(
       "",
     );
   }
-  if (loops.size) {
+  if (selectedLoops.length) {
     lines.push(
       "Open loops:",
-      ...Array.from(loops.values()).map((item) =>
+      ...selectedLoops.map((item) =>
         `- [${item.type ?? "unknown"}] (${item.reference ?? "no-reference"}) ${
           item.description ?? ""
         }`

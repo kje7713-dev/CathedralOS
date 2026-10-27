@@ -1141,7 +1141,9 @@ async function fetchProjectStateContext(
     // Narrative chronology is the outline's canonical order, never row timestamps.
     const { data: current, error: currentError } = await adminClient
       .from("outline_sections")
-      .select("id, outline_id, position")
+      .select(
+        "id, outline_id, position, title, summary, entry_state, dramatic_event, resulting_change, terminal_state",
+      )
       .eq("id", excludeSectionId ?? "")
       .maybeSingle();
     if (currentError || !current) return "";
@@ -1193,9 +1195,18 @@ async function fetchProjectStateContext(
       );
     if (!priorScenes.length) return "";
 
+    const relevanceQuery = [
+      current.title,
+      current.summary,
+      current.entry_state,
+      current.dramatic_event,
+      current.resulting_change,
+      current.terminal_state,
+    ].filter(Boolean).join("\n");
     return aggregateProjectStateForGeneration(
       priorScenes,
       priorScenes[priorScenes.length - 1],
+      relevanceQuery,
     );
   } catch (error) {
     console.error(`[generate-story] fetchProjectStateContext failed: ${error}`);
@@ -1206,8 +1217,14 @@ async function fetchProjectStateContext(
 function aggregateProjectStateForGeneration(
   scenes: Array<Record<string, unknown>>,
   previousScene: Record<string, unknown>,
+  relevanceQuery?: string,
 ): string {
-  return formatCanonicalProjectState(scenes, previousScene);
+  return formatCanonicalProjectState(
+    scenes,
+    previousScene,
+    45_000,
+    { query: relevanceQuery },
+  );
 }
 
 // ---- fetchRecentRawText --------------------------------------------------
