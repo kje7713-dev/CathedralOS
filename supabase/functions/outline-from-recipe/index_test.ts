@@ -1128,7 +1128,7 @@ Deno.test("global buildPrompt requires continuity review while allowing valid of
   assertStringIncludes(system, "Each section must begin from a state that plausibly follows the previous section's terminal state");
   assertStringIncludes(system, "Apply the same continuity expectations across Story Arc boundaries");
   assertStringIncludes(system, "Legitimate offscreen travel, elapsed time, flashbacks, parallel action");
-  assertStringIncludes(system, "placing an archive siege before an evacuation");
+  assertStringIncludes(system, "if a character must participate in an event at one location but has already departed for another");
 });
 
 Deno.test("global buildPrompt communicates whole-outline dramatic comparison and resulting-change priority", () => {
