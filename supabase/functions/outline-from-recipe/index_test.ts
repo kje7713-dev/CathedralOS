@@ -113,6 +113,7 @@ import {
   intimacyRequirement,
   intimacyPlanningDirective,
   semanticVerificationInput,
+  reviewAndRepairOutlineContinuity,
   removeDuplicateOutlineSections,
   verifyStoryArcSemantics,
   SELECTED_INTIMACY_LEVEL_OBLIGATION,
@@ -1120,6 +1121,29 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation."), true);
   assertEquals(system.includes("Whenever practical, relationship and character-arc turns should cause or complicate plot events rather than occurring as isolated character-development scenes."), true);
   assertEquals(system.includes("Favor specific, memorable events and evocative section titles over functional briefing, regrouping, mapping, or explanatory scenes."), true);
+});
+
+Deno.test("global buildPrompt requires continuity review while allowing valid offscreen transitions", () => {
+  const { system } = buildPrompt(sparseRequest as any, new Map());
+  assertStringIncludes(system, "Continuity review before finalizing");
+  assertStringIncludes(system, "allowing plausible offscreen travel");
+  assertStringIncludes(system, "Repair only genuine contradictions");
+  assertStringIncludes(system, "terminalState of each section is the state handed to the next section");
+});
+
+Deno.test("continuity review repairs only indexed sections and preserves canonical beat and recipe IDs", async () => {
+  const original = semanticSection("beat-1", "The Shelter Door", "Marek reaches the shelter.", "escalation");
+  (original as any).recipeRequirementIDs = ["requirement-1"];
+  const repaired = { ...original, title: "The Lower Archive Gate", dramaticEvent: "Marek reaches the lower archive after the journey from the shelter.", summary: "Marek reaches the lower archive after the journey from the shelter.", entryState: "Marek has left the shelter and travels toward the archive.", resultingChange: "Marek arrives at the archive with the ledger.", terminalState: "The archive gate is under siege." };
+  const result = await reviewAndRepairOutlineContinuity(
+    [original as any, { ...semanticSection("beat-1", "The Siege", "The archive gate comes under attack.", "escalation"), recipeRequirementIDs: ["requirement-2"] }],
+    sparseRequest.arcTemplate as any,
+    (async () => ({ content: JSON.stringify({ replacements: [{ sectionIndex: 1, reason: "the prior section establishes the journey and arrival", section: repaired }] }), creditCostCharged: 1, remainingCredits: 0 })) as any,
+  );
+  assertEquals(result.repaired.length, 1);
+  assertEquals(result.suggestions[1].storyArcBeatID, "beat-1");
+  assertEquals(result.suggestions[1].recipeRequirementIDs, ["requirement-2"]);
+  assertEquals(result.suggestions[1].title, "The Lower Archive Gate");
 });
 
 Deno.test("global buildPrompt communicates whole-outline dramatic comparison and resulting-change priority", () => {
