@@ -88,6 +88,7 @@ import {
 import {
   computeMaxChargeCredits,
   estimateTokensFromText,
+  MAX_BILLABLE_INPUT_TOKENS,
   type GenerationModelStore,
   getEnabledModelByProviderModel,
   normalizedModelId,
@@ -1141,7 +1142,9 @@ async function fetchProjectStateContext(
     // Narrative chronology is the outline's canonical order, never row timestamps.
     const { data: current, error: currentError } = await adminClient
       .from("outline_sections")
-      .select("id, outline_id, position")
+      .select(
+        "id, outline_id, position, title, summary, entry_state, dramatic_event, resulting_change, terminal_state",
+      )
       .eq("id", excludeSectionId ?? "")
       .maybeSingle();
     if (currentError || !current) return "";
@@ -1193,9 +1196,18 @@ async function fetchProjectStateContext(
       );
     if (!priorScenes.length) return "";
 
+    const relevanceQuery = [
+      current.title,
+      current.summary,
+      current.entry_state,
+      current.dramatic_event,
+      current.resulting_change,
+      current.terminal_state,
+    ].filter(Boolean).join("\n");
     return aggregateProjectStateForGeneration(
       priorScenes,
       priorScenes[priorScenes.length - 1],
+      relevanceQuery,
     );
   } catch (error) {
     console.error(`[generate-story] fetchProjectStateContext failed: ${error}`);
@@ -1206,8 +1218,27 @@ async function fetchProjectStateContext(
 function aggregateProjectStateForGeneration(
   scenes: Array<Record<string, unknown>>,
   previousScene: Record<string, unknown>,
+  relevanceQuery?: string,
 ): string {
-  return formatCanonicalProjectState(scenes, previousScene);
+  const measurement = {
+    rawChars: 0,
+    renderedChars: 0,
+    maxChars: 0,
+    truncated: false,
+  };
+  const state = formatCanonicalProjectState(
+    scenes,
+    previousScene,
+    null,
+    { query: relevanceQuery },
+    measurement,
+  );
+  console.info(
+    `[generate-story] project state size raw=${measurement.rawChars} ` +
+      `rendered=${measurement.renderedChars} max=${measurement.maxChars ?? "none"} ` +
+      `truncated=${measurement.truncated}`,
+  );
+  return state;
 }
 
 // ---- fetchRecentRawText --------------------------------------------------
@@ -3362,6 +3393,15 @@ async function handler(
   const effectiveStableBlocks = stableBlocks;
   const stablePrompt = effectiveStableBlocks.join("\n").trim();
   const volatilePrompt = volatileBlocks.join("\n").trim();
+  const completePromptChars = stablePrompt.length + volatilePrompt.length;
+  const estimatedCompletePromptTokens = estimateTokensFromText(stablePrompt) +
+    estimateTokensFromText(volatilePrompt);
+  console.info(
+    `[generate-story] complete prompt size model=${selectedModel.provider_model} ` +
+      `chars=${completePromptChars} estimatedInputTokens=${estimatedCompletePromptTokens} ` +
+      `applicationInputLimit=${MAX_BILLABLE_INPUT_TOKENS} ` +
+      `maxOutputTokens=${maxCompletionTokens}`,
+  );
   // PR-372: SHA-256 of the serialized stable prefix. Diagnostics only —
   // persisted to generation_usage_events.stable_prefix_hash.
   const stablePrefixHash = await sha256Hex(stablePrompt);
