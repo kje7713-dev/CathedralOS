@@ -1122,6 +1122,15 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Favor specific, memorable events and evocative section titles over functional briefing, regrouping, mapping, or explanatory scenes."), true);
 });
 
+Deno.test("global buildPrompt requires continuity review while allowing valid offscreen transitions", () => {
+  const { system } = buildPrompt(sparseRequest as any, new Map());
+  assertStringIncludes(system, "evaluate the complete proposed sequence in canonical order");
+  assertStringIncludes(system, "Each section must begin from a state that plausibly follows the previous section's terminal state");
+  assertStringIncludes(system, "Apply the same continuity expectations across Story Arc boundaries");
+  assertStringIncludes(system, "Legitimate offscreen travel, elapsed time, flashbacks, parallel action");
+  assertStringIncludes(system, "if a character must participate in an event at one location but has already departed for another");
+});
+
 Deno.test("global buildPrompt communicates whole-outline dramatic comparison and resulting-change priority", () => {
   const { system } = buildPrompt(sparseRequest as any, new Map());
   // Whole-outline dramatic comparison guidance.
