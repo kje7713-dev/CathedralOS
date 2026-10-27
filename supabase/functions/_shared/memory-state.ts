@@ -8,7 +8,7 @@ export type ProjectStateRelevance = {
 export type ProjectStateMeasurement = {
   rawChars: number;
   renderedChars: number;
-  maxChars: number;
+  maxChars: number | null;
   truncated: boolean;
 };
 
@@ -85,7 +85,7 @@ function relevantRecord(
 export function formatCanonicalProjectState(
   scenes: Array<Record<string, unknown>>,
   previousScene?: Record<string, unknown>,
-  maxChars = 50_000,
+  maxChars: number | null = 50_000,
   relevance?: ProjectStateRelevance,
   measurement?: ProjectStateMeasurement,
 ): string {
@@ -314,8 +314,10 @@ export function formatCanonicalProjectState(
     );
   }
   const rawState = lines.join("\n");
-  const effectiveMaxChars = Math.max(1_000, maxChars);
-  const renderedState = rawState.slice(0, effectiveMaxChars);
+  const effectiveMaxChars = maxChars == null ? null : Math.max(1_000, maxChars);
+  const renderedState = effectiveMaxChars == null
+    ? rawState
+    : rawState.slice(0, effectiveMaxChars);
   if (measurement) {
     measurement.rawChars = rawState.length;
     measurement.renderedChars = renderedState.length;

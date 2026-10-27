@@ -88,6 +88,7 @@ import {
 import {
   computeMaxChargeCredits,
   estimateTokensFromText,
+  MAX_BILLABLE_INPUT_TOKENS,
   type GenerationModelStore,
   getEnabledModelByProviderModel,
   normalizedModelId,
@@ -1228,13 +1229,13 @@ function aggregateProjectStateForGeneration(
   const state = formatCanonicalProjectState(
     scenes,
     previousScene,
-    45_000,
+    null,
     { query: relevanceQuery },
     measurement,
   );
   console.info(
     `[generate-story] project state size raw=${measurement.rawChars} ` +
-      `rendered=${measurement.renderedChars} max=${measurement.maxChars} ` +
+      `rendered=${measurement.renderedChars} max=${measurement.maxChars ?? "none"} ` +
       `truncated=${measurement.truncated}`,
   );
   return state;
@@ -3392,6 +3393,15 @@ async function handler(
   const effectiveStableBlocks = stableBlocks;
   const stablePrompt = effectiveStableBlocks.join("\n").trim();
   const volatilePrompt = volatileBlocks.join("\n").trim();
+  const completePromptChars = stablePrompt.length + volatilePrompt.length;
+  const estimatedCompletePromptTokens = estimateTokensFromText(stablePrompt) +
+    estimateTokensFromText(volatilePrompt);
+  console.info(
+    `[generate-story] complete prompt size model=${selectedModel.provider_model} ` +
+      `chars=${completePromptChars} estimatedInputTokens=${estimatedCompletePromptTokens} ` +
+      `applicationInputLimit=${MAX_BILLABLE_INPUT_TOKENS} ` +
+      `maxOutputTokens=${maxCompletionTokens}`,
+  );
   // PR-372: SHA-256 of the serialized stable prefix. Diagnostics only —
   // persisted to generation_usage_events.stable_prefix_hash.
   const stablePrefixHash = await sha256Hex(stablePrompt);
