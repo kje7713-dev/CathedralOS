@@ -2849,8 +2849,8 @@ export function buildPrompt(
   const system =
     `You are an expert ${requestedStoryMaterialFormat(req)} outliner. Use the complete canonical recipe/project payload below, including its premise, selected characters and their populated fields, selected relationships, themes, motifs, story spark, aftertaste, recipe instructions, and included setting. Treat supplied facts as authoritative; do not infer personality traits from a character name alone. Given the story arc, produce one complete section-by-section outline in this single pass.
 
-## Continuity review before finalizing
-Review the proposed sections in canonical order before returning them. Preserve the established state from earlier sections while allowing plausible offscreen travel, elapsed time, recovery, communication, and other ordinary transitions. Repair only genuine contradictions involving a character's incompatible location or status, an object's incompatible custody or possession, a death or departure that is reversed without an explicit return, or another irreversible event that is silently undone. A later section may move a character or object between scenes; it must not state a mutually incompatible state as though the earlier state never happened. The terminalState of each section is the state handed to the next section, not a license to rewrite history. If a conflict is found, rewrite the smallest affected section so the transition is explicit and causally plausible; do not delete established story, invent a new primary conflict, or turn a valid transition into a false contradiction.
+## Narrative-state continuity
+Before returning the outline, evaluate the complete proposed sequence in canonical order. Each section must begin from a state that plausibly follows the previous section's terminal state. Preserve established character locations, relationships, physical conditions, consequential object custody, deaths, departures, and irreversible events. When successive sections require materially different states, establish a credible transition; do not silently relocate principal characters, reverse completed events, resurrect the dead, or transfer a critical object without explanation. Apply the same continuity expectations across Story Arc boundaries: a new beat does not reset location, chronology, or established events. Prefer correcting the ordering, location, or dramatic sequence—such as placing an archive siege before an evacuation—over inventing an implausible return journey to reconcile incompatible sections. Legitimate offscreen travel, elapsed time, flashbacks, parallel action, perspective changes, and intentional ambiguity remain allowed; require plausible causality, not mechanical matching of location strings. Preserve recipe requirements, authored Story Arc obligations, necessary developments, and length constraints; do not delete essential material or add filler.
 
 Every section must commit to one canonical event. Never use unresolved alternatives such as "X or Y", "someone", "a friend", "somewhere", or multiple possible versions of the event. Choose the specific person, place, object, and action.
 
@@ -3951,101 +3951,6 @@ export type SemanticVerificationResult = {
   beats: Array<{ beatID: string; obligations: SemanticVerificationObligation[] }>;
   unsatisfied: Array<{ beatID: string; obligationID: string; reason: string }>;
 };
-
-const CONTINUITY_REVIEW_SCHEMA = {
-  type: "object",
-  properties: {
-    replacements: {
-      type: "array",
-      maxItems: 12,
-      items: {
-        type: "object",
-        properties: {
-          sectionIndex: { type: "integer" },
-          section: SECTION_SCHEMA,
-          reason: { type: "string", minLength: 1, maxLength: 1200 },
-        },
-        required: ["sectionIndex", "section", "reason"],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ["replacements"],
-  additionalProperties: false,
-} as const;
-
-export type ContinuityRepairResult = {
-  suggestions: Suggestion[];
-  repaired: Array<{ sectionIndex: number; title: string; reason: string }>;
-};
-
-/**
- * One planning-only review pass. The reviewer may repair only a concrete
- * contradiction; valid travel/time jumps and ordinary offscreen transitions
- * are explicitly preserved. Section indexes and recipe IDs remain server-owned.
- */
-export async function reviewAndRepairOutlineContinuity(
-  suggestions: Suggestion[],
-  template: Pick<ArcTemplateBlob, "name" | "beats">,
-  billableCall: SuggestionLLMCall,
-  recipeSummary?: string,
-): Promise<ContinuityRepairResult> {
-  if (suggestions.length < 2) return { suggestions, repaired: [] };
-  const raw = await billableCall(
-    "You are a continuity reviewer for an outline. Review the complete sequence in order and return only replacements for genuine contradictions. Preserve plausible offscreen travel, elapsed time, recovery, communication, and ordinary transitions. A contradiction requires incompatible location/status, object custody, death/departure, or another irreversible event being silently undone. Do not require exact entry-state matching. Do not delete sections, change beats, invent a primary conflict, or rewrite merely for style. When a contradiction exists, rewrite the smallest affected Section Contract so its transition from prior terminalState is explicit and causally plausible. Return an empty replacements array when the sequence is coherent.",
-    JSON.stringify({
-      storyArc: template.name,
-      recipeSummary: recipeSummary ?? null,
-      sections: suggestions.map((section, sectionIndex) => ({ sectionIndex, section })),
-    }, null, 2),
-    7000,
-    { type: "json_schema", json_schema: { name: "outline_continuity_review", strict: true, schema: CONTINUITY_REVIEW_SCHEMA } },
-    "outline-continuity-review",
-  );
-  const parsed = parseOutlineJSON<{ replacements?: unknown }>(raw.content, raw.finishReason);
-  if (!parsed || !Array.isArray(parsed.replacements)) throw new Error("outline-continuity-review: response missing replacements");
-  const result = suggestions.map((section) => ({ ...section }));
-  const repaired: ContinuityRepairResult["repaired"] = [];
-  const used = new Set<number>();
-  for (const operation of parsed.replacements as any[]) {
-    const index = Number(operation?.sectionIndex);
-    if (!Number.isInteger(index) || index < 0 || index >= result.length || used.has(index)) continue;
-    const original = result[index];
-    const beat = template.beats.find((candidate) => candidate.id === original.storyArcBeatID);
-    if (!beat || !operation?.section || typeof operation.section !== "object") continue;
-    const candidate = {
-      ...operation.section,
-      storyArcBeatID: original.storyArcBeatID,
-      recipeRequirementIDs: original.recipeRequirementIDs ?? [],
-    };
-    let validated: Suggestion[];
-    try {
-      validated = validateSuggestions(
-        { suggestions: [candidate] },
-        new Set([original.storyArcBeatID]),
-        undefined,
-        [],
-        { ...template, beats: [beat] },
-      ).suggestions;
-    } catch {
-      continue;
-    }
-    if (validated.length !== 1) continue;
-    // Recipe requirement IDs are canonical metadata from the original
-    // section; continuity repair must not silently drop them.
-    result[index] = {
-      ...validated[0],
-      ...(original.recipeRequirementIDs?.length ? { recipeRequirementIDs: original.recipeRequirementIDs } : {}),
-    };
-    used.add(index);
-    repaired.push({
-      sectionIndex: index,
-      title: original.title,
-      reason: String(operation.reason ?? "continuity contradiction repaired"),
-    });
-  }
-  return { suggestions: result, repaired };
-}
 
 const SEMANTIC_VERIFICATION_SCHEMA = {
   type: "object",
@@ -6445,37 +6350,6 @@ export async function runSuggestionJob(
       diagnostics = { ...diagnostics, stage: "outline_validated", firstPassParsedCounts: countSuggestionsByBeat(result.suggestions), firstPassValidatedCounts: countSuggestionsByBeat(result.suggestions), firstPassActualContainerCountsByBeat, structuralDedupedSections: deduped.removed };
       if (result.suggestions.length > MAX_PLANNED_SECTIONS) {
         throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
-      }
-    }
-
-    // A single planning-only continuity review runs after structural parsing and
-    // before semantic/obligation completion. It is intentionally best-effort:
-    // an unavailable reviewer must not erase a structurally valid outline.
-    if (result.suggestions.length > 1) {
-      try {
-        const continuity = await reviewAndRepairOutlineContinuity(
-          result.suggestions,
-          body.arcTemplate,
-          billableCall,
-          body.recipe?.project?.summary,
-        );
-        result.suggestions = continuity.suggestions;
-        diagnostics = {
-          ...diagnostics,
-          stage: continuity.repaired.length > 0 ? "outline_continuity_repaired" : "outline_continuity_reviewed",
-          continuityReview: {
-            attempted: true,
-            repaired: continuity.repaired,
-          },
-        };
-      } catch (error) {
-        diagnostics = {
-          ...diagnostics,
-          continuityReview: {
-            attempted: true,
-            warning: error instanceof Error ? error.message : String(error),
-          },
-        };
       }
     }
 
