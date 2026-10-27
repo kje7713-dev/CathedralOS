@@ -709,6 +709,7 @@ const CONTAINER_EXPECTED_RANGES: Record<string, [number, number]> = {
 export const NOVEL_TARGET_WORDS: [number, number] = [115000, 125000];
 export const NOVEL_PREFERRED_MIN_WORDS = 115000;
 export const NOVEL_MAX_WORDS = 125000;
+export const NOVEL_CONTAINER_MIX_TOLERANCE_WORDS = 5000;
 const TOKENS_PER_WORD = 1.3;
 // A 2% under-target projection is acceptable for completion. Keep the
 // 115,000-word planning goal and the 125,000-word maximum unchanged.
@@ -3025,7 +3026,9 @@ export class AllocationBudgetConstraintError extends Error {
 // uses the observed mixed-section estimate below; typed allocations remain
 // subject to their actual container midpoints.
 export const NOVEL_MIXED_SECTION_ESTIMATE_TOKENS = 3500;
-
+// Typed container midpoints are planning estimates. Allow a narrow 5,000-word
+// recovery tolerance so a near-boundary mix is repaired instead of hard-failing;
+// normal planning and final acceptance remain bounded by 125,000 words.
 export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): number {
   if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
   const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
@@ -3070,16 +3073,22 @@ export function fitAllocationToNovelBudget(
         plannedCount <= MAX_PLANNED_SECTIONS) {
       return allocation;
     }
-    if (mixes.every(Boolean)) {
-      throw new AllocationBudgetConstraintError(
-        `The explicit novel container mix projects above the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap; revise the container mix instead of applying the unknown-mix estimate.`,
-      );
-    }
-    // An incomplete container mix is not reliable enough to price by type.
-    // Strip the partial metadata and use the typical mixed-section estimate.
+    const withinRecoveryTolerance = mixes.every(Boolean) &&
+      proposedTokens <= NOVEL_MAX_PROJECTED_TOKENS + NOVEL_CONTAINER_MIX_TOLERANCE_WORDS * TOKENS_PER_WORD;
+    // A provider-supplied mix is advisory planning metadata, not a reason to
+    // hard-fail a paid suggestion run. If the typed mix cannot fit the novel
+    // ceiling—or is within the narrow recovery tolerance—discard only the
+    // unreliable sizing metadata and fall back to the established mixed-section
+    // estimate. The fallback re-fits the section count to the nominal cap,
+    // preserving the user's outline request without aiming near the tolerance.
+    // This also covers incomplete mixes, whose partial metadata is not safe to
+    // price by type.
+    const fallbackNote = withinRecoveryTolerance
+      ? "mixed-section sizing fallback within recovery tolerance"
+      : "mixed-section sizing fallback";
     const unknownMix = new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
       const { containerCounts: _ignored, ...rest } = plan;
-      return [beatID, { ...rest, rationale: `${plan.rationale} (mixed-section sizing fallback)` }] as [string, Allocation];
+      return [beatID, { ...rest, rationale: `${plan.rationale} (${fallbackNote})` }] as [string, Allocation];
     }));
     return fitAllocationToNovelBudget(unknownMix, req);
   }
