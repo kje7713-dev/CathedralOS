@@ -5,6 +5,13 @@ export type ProjectStateRelevance = {
   query?: string | null;
 };
 
+export type ProjectStateMeasurement = {
+  rawChars: number;
+  renderedChars: number;
+  maxChars: number;
+  truncated: boolean;
+};
+
 const RELEVANCE_STOP_WORDS = new Set([
   "about",
   "after",
@@ -80,6 +87,7 @@ export function formatCanonicalProjectState(
   previousScene?: Record<string, unknown>,
   maxChars = 50_000,
   relevance?: ProjectStateRelevance,
+  measurement?: ProjectStateMeasurement,
 ): string {
   const characters = new Map<string, Record<string, unknown>>();
   const threads = new Map<string, Record<string, unknown>>();
@@ -226,8 +234,9 @@ export function formatCanonicalProjectState(
     const selectRelated = (item: Record<string, unknown>) =>
       relevantRecord(item, relatedQueryTokens, selectedNames);
     selectedThreads = selectedThreads.filter(selectRelated);
-    selectedIdentityFacts = stableIdentityFacts.filter(selectRelated);
-    selectedFacts = remainingFacts.filter(selectRelated);
+    // Active continuity facts are durable canon. Keep them all even when the
+    // current scene uses different terminology; only volatile context is
+    // relevance-filtered. Inactive/superseded facts were removed above.
     selectedLoops = selectedLoops.filter(selectRelated);
   }
 
@@ -304,5 +313,14 @@ export function formatCanonicalProjectState(
       "",
     );
   }
-  return lines.join("\n").slice(0, Math.max(1_000, maxChars));
+  const rawState = lines.join("\n");
+  const effectiveMaxChars = Math.max(1_000, maxChars);
+  const renderedState = rawState.slice(0, effectiveMaxChars);
+  if (measurement) {
+    measurement.rawChars = rawState.length;
+    measurement.renderedChars = renderedState.length;
+    measurement.maxChars = effectiveMaxChars;
+    measurement.truncated = renderedState.length < rawState.length;
+  }
+  return renderedState;
 }

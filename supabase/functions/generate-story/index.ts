@@ -1219,12 +1219,25 @@ function aggregateProjectStateForGeneration(
   previousScene: Record<string, unknown>,
   relevanceQuery?: string,
 ): string {
-  return formatCanonicalProjectState(
+  const measurement = {
+    rawChars: 0,
+    renderedChars: 0,
+    maxChars: 0,
+    truncated: false,
+  };
+  const state = formatCanonicalProjectState(
     scenes,
     previousScene,
     45_000,
     { query: relevanceQuery },
+    measurement,
   );
+  console.info(
+    `[generate-story] project state size raw=${measurement.rawChars} ` +
+      `rendered=${measurement.renderedChars} max=${measurement.maxChars} ` +
+      `truncated=${measurement.truncated}`,
+  );
+  return state;
 }
 
 // ---- fetchRecentRawText --------------------------------------------------

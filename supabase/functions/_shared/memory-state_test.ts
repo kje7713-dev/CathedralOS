@@ -94,7 +94,7 @@ Deno.test("scene-specific project state keeps relevant hard facts and drops unre
   assertStringIncludes(state, "river-warden-infiltration");
   assert(!state.includes("hospital-overload"));
   assert(!state.includes("fever-ward-supplies"));
-  assert(!state.includes("Ilyana uses she/her"));
+  assertStringIncludes(state, "Ilyana uses she/her");
   assert(state.length < 45_000);
 });
 
@@ -114,3 +114,43 @@ Deno.test("scene-specific project state keeps the previous section regardless of
   assertStringIncludes(state, "The ledger is being pursued.");
   assertEquals(state.includes("Cumulative Story State"), true);
 });
+
+Deno.test(
+  "active custody facts survive unrelated current-scene terminology and report size",
+  () => {
+    const measurement = {
+      rawChars: 0,
+      renderedChars: 0,
+      maxChars: 0,
+      truncated: false,
+    };
+    const state = formatCanonicalProjectState(
+      [
+        {
+          continuity_facts: [
+            {
+              reference: "object:sealed-court-ledger:custody",
+              fact: "Marek keeps the sealed court ledger in his satchel.",
+              active: true,
+            },
+            {
+              reference: "event:warden-death:irreversible",
+              fact: "Warden Pell died during the bridge collapse.",
+              active: true,
+            },
+          ],
+        },
+      ],
+      undefined,
+      45_000,
+      { query: "A wounded ferryman reaches the winter monastery." },
+      measurement,
+    );
+
+    assertStringIncludes(state, "sealed-court-ledger:custody");
+    assertStringIncludes(state, "Warden Pell died during the bridge collapse");
+    assertEquals(measurement.maxChars, 45_000);
+    assertEquals(measurement.truncated, false);
+    assertEquals(measurement.rawChars, measurement.renderedChars);
+  },
+);
