@@ -97,6 +97,7 @@ struct RunOutlineStatus: Codable {
     let sections_total: Int?
     let sections_failed: Int?
     let current_section: RunOutlineCurrentSection?
+    let next_pickup_section: RunOutlinePickupSection? = nil
     let sections: [RunOutlineSectionStatus]?
     let error: String?
     let credits_reserved: Double?
@@ -153,6 +154,14 @@ extension RunOutlineStatus {
     var blocksNewGeneration: Bool {
         status != "completed" && status != "failed"
     }
+}
+
+struct RunOutlinePickupSection: Codable {
+    let id: String
+    let title: String
+    let position: Int?
+    let status: String
+    let error: String?
 }
 
 struct RunOutlineCurrentSection: Codable {

@@ -18,6 +18,7 @@ import {
   parseEmbedSectionError,
   providerBillingTerminalState,
   requireRunOutlineRecipe,
+  nextRunPickupSection,
   RunOutlineOutlineError,
   runOutlineSectionLifecycle,
 } from "./index.ts";
@@ -66,6 +67,23 @@ function mockOutlineClient(result: { data: unknown; error: unknown }) {
     }),
   } as never;
 }
+
+Deno.test("failed durable runs expose the first failed section as pickup", () => {
+  assertEquals(
+    nextRunPickupSection([
+      { id: "done", title: "Completed", position: 0, status: "completed" },
+      { id: "failed", title: "A River of False Names", position: 21, status: "failed", error: "worker limit" },
+      { id: "pending", title: "The Court Blames the Ledgers", position: 22, status: "pending" },
+    ]),
+    {
+      id: "failed",
+      title: "A River of False Names",
+      position: 21,
+      status: "failed",
+      error: "worker limit",
+    },
+  );
+});
 
 Deno.test("outline loader accepts a valid authoritative outline", async () => {
   const outline = await loadRunOutline(
@@ -734,7 +752,8 @@ Deno.test("Run All iOS presentation treats paused as resumable and shows actual 
   assertEquals(sheet.includes("return est.allowed"), false);
   assertStringIncludes(banner, "Generation paused");
   assertStringIncludes(banner, "More credits needed");
-  assertStringIncludes(banner, 'Button("Resume")');
+  assertStringIncludes(banner, "isResumable");
+  assertStringIncludes(banner, "resumeLabel");
   assertStringIncludes(banner, "Final cost:");
   assertStringIncludes(
     coordinator,

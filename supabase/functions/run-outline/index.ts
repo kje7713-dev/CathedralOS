@@ -764,6 +764,34 @@ async function prepareRun(
   await queueContinuation(runId);
 }
 
+export type RunOutlinePickupSection = {
+  id: string;
+  title: string;
+  position: number | null;
+  status: string;
+  error: string | null;
+};
+
+/** Return the exact section a failed durable run should resume from. */
+export function nextRunPickupSection(
+  sections: readonly Record<string, unknown>[],
+): RunOutlinePickupSection | null {
+  const section = sections.find((item) => item.status === "failed") ??
+    sections.find((item) => item.status === "pending");
+  if (!section) return null;
+  return {
+    id: String(section.id ?? ""),
+    title: String(section.title ?? "Untitled section"),
+    position: typeof section.position === "number"
+      ? section.position
+      : Number.isFinite(Number(section.position))
+      ? Number(section.position)
+      : null,
+    status: String(section.status ?? "pending"),
+    error: section.error == null ? null : String(section.error),
+  };
+}
+
 // ---- GET /functions/v1/run-outline?run_id=… ------------------------------
 async function handleStatus(req: Request, url: URL): Promise<Response> {
   const runId = url.searchParams.get("run_id");
@@ -862,6 +890,9 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
           id: (current_section as { id: string }).id,
           title: (current_section as { title: string }).title,
         }
+        : null,
+      next_pickup_section: run.status === "failed"
+        ? nextRunPickupSection(sections)
         : null,
       sections,
       error: run.error,
@@ -1317,10 +1348,79 @@ async function handleResume(
   userId: string,
   runId: string,
 ): Promise<Response> {
-  const { data: run } = await adminClient.from("chapter_runs")
-    .select("id, outline_id, status").eq("id", runId)
+  const { data: rawRun } = await adminClient.from("chapter_runs")
+    .select("id, outline_id, status, sections").eq("id", runId)
     .eq("user_id", userId).maybeSingle();
+  const run = rawRun as {
+    id: string;
+    outline_id: string;
+    status: string;
+    sections?: unknown;
+  } | null;
   if (!run) return errorResponse("not_found", "run not found", 404);
+  if (run.status === "failed") {
+    const sections = Array.isArray(run.sections)
+      ? run.sections as Array<Record<string, unknown>>
+      : [];
+    const pickup = nextRunPickupSection(sections);
+    if (!pickup) {
+      return corsResponse(JSON.stringify({ run_id: runId, status: run.status }), {
+        status: 200,
+      });
+    }
+    const resumedSections = sections.map((section) =>
+      String(section.id ?? "") === pickup.id
+        ? { ...section, status: "pending", error: null, started_at: null, completed_at: null }
+        : section
+    );
+    const { data: resumed, error: resumeError } = await adminClient
+      .from("chapter_runs")
+      .update({
+        status: "running",
+        sections: resumedSections,
+        error: null,
+        worker_lease_until: null,
+        next_retry_at: null,
+        completed_at: null,
+      })
+      .eq("id", runId)
+      .eq("user_id", userId)
+      .eq("status", "failed")
+      .select("id, status")
+      .maybeSingle();
+    if (resumeError) return errorResponse("db_error", resumeError.message, 500);
+    if (!resumed) {
+      const { data: current } = await adminClient.from("chapter_runs")
+        .select("status").eq("id", runId).maybeSingle();
+      return corsResponse(JSON.stringify({
+        run_id: runId,
+        status: current?.status ?? run.status,
+      }), { status: 200 });
+    }
+    // Reuse any persisted output for this exact section; runOutline's lineage
+    // lookup prevents duplicate generation or billing after a worker failure.
+    // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
+    EdgeRuntime.waitUntil(
+      runOutline(runId, adminClient).catch(async (err) => {
+        if (isRetryableOutlineLookupError(err)) {
+          await scheduleTransientOutlineLookupRetry(adminClient, runId, err);
+        } else if (isInsufficientCreditsError(err)) {
+          await pauseRunInsufficientCredits(adminClient, runId, null, err);
+        } else {
+          await markRunFailed(
+            adminClient,
+            runId,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }),
+    );
+    return corsResponse(JSON.stringify({
+      run_id: runId,
+      status: "running",
+      next_pickup_section: pickup,
+    }), { status: 202 });
+  }
   if (run.status === "paused_insufficient_credits") {
     const { data: resumed, error: resumeError } = await adminClient
       .from("chapter_runs")
