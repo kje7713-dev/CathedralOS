@@ -2281,8 +2281,8 @@ struct ActiveRunBanner: View {
             .contentShape(Rectangle())
             .onTapGesture { onNavigate?() }
             Spacer()
-            if isPaused, let onResume {
-                Button("Resume") {
+            if isResumable, let onResume {
+                Button(resumeLabel) {
                     Task { await onResume() }
                 }
                 .buttonStyle(.borderedProminent)
@@ -2308,6 +2308,17 @@ struct ActiveRunBanner: View {
 
     private var isPaused: Bool {
         status.isPausedForInsufficientCredits
+    }
+
+    private var isResumable: Bool {
+        isPaused || isFailed
+    }
+
+    private var resumeLabel: String {
+        if let pickup = status.next_pickup_section {
+            return "Resume from \(pickup.title)"
+        }
+        return "Resume"
     }
 
     private var isFailed: Bool {
@@ -2337,7 +2348,9 @@ struct ActiveRunBanner: View {
         if isPaused { return "\(done) of \(total) sections · \(spend) credits used · More credits needed" }
         if isCompleted { return "\(done) sections generated · Final cost: \(spend) credits" }
         if isFailed {
-            let message = status.userFacingError ?? "Generation failed. Please try again."
+            let message = status.next_pickup_section.map {
+                "Generation failed at \($0.title). Resume to retry this section."
+            } ?? (status.userFacingError ?? "Generation failed. Please try again.")
             return spend == "0.00" ? message : "\(message) · \(spend) credits used"
         }
         if isRunning, let pollingError { return pollingError }
