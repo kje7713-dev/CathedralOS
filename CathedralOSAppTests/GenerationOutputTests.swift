@@ -20,6 +20,14 @@ final class GenerationOutputTests: XCTestCase {
         GenerationOutput(title: title)
     }
 
+    func testCompletedRunBannerDismissalPolicy() {
+        XCTAssertTrue(ActiveRunBanner.shouldShowBanner(status: "running", runID: "run-1", dismissedRunID: nil))
+        XCTAssertTrue(ActiveRunBanner.shouldShowBanner(status: "completed", runID: "run-1", dismissedRunID: nil))
+        XCTAssertFalse(ActiveRunBanner.shouldShowBanner(status: "completed", runID: "run-1", dismissedRunID: "run-1"))
+        XCTAssertTrue(ActiveRunBanner.shouldShowBanner(status: "completed", runID: "run-2", dismissedRunID: "run-1"))
+        XCTAssertEqual(ActiveRunBanner.completionDismissDelayNanoseconds, 8_000_000_000)
+    }
+
     // MARK: Model creation
 
     func testDefaultFieldsOnInit() {

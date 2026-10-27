@@ -2254,12 +2254,39 @@ struct GenerationStartingBanner: View {
 /// a generation run is active. Updates from `activeRunStatus` (polled every
 /// 3 seconds while running).
 struct ActiveRunBanner: View {
+    static let completionDismissDelayNanoseconds: UInt64 = 8_000_000_000
+
     let status: RunOutlineStatus
     var pollingError: String? = nil
     var onResume: (() async -> Void)? = nil
     var onNavigate: (() -> Void)? = nil
+    @State private var dismissedCompletionRunID: String?
 
     var body: some View {
+        Group {
+            if Self.shouldShowBanner(
+                status: status.status,
+                runID: status.run_id,
+                dismissedRunID: dismissedCompletionRunID
+            ) {
+                bannerContent
+            }
+        }
+        .task(id: "\(status.run_id):\(status.status)") {
+            dismissedCompletionRunID = nil
+            guard isCompleted else { return }
+            do {
+                try await Task.sleep(nanoseconds: Self.completionDismissDelayNanoseconds)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            dismissedCompletionRunID = status.run_id
+        }
+    }
+
+    @ViewBuilder
+    private var bannerContent: some View {
         HStack(spacing: CathedralTheme.Spacing.md) {
             HStack(spacing: CathedralTheme.Spacing.md) {
                 if isRunning {
@@ -2296,6 +2323,10 @@ struct ActiveRunBanner: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(isCompleted ? Color.green.opacity(0.3) : isFailed ? Color.red.opacity(0.3) : Color.clear, lineWidth: 1)
         }
+    }
+
+    static func shouldShowBanner(status: String, runID: String, dismissedRunID: String?) -> Bool {
+        status != "completed" || dismissedRunID != runID
     }
 
     private var isRunning: Bool {

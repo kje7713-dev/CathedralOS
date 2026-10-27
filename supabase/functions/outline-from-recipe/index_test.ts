@@ -362,6 +362,29 @@ Deno.test("story non-negotiables are rendered as explicit must-do acceptance cri
   assertEquals(planningContext.mustDos[0].directive.includes("There must be 10 hard core long sex scenes built in."), true);
 });
 
+Deno.test("outline prompts distinguish substantial dramatic developments from fragments", () => {
+  const request = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const outlinePrompt = buildPrompt(request, new Map()).system;
+  assertStringIncludes(outlinePrompt, "Before assigning separate sections to related events, determine whether each creates a genuinely new causal development.");
+  assertStringIncludes(outlinePrompt, "A separate section must introduce a consequential new action, discovery, reversal, cost, commitment, or changed relationship");
+  assertStringIncludes(outlinePrompt, "Preserve legitimate slow-burn storytelling, character reflection, suspense, callbacks, and multi-stage confrontations");
+  assertStringIncludes(outlinePrompt, "Do not impose an arbitrary requirement that every section contain action or spectacle.");
+  assertStringIncludes(outlinePrompt, "115,000-word minimum");
+  assertStringIncludes(outlinePrompt, "125,000-word hard cap");
+  assertStringIncludes(outlinePrompt, "Story Arc");
+  assertStringIncludes(outlinePrompt, "recipe obligations");
+
+  const allocationPrompt = buildAllocationPrompt(request).system;
+  assertStringIncludes(allocationPrompt, "Allocate sections according to distinct dramatic developments, not the number of steps, conversations, or locations involved in one development.");
+  assertStringIncludes(allocationPrompt, "Consecutive preparations for the same confrontation");
+  assertStringIncludes(allocationPrompt, "Prefer appropriately substantial containers over fragmenting a single causal unit");
+  assertStringIncludes(allocationPrompt, "115,000 projected words");
+  assertStringIncludes(allocationPrompt, "125,000-word maximum");
+  assertStringIncludes(allocationPrompt, "container");
+  assertStringIncludes(allocationPrompt, "Story Arc");
+  assertStringIncludes(allocationPrompt, "Recipe obligations");
+});
+
 Deno.test("existing accepted sections satisfy obligation coverage", () => {
   const obligations = deriveRecipeObligations({ ...sparseRequest.recipe, selectedStorySpark: { text: "R2" } } as any);
   const existing = [{ storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] }];
