@@ -502,9 +502,11 @@ export class OpenAIProvider implements LLMProvider {
     const body: Record<string, unknown> = {
       model: resolvedModel,
       input: messages,
-      max_output_tokens: maxTokens,
       store: false,
     };
+    // GPT-6 Luna Fast has no application-imposed completion cap. Other
+    // callers retain their explicit budget for billing and safety.
+    if (options?.serviceTier !== "fast") body.max_output_tokens = maxTokens;
     if (options?.responseFormat) {
       const format = options.responseFormat as {
         type?: string;
@@ -689,8 +691,10 @@ export class OpenAIProvider implements LLMProvider {
     const body: Record<string, unknown> = {
       model: resolvedModel,
       messages: chatMessages,
-      max_completion_tokens: maxTokens,
     };
+    // GPT-6 Luna Fast owns its provider-side output ceiling. Do not send the
+    // legacy GPT-5.4 application cap for that tier.
+    if (options.serviceTier !== "fast") body.max_completion_tokens = maxTokens;
     if (options.responseFormat) {
       body.response_format = options.responseFormat;
     }
