@@ -709,14 +709,19 @@ const CONTAINER_EXPECTED_RANGES: Record<string, [number, number]> = {
 export const NOVEL_TARGET_WORDS: [number, number] = [115000, 125000];
 export const NOVEL_PREFERRED_MIN_WORDS = 115000;
 export const NOVEL_MAX_WORDS = 125000;
-export const NOVEL_CONTAINER_MIX_TOLERANCE_WORDS = 5000;
+// Keep the nominal planning ceiling at 125,000 words, but allow a bounded
+// final projection grace range for unavoidable midpoint estimation drift.
+export const NOVEL_MAX_GRACE_WORDS = 5000;
+export const NOVEL_ACCEPTED_MAX_WORDS = NOVEL_MAX_WORDS + NOVEL_MAX_GRACE_WORDS;
 const TOKENS_PER_WORD = 1.3;
 // A 2% under-target projection is acceptable for completion. Keep the
-// 115,000-word planning goal and the 125,000-word maximum unchanged.
+// 115,000-word planning goal and the 125,000-word nominal maximum; the bounded
+// accepted grace ceiling is defined separately below.
 export const NOVEL_LENGTH_TOLERANCE = 0.02;
 export const NOVEL_EXPANSION_MIN_WORDS = Math.ceil(NOVEL_PREFERRED_MIN_WORDS * (1 - NOVEL_LENGTH_TOLERANCE));
 const NOVEL_MIN_PROJECTED_TOKENS = NOVEL_PREFERRED_MIN_WORDS * TOKENS_PER_WORD;
 const NOVEL_MAX_PROJECTED_TOKENS = NOVEL_MAX_WORDS * TOKENS_PER_WORD;
+const NOVEL_ACCEPTED_MAX_PROJECTED_TOKENS = NOVEL_ACCEPTED_MAX_WORDS * TOKENS_PER_WORD;
 const MAX_PLANNED_SECTIONS = 200;
 export const MAX_EXPANSION_ROUNDS = 3;
 
@@ -1968,7 +1973,7 @@ export function evaluateNovelScale(
     deficitTokens,
     meetsMinimum: deficitTokens === 0,
     meetsPreferredMinimum: projectedTokens / TOKENS_PER_WORD >= NOVEL_PREFERRED_MIN_WORDS,
-    exceedsMaximum: projectedTokens > NOVEL_MAX_PROJECTED_TOKENS,
+    exceedsMaximum: projectedTokens > NOVEL_ACCEPTED_MAX_PROJECTED_TOKENS,
   };
 }
 
@@ -2565,7 +2570,7 @@ export async function progressivelyExpandOutline(
   if (finalScale.exceedsMaximum) {
     throw new NovelScalePlanningError(
       "failed_over_target",
-      `Novel outline exceeds the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
+      `Novel outline exceeds the ${NOVEL_ACCEPTED_MAX_WORDS.toLocaleString()}-word accepted ceiling after ${diagnostics.length} expansion round${diagnostics.length === 1 ? "" : "s"}.`,
     );
   }
   return { suggestions, warnings: [...new Set(warnings)], diagnostics };
@@ -3063,69 +3068,70 @@ export function fitAllocationToNovelBudget(
   allocation: Map<string, Allocation>,
   req: OutlineFromRecipeRequest,
 ): Map<string, Allocation> {
-  const mixes = Array.from(allocation.values()).map((plan) => plan.containerCounts);
-  if (mixes.some(Boolean)) {
-    const proposedTokens = projectedPlannedContainerTokens(allocation) +
-      projectedExpectedTokens(req.existingSections ?? []);
-    const plannedCount = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
-    if (mixes.every(Boolean) &&
-        proposedTokens <= NOVEL_MAX_PROJECTED_TOKENS &&
-        plannedCount <= MAX_PLANNED_SECTIONS) {
-      return allocation;
-    }
-    const withinRecoveryTolerance = mixes.every(Boolean) &&
-      proposedTokens <= NOVEL_MAX_PROJECTED_TOKENS + NOVEL_CONTAINER_MIX_TOLERANCE_WORDS * TOKENS_PER_WORD;
-    // A provider-supplied mix is advisory planning metadata, not a reason to
-    // hard-fail a paid suggestion run. If the typed mix cannot fit the novel
-    // ceiling—or is within the narrow recovery tolerance—discard only the
-    // unreliable sizing metadata and fall back to the established mixed-section
-    // estimate. The fallback re-fits the section count to the nominal cap,
-    // preserving the user's outline request without aiming near the tolerance.
-    // This also covers incomplete mixes, whose partial metadata is not safe to
-    // price by type.
-    const fallbackNote = withinRecoveryTolerance
-      ? "mixed-section sizing fallback within recovery tolerance"
-      : "mixed-section sizing fallback";
-    const unknownMix = new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
-      const { containerCounts: _ignored, ...rest } = plan;
-      return [beatID, { ...rest, rationale: `${plan.rationale} (${fallbackNote})` }] as [string, Allocation];
-    }));
-    return fitAllocationToNovelBudget(unknownMix, req);
-  }
-  const budget = maximumBudgetedNewSections(req);
-  const total = Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0);
-  if (requestedStoryMaterialFormat(req) !== "novel" || total <= budget) return allocation;
+  if (requestedStoryMaterialFormat(req) !== "novel") return allocation;
 
-  const positive = Array.from(allocation.entries()).filter(([, plan]) => plan.minSections > 0);
-  if (positive.length > budget) {
-    throw new AllocationBudgetConstraintError(
-      `Novel budget permits ${budget} new chapter section${budget === 1 ? "" : "s"}, but ${positive.length} previously uncovered Story Arc beats require coverage. Preserve the draft and revise the arc or existing outline before retrying.`,
-    );
-  }
-  const baseFloor = positive.length <= budget ? 1 : 0;
-  const remaining = Math.max(0, budget - baseFloor * positive.length);
-  const weights = positive.map(([beatID, plan]) => ({ beatID, plan, raw: plan.minSections }));
-  const weightTotal = weights.reduce((sum, item) => sum + item.raw, 0) || 1;
-  const scaled = weights.map((item) => {
-    const exact = remaining * item.raw / weightTotal;
-    return { ...item, exact, value: Math.floor(exact) + baseFloor, fraction: exact - Math.floor(exact) };
-  });
-  let assigned = scaled.reduce((sum, item) => sum + item.value, 0);
-  for (const item of [...scaled].sort((left, right) => right.fraction - left.fraction)) {
-    if (assigned >= budget) break;
-    item.value++;
-    assigned++;
-  }
-  const byBeat = new Map(scaled.map((item) => [item.beatID, item]));
-  return new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
-    const scaledPlan = byBeat.get(beatID);
-    if (!scaledPlan || scaledPlan.value === plan.minSections) return [beatID, plan];
-    return [beatID, {
-      minSections: scaledPlan.value,
+  // Novel planning never drops container metadata or fails because the planner
+  // estimated too many words. Complete missing counts with a deterministic
+  // substantial mix, then trim the largest planned units until the accepted projection fits. This keeps every beat represented and keeps the
+  // generation schema constrained to named container slots.
+  const normalized = new Map<string, Allocation>();
+  for (const [beatID, plan] of allocation.entries()) {
+    const counts: NovelContainerCounts = {
+      scene: 0,
+      developedScene: 0,
+      setPiece: 0,
+      sceneSequence: 0,
+      chapter: 0,
+    };
+    for (const container of NOVEL_LEAF_CONTAINERS) {
+      counts[container] = Math.max(0, Math.floor(plan.containerCounts?.[container] ?? 0));
+    }
+    let countTotal = NOVEL_LEAF_CONTAINERS.reduce((sum, container) => sum + counts[container], 0);
+    const requestedMinimum = Math.max(0, Math.floor(plan.minSections));
+    while (countTotal < requestedMinimum) {
+      // A missing slot is completed with a deterministic substantial mix
+      // rather than an unbounded provider choice: scene + developedScene
+      // averages almost exactly the established mixed-section estimate.
+      const nextContainer = countTotal % 2 === 0 ? "scene" : "developedScene";
+      counts[nextContainer]++;
+      countTotal++;
+    }
+    normalized.set(beatID, {
+      ...plan,
+      minSections: countTotal,
       coverageMinimum: plan.coverageMinimum ?? 1,
-      allocationMinimum: plan.allocationMinimum ?? plan.minSections,
-      rationale: `${plan.rationale} Budget-normalized from ${plan.minSections} to ${scaledPlan.value} sections so the complete novel can remain within ${NOVEL_MAX_WORDS.toLocaleString()} words.`,
-    }];
+      containerCounts: counts,
+    });
+  }
+
+  const positiveBeats = Array.from(normalized.values()).filter((plan) => plan.minSections > 0).length;
+  const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
+  const acceptedTokens = Math.max(0, NOVEL_ACCEPTED_MAX_PROJECTED_TOKENS - existingTokens);
+  const projected = () => Array.from(normalized.values()).reduce((total, plan) =>
+    total + NOVEL_LEAF_CONTAINERS.reduce((sum, container) =>
+      sum + plan.containerCounts![container] * projectedExpectedTokens([{ container }]), 0), 0);
+
+  while (projected() > acceptedTokens) {
+    const candidates = Array.from(normalized.entries()).flatMap(([beatID, plan]) =>
+      NOVEL_LEAF_CONTAINERS.filter((container) => plan.containerCounts![container] > 1).map((container) => ({
+        beatID,
+        plan,
+        container,
+        cost: projectedExpectedTokens([{ container }]),
+      })));
+    if (candidates.length === 0 || Array.from(normalized.values()).reduce((sum, plan) => sum + plan.minSections, 0) <= positiveBeats) break;
+    const selected = candidates.sort((left, right) => right.cost - left.cost)[0];
+    selected.plan.containerCounts![selected.container]--;
+    selected.plan.minSections--;
+  }
+
+  return new Map(Array.from(normalized.entries()).map(([beatID, plan]) => {
+    const original = allocation.get(beatID)!;
+    const changed = original.minSections !== plan.minSections ||
+      JSON.stringify(original.containerCounts ?? null) !== JSON.stringify(plan.containerCounts);
+    return [beatID, changed
+      ? { ...plan, rationale: `${plan.rationale} Budget-normalized to the accepted ${NOVEL_ACCEPTED_MAX_WORDS.toLocaleString()}-word ceiling while preserving container slots.` }
+      : plan] as [string, Allocation];
   }));
 }
 
@@ -5682,7 +5688,7 @@ export async function runSuggestionJob(
       if (requestedStoryMaterialFormat(body) === "novel" && finalScale.exceedsMaximum) {
         throw new NovelScalePlanningError(
           "failed_over_target",
-          `Novel outline exceeds the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`,
+          `Novel outline exceeds the ${NOVEL_ACCEPTED_MAX_WORDS.toLocaleString()}-word accepted ceiling`,
         );
       }
       const remainingAllocationDeficits = sectionAllocationDeficits(completedSuggestions);
@@ -5766,7 +5772,7 @@ export async function runSuggestionJob(
       if (requestedStoryMaterialFormat(body) === "novel" && initialScale.exceedsMaximum) {
         throw new NovelScalePlanningError(
           "failed_over_target",
-          `Novel outline exceeds the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap before expansion.`,
+          `Novel outline exceeds the ${NOVEL_ACCEPTED_MAX_WORDS.toLocaleString()}-word accepted ceiling before expansion.`,
         );
       }
       const initialQuality = collectAdvisoryOutlineQuality(

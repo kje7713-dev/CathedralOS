@@ -41,6 +41,8 @@ import {
   maximumBudgetedNewSections,
   maximumContainerPlannedNewSections,
   NOVEL_MIXED_SECTION_ESTIMATE_TOKENS,
+  NOVEL_ACCEPTED_MAX_WORDS,
+  NOVEL_MAX_GRACE_WORDS,
   allocationDeficits,
   allocationShortfalls,
   allocationRepairExhausted,
@@ -437,7 +439,7 @@ Deno.test("charged insufficient-credit runs with a planning checkpoint are resum
   }), false);
 });
 
-Deno.test("allocator floors are scaled to the novel word budget", () => {
+Deno.test("allocator floors are normalized into bounded container slots", () => {
   const req = {
     ...sparseRequest,
     arcTemplate: {
@@ -456,12 +458,12 @@ Deno.test("allocator floors are scaled to the novel word budget", () => {
   }]));
   const fitted = fitAllocationToNovelBudget(allocation, req);
   const total = Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0);
-  assertEquals(total, 46);
+  assertEquals(total, 121);
   assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
   assertEquals(maximumBudgetedNewSections(req), 46);
 });
 
-Deno.test("original 29-section calibration uses remaining mixed-section capacity", () => {
+Deno.test("container completion uses the remaining accepted capacity", () => {
   const existingSections = [
     ...Array.from({ length: 9 }, () => ({ container: "chapter" })),
     ...Array.from({ length: 2 }, () => ({ container: "sceneSequence" })),
@@ -476,7 +478,7 @@ Deno.test("original 29-section calibration uses remaining mixed-section capacity
   assertEquals(maximumBudgetedNewSections(req), 17);
   assertEquals(maximumContainerPlannedNewSections(req), 17);
   const fitted = fitAllocationToNovelBudget(new Map([["beat-1", { minSections: 20, rationale: "calibration fallback" }]]), req);
-  assertEquals(fitted.get("beat-1")?.minSections, 17);
+  assertEquals(fitted.get("beat-1")?.minSections, 20);
 });
 
 Deno.test("unknown novel allocation uses the mixed-section estimate", () => {
@@ -591,7 +593,7 @@ Deno.test("non-novel allocation keeps its legacy strict planner schema and promp
   assertEquals(allocation.get("beat-2")?.minSections, 1);
 });
 
-Deno.test("container-aware allocation accepts a narrow planning tolerance above the hard cap", () => {
+Deno.test("container-aware allocation preserves typed slots inside the grace ceiling", () => {
   const beats = [{ id: "beat-1" }, { id: "beat-2" }];
   const counts = { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 15 };
   const allocation = parseAndValidateAllocation(JSON.stringify({
@@ -606,13 +608,13 @@ Deno.test("container-aware allocation accepts a narrow planning tolerance above 
   const projectedWords = (30 * projectedExpectedTokens([{ container: "chapter" }])) / 1.3;
   assertEquals(Math.round(projectedWords), 126923);
   assertEquals(projectedWords > 125000, true);
+  assertEquals(projectedWords < NOVEL_ACCEPTED_MAX_WORDS, true);
   const fitted = fitAllocationToNovelBudget(allocation, req);
-  assertEquals(fitted.get("beat-1")?.containerCounts, undefined);
+  assertEquals(fitted.get("beat-1")?.containerCounts, counts);
   assertEquals(Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0), 30);
-  assertEquals(fitted.get("beat-1")?.rationale.includes("mixed-section sizing fallback"), true);
 });
 
-Deno.test("container-aware allocation safely falls back on inconsistent counts and oversize", () => {
+Deno.test("container-aware allocation completes and trims incomplete or oversized mixes", () => {
   const beats = [{ id: "beat-1" }, { id: "beat-2" }];
   const counts = { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 20 };
   const inconsistent = parseAndValidateAllocation(JSON.stringify({
@@ -621,9 +623,9 @@ Deno.test("container-aware allocation safely falls back on inconsistent counts a
       { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "bad" },
     ],
   }), beats);
-  const safePlan = fitAllocationToNovelBudget(inconsistent, { ...sparseRequest, requestedFormat: "novel" } as any);
-  assertEquals(Array.from(safePlan.values()).every((a) => !a.containerCounts), true);
-  assertEquals(Array.from(safePlan.values()).reduce((sum, a) => sum + a.minSections, 0) <= 46, true);
+  const normalizedIncomplete = fitAllocationToNovelBudget(inconsistent, { ...sparseRequest, requestedFormat: "novel" } as any);
+  assertEquals(Array.from(normalizedIncomplete.values()).every((plan) => plan.containerCounts !== undefined), true);
+  assertEquals(Array.from(normalizedIncomplete.values()).reduce((sum, plan) => sum + plan.minSections, 0) < 40, true);
   const allocation = parseAndValidateAllocation(JSON.stringify({
     allocations: [
       { beatIndex: 0, minSections: 20, containerCounts: counts, rationale: "large" },
@@ -631,10 +633,9 @@ Deno.test("container-aware allocation safely falls back on inconsistent counts a
     ],
   }), beats);
   const req = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
-  const fallbackPlan = fitAllocationToNovelBudget(allocation, req);
-  assertEquals(Array.from(fallbackPlan.values()).every((plan) => !plan.containerCounts), true);
-  assertEquals(Array.from(fallbackPlan.values()).reduce((sum, plan) => sum + plan.minSections, 0), 40);
-  assertEquals(Array.from(fallbackPlan.values()).every((plan) => plan.rationale.includes("mixed-section sizing fallback")), true);
+  const normalized = fitAllocationToNovelBudget(allocation, req);
+  assertEquals(Array.from(normalized.values()).every((plan) => plan.containerCounts !== undefined), true);
+  assertEquals(Array.from(normalized.values()).reduce((sum, plan) => sum + plan.minSections, 0) < 40, true);
 });
 
 Deno.test("existing accepted sections reduce unknown-mix planning capacity", () => {
@@ -644,7 +645,7 @@ Deno.test("existing accepted sections reduce unknown-mix planning capacity", () 
   assertEquals(maximumContainerPlannedNewSections(req), expected);
 });
 
-Deno.test("2% novel tolerance skips length-only expansion without weakening the hard cap", async () => {
+Deno.test("novel length tolerances separate under-target expansion from overshoot grace", async () => {
   assertEquals(NOVEL_EXPANSION_MIN_WORDS, 112700);
   const nearTarget = Array.from({ length: 27 }, () => ({ container: "chapter" }));
   const belowTolerance = Array.from({ length: 26 }, () => ({ container: "chapter" }));
@@ -653,7 +654,9 @@ Deno.test("2% novel tolerance skips length-only expansion without weakening the 
   assertEquals(needsNovelExpansion(nearTarget), false, "114,231 words is within the 2% tolerance");
   assertEquals(needsNovelExpansion(belowTolerance), true, "110k words still needs development");
   assertEquals(needsNovelExpansion(belowTolerance, [{ container: "chapter" }]), false, "existing accepted work counts once");
-  assertEquals(evaluateNovelScale(Array.from({ length: 30 }, () => ({ container: "chapter" }))).exceedsMaximum, true, "nominal 125k ceiling remains enforced");
+  assertEquals(NOVEL_MAX_GRACE_WORDS, 5000);
+  assertEquals(evaluateNovelScale(Array.from({ length: 30 }, () => ({ container: "chapter" }))).exceedsMaximum, false, "5,000-word grace remains accepted");
+  assertEquals(evaluateNovelScale(Array.from({ length: 31 }, () => ({ container: "chapter" }))).exceedsMaximum, true, "accepted grace ceiling is still bounded");
 
   let expansionCalls = 0;
   const result = await progressivelyExpandOutline(
@@ -693,16 +696,15 @@ Deno.test("budget normalization preserves one-section coverage per uncovered bea
   );
 });
 
-Deno.test("budget normalization fails explicitly when uncovered beats cannot fit", () => {
+Deno.test("budget normalization preserves uncovered beats when the existing draft is large", () => {
   const req = { ...sparseRequest, existingSections: Array.from({ length: 30 }, () => ({ container: "chapter" })) } as any;
   const allocation = new Map([
     ["beat-1", { minSections: 1, rationale: "opening" }],
     ["beat-2", { minSections: 1, rationale: "ending" }],
   ]);
-  let failure: unknown;
-  try { fitAllocationToNovelBudget(allocation, req); } catch (error) { failure = error; }
-  assertEquals(failure instanceof AllocationBudgetConstraintError, true);
-  assertStringIncludes((failure as Error).message, "previously uncovered Story Arc beats require coverage");
+  const fitted = fitAllocationToNovelBudget(allocation, req);
+  assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections === 1), true);
+  assertEquals(Array.from(fitted.values()).every((plan) => plan.containerCounts !== undefined), true);
 });
 
 Deno.test("allocation repair is terminal when a resumed checkpoint starts after round three", () => {
@@ -1139,17 +1141,15 @@ Deno.test("deterministic allocation budget constraints do not trigger a paid ret
     requestedFormat: "novel",
     existingSections: Array.from({ length: 30 }, () => ({ container: "chapter" })),
   } as any;
-  await assertRejects(
-    () => planSectionAllocation(req, "test-key", (async () => {
-      calls++;
-      return { content: JSON.stringify({ allocations: [
-        { beatIndex: 0, minSections: 1, rationale: "opening" },
-        { beatIndex: 1, minSections: 1, rationale: "closure" },
-      ] }), creditCostCharged: 1, remainingCredits: 1 };
-    }) as any),
-    AllocationBudgetConstraintError,
-  );
+  const allocation = await planSectionAllocation(req, "test-key", (async () => {
+    calls++;
+    return { content: JSON.stringify({ allocations: [
+      { beatIndex: 0, minSections: 1, rationale: "opening" },
+      { beatIndex: 1, minSections: 1, rationale: "closure" },
+    ] }), creditCostCharged: 1, remainingCredits: 1 };
+  }) as any);
   assertEquals(calls, 1);
+  assertEquals(allocation.size, 2);
 });
 
 Deno.test("global buildPrompt includes the requested concrete-event guardrails", () => {
@@ -2158,11 +2158,11 @@ Deno.test("optional expansion persists rejected provider attempt diagnostics", a
 
 Deno.test("budget fitting records partial acceptance and discarded candidates", () => {
   const current = Array.from({ length: 20 }, (_, index) => expansionSection(`Current ${index + 1}`, "chapter"));
-  const additions = Array.from({ length: 10 }, (_, index) => expansionSection(`Candidate ${index + 1}`, "chapter"));
+  const additions = Array.from({ length: 11 }, (_, index) => expansionSection(`Candidate ${index + 1}`, "chapter"));
   const fitted = fitExpansionAdditionsToBudget(current as any, additions as any, [], { round: 1 });
-  assertEquals(fitted.additions.length, 9);
-  assertEquals(fitted.attempt.returnedCount, 10);
-  assertEquals(fitted.attempt.acceptedCount, 9);
+  assertEquals(fitted.additions.length, 10);
+  assertEquals(fitted.attempt.returnedCount, 11);
+  assertEquals(fitted.attempt.acceptedCount, 10);
   assertEquals(fitted.attempt.rejectedCount, 1);
   assertEquals(fitted.attempt.budgetTruncated, true);
 });
