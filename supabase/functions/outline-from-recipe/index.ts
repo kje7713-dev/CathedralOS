@@ -2819,46 +2819,26 @@ function hasCreativeFidelityDirectives(recipe?: CanonicalRecipeEnvelope): boolea
   );
 }
 
-function authoredIntimacyRequirements(recipe?: CanonicalRecipeEnvelope): string[] {
-  return (Array.isArray(recipe?.storyNonNegotiables) ? recipe.storyNonNegotiables : [])
-    .map((item) => typeof item === "string" ? item : String((item as Record<string, unknown>)?.requirement ?? (item as Record<string, unknown>)?.statement ?? ""))
-    .map((value) => value.trim())
-    .filter((value) => /\b(?:sex(?:ual)?|intimacy|intimate|erotic|consummat(?:e|ion)|fade[ -]?to[ -]?black|open[ -]?door)\b/i.test(value));
-}
-
 export function intimacyRequirement(
   req: Pick<OutlineFromRecipeRequest, "recipe" | "arcTemplate">,
 ): { level: IntimacyMilestoneRating; roles: string[]; instruction: string } | null {
   const rating = normalizeIntimacyRating(req.recipe?.project?.intimacyRating) as string;
   const focus = req.arcTemplate.relationshipFocus ?? "none";
-  const authoredRequirements = authoredIntimacyRequirements(req.recipe);
-  const hasAuthoredRequirement = authoredRequirements.length > 0;
-  if (!hasAuthoredRequirement && (focus !== "primary" || rating === "unspecified")) return null;
-  if (!hasAuthoredRequirement && !["romantic", "fade_to_black", "open_door", "explicit"].includes(rating)) return null;
-  const templateRoles = Array.isArray(req.arcTemplate.intimacyMilestoneRoles)
+  if (focus !== "primary" || rating === "unspecified") return null;
+  if (!["romantic", "fade_to_black", "open_door", "explicit"].includes(rating)) return null;
+  const roles = Array.isArray(req.arcTemplate.intimacyMilestoneRoles)
     ? req.arcTemplate.intimacyMilestoneRoles.filter((role) => typeof role === "string" && role.trim() !== "")
     : [];
-  // An explicit author requirement outranks the template's relationship focus.
-  // With no template milestone roles, any beat may carry the requirement; the
-  // Story Non-Negotiable remains the authority for its exact frequency/content.
-  const roles = hasAuthoredRequirement && (focus !== "primary" || templateRoles.length === 0)
-    ? req.arcTemplate.beats.map((beat) => beat.role)
-    : templateRoles;
   if (roles.length === 0) return null;
-  const effectiveRating = ["romantic", "fade_to_black", "open_door", "explicit"].includes(rating)
-    ? rating as IntimacyMilestoneRating
-    : "explicit" as const;
-  const instruction = hasAuthoredRequirement
-    ? `The author explicitly requires this intimacy content independently of the Story Arc relationship focus: ${authoredRequirements.join(" | ")}. Treat those requirements as binding; do not suppress, reduce, or replace them with a generic relationship milestone. Preserve age and consent safety constraints.`
-    : effectiveRating === "romantic"
+  const instruction = rating === "romantic"
     ? "The relationship must cross an unmistakable romantic or physical threshold; attraction, affection, or kissing can satisfy this, and sexual activity is not required."
-    : effectiveRating === "fade_to_black"
+    : rating === "fade_to_black"
     ? "The outline must contain an earned consensual adult sexual-intimacy event. The Section Contract must make consummation/sexual activity clear, while the prose treatment transitions away before explicit activity is rendered."
-    : effectiveRating === "open_door"
+    : rating === "open_door"
     ? "The outline must contain an earned consensual adult sexual-intimacy event that occurs on-page."
     : "The outline must contain at least one earned consensual adult sexual-intimacy event that the Section Contract explicitly requires to occur on-page. Kissing, implication, rumpled sheets, an oversized shirt, waking together, erotic tension, or nudity without sexual activity do not satisfy this obligation.";
   return {
-    level: effectiveRating,
+    level: rating as IntimacyMilestoneRating,
     roles,
     instruction,
   };
@@ -4041,6 +4021,26 @@ export type SemanticVerificationResult = {
   unsatisfied: Array<{ beatID: string; obligationID: string; reason: string }>;
 };
 
+/**
+ * Prefer an accepted structural draft over a repair that did not objectively
+ * improve verification. This is deliberately not a literary score: the only
+ * comparison is the verifier's validated unresolved-obligation set.
+ */
+export function chooseBestSemanticOutline(
+  original: Suggestion[],
+  repaired: Suggestion[],
+  originalVerification?: Pick<SemanticVerificationResult, "unsatisfied">,
+  repairedVerification?: Pick<SemanticVerificationResult, "unsatisfied">,
+): Suggestion[] {
+  if (original.length === 0) return repaired;
+  if (repaired.length === 0) return original;
+  if (!repairedVerification) return original;
+  if (!originalVerification) return repaired;
+  return repairedVerification.unsatisfied.length < originalVerification.unsatisfied.length
+    ? repaired
+    : original;
+}
+
 const SEMANTIC_VERIFICATION_SCHEMA = {
   type: "object",
   properties: {
@@ -4161,7 +4161,7 @@ export async function verifyStoryArcSemantics(
 ): Promise<SemanticVerificationResult> {
   const input = semanticVerificationInput(suggestions, template, recipe);
   const raw = await billableCall(
-    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and the required whole-outline creative_fidelity assessment, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. For creative_fidelity, evaluate the sequence of dramatic events against the complete canonical recipe's premise, populated character and relationship directives, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience; do not pass merely because names or keywords appear. Planner-generated candidates are provisional and may be discarded. Accept procedural or institutional material when the recipe makes it central, and reject it only when it redirects the authored story. If rejecting, provide a grounded quote from the section that demonstrates the material drift. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
+    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and the required whole-outline creative_fidelity assessment, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. For creative_fidelity, evaluate the sequence of dramatic events against the complete canonical recipe's premise, populated character and relationship directives, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience; do not pass merely because names or keywords appear. This is a material-drift review, not a perfection or style score: a coherent, usable outline with minor weaknesses, uneven emphasis, legitimate mixed-genre scenes, or editorial opportunities is satisfied. Planner-generated candidates are provisional and may be discarded. Accept procedural or institutional material when the recipe makes it central, and reject it only when it fundamentally redirects the authored story or omits essential creative commitments needed for a usable outline. If rejecting, provide a grounded quote from the section that demonstrates the material drift. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
@@ -6001,7 +6001,13 @@ export async function runSuggestionJob(
       }
       diagnostics = { ...diagnostics, stage: "semantic_verified", semanticVerification: verification };
       if (verification.unsatisfied.length > 0) {
-        planningState = { ...planningState, phase: "semantic_repair_pending", nextAction: "semantic-repair", semanticRepairFailures: verification.unsatisfied };
+        planningState = {
+          ...planningState,
+          phase: "semantic_repair_pending",
+          nextAction: "semantic-repair",
+          semanticRepairFailures: verification.unsatisfied,
+          semanticRepairOriginalSuggestions: persistedSemanticSuggestions,
+        };
         diagnostics = { ...diagnostics, stage: "semantic_repair_pending", semanticRepairFailures: verification.unsatisfied };
         await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
         throw new SuggestionWorkerYield();
@@ -6011,6 +6017,9 @@ export async function runSuggestionJob(
       return;
     }
     if (planningState.nextAction === "semantic-repair") {
+      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
+        ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
+        : persistedSemanticSuggestions;
       let repaired = persistedSemanticSuggestions;
       try {
         repaired = await repairStoryArcSemanticObligations(
@@ -6025,34 +6034,54 @@ export async function runSuggestionJob(
         recordSemanticWarning(`Semantic repair was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
         planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
         diagnostics = { ...diagnostics, stage: "semantic_repair_warning" };
-        await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(repaired);
+        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(originalSemanticSuggestions);
         return;
       }
-      planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification" };
+      planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification", semanticRepairOriginalSuggestions: originalSemanticSuggestions };
       const { semanticRepairProviderCheckpoint: _semanticRepairProviderCheckpoint, ...diagnosticsAfterRepair } = diagnostics;
       diagnostics = { ...diagnosticsAfterRepair, stage: "semantic_reverification_pending" };
       await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
       throw new SuggestionWorkerYield();
     }
     if (planningState.nextAction === "semantic-reverification") {
+      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
+        ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
+        : persistedSemanticSuggestions;
+      const originalVerification = diagnostics.semanticVerification as SemanticVerificationResult | undefined;
       let verification: SemanticVerificationResult | undefined;
       try {
         verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
       } catch (error) {
-        recordSemanticWarning(`Semantic re-verification was unavailable; continuing with the repaired outline: ${error instanceof Error ? error.message : String(error)}`);
+        recordSemanticWarning(`Semantic re-verification was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
         planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_reverification_warning" };
-        await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(persistedSemanticSuggestions);
+        diagnostics = { ...diagnostics, stage: "semantic_reverification_warning", semanticRepairFallback: "original_outline_provider_unavailable" };
+        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(originalSemanticSuggestions);
         return;
       }
-      diagnostics = { ...diagnostics, stage: "semantic_reverified", semanticVerification: verification };
-      await updateRun({ suggestions: persistedSemanticSuggestions, diagnostics });
+      const selectedSuggestions = chooseBestSemanticOutline(originalSemanticSuggestions, persistedSemanticSuggestions, originalVerification, verification);
+      const selectedRepaired = selectedSuggestions === persistedSemanticSuggestions;
+      diagnostics = {
+        ...diagnostics,
+        stage: "semantic_reverified",
+        semanticVerification: verification,
+        ...(selectedRepaired ? {} : {
+          semanticRepairFallback: "original_outline_preserved_no_objective_improvement",
+          semanticRepairOriginalUnresolved: originalVerification?.unsatisfied.length ?? null,
+          semanticRepairCandidateUnresolved: verification.unsatisfied.length,
+        }),
+      };
       if (verification.unsatisfied.length > 0) {
-        recordSemanticWarning(`Semantic obligations remained after bounded repair; continuing with the best repaired outline (${verification.unsatisfied.length} unresolved).`);
+        recordSemanticWarning(
+          selectedRepaired
+            ? `Semantic obligations remained after bounded repair; continuing with the repaired outline (${verification.unsatisfied.length} unresolved).`
+            : `Semantic repair did not objectively improve the outline; preserving the original usable paid draft (${verification.unsatisfied.length} unresolved in the repair candidate).`,
+        );
       }
-      await continueAfterSemanticVerification(persistedSemanticSuggestions);
+      planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
+      await updateRun({ suggestions: selectedSuggestions, planning_state: planningState, diagnostics });
+      await continueAfterSemanticVerification(selectedSuggestions);
       return;
     }
     if (planningState.nextAction === "story-arc-repair" || planningState.nextAction === "story-arc-repair-completion") {

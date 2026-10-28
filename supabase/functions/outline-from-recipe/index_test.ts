@@ -121,6 +121,7 @@ import {
   repairStoryArcSemanticObligations,
   SELECTED_INTIMACY_LEVEL_OBLIGATION,
   CREATIVE_FIDELITY_OBLIGATION,
+  chooseBestSemanticOutline,
   REQUIRED_RESOLUTION_OUTCOME_OBLIGATION,
   verificationObligationsForBeat,
   planSectionAllocation,
@@ -6679,17 +6680,32 @@ Deno.test("creative authority keeps planner candidates provisional in enrichment
   assertStringIncludes(prompt, "do not promote a planner proposal to canon");
 });
 
-Deno.test("authored intimacy requirement overrides a non-romance Story Arc focus", () => {
-  const recipe: any = {
-    ...sparseRequest.recipe,
-    project: { ...sparseRequest.recipe.project, intimacyRating: "explicit" },
-    storyNonNegotiables: ["Frequent, repeated explicit sexual encounters remain part of the characters' established coping pattern."],
-  };
+Deno.test("intimacy permission and non-negotiables do not manufacture a Story Arc milestone", () => {
   const template: any = { name: "Epic Fantasy Quest", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "b", role: "setup", label: "Setup" }] };
-  const requirement = intimacyRequirement({ recipe, arcTemplate: template });
-  assertEquals(requirement?.level, "explicit");
-  assertEquals(requirement?.roles, ["setup"]);
-  assertStringIncludes(intimacyPlanningDirective({ recipe, arcTemplate: template }), "independently of the Story Arc relationship focus");
+  const permissiveRecipe: any = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, intimacyRating: "explicit" } };
+  assertEquals(intimacyRequirement({ recipe: permissiveRecipe, arcTemplate: template }), null);
+  const negativeRecipe: any = { ...permissiveRecipe, storyNonNegotiables: ["No sexual content." ] };
+  assertEquals(intimacyRequirement({ recipe: negativeRecipe, arcTemplate: template }), null);
+  assertEquals((semanticVerificationInput([], template, negativeRecipe).arcWideObligations as any[]).some((item) => item.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION), false);
+});
+
+Deno.test("explicit authored non-negotiables remain in the verifier without changing generic arc intimacy", () => {
+  const recipe: any = { ...sparseRequest.recipe, storyNonNegotiables: ["The author requires frequent explicit sexual content between consenting adults."] };
+  const template: any = { name: "Epic Fantasy Quest", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  assertEquals(intimacyRequirement({ recipe, arcTemplate: template }), null);
+  const input: any = semanticVerificationInput([], template, recipe);
+  assertEquals(input.storyNonNegotiables[0].instruction, recipe.storyNonNegotiables[0]);
+  assertEquals(input.arcWideObligations.some((item: any) => item.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION), false);
+  assertEquals(intimacyPlanningDirective({ recipe, arcTemplate: template } as any), "");
+});
+
+Deno.test("semantic repair preserves the best usable paid outline", () => {
+  const original: any[] = [{ title: "Original", storyArcBeatID: "b", dramaticEvent: "The authored conflict advances." }];
+  const repaired: any[] = [{ title: "Repair", storyArcBeatID: "b", dramaticEvent: "A generic subplot replaces the conflict." }];
+  const unresolved = { unsatisfied: [{ beatID: "b", obligationID: CREATIVE_FIDELITY_OBLIGATION, reason: "drift" }] } as any;
+  assertEquals(chooseBestSemanticOutline(original as any, repaired as any, unresolved, unresolved), original);
+  assertEquals(chooseBestSemanticOutline(original as any, repaired as any, unresolved, { unsatisfied: [] }), repaired);
+  assertEquals(chooseBestSemanticOutline(original as any, repaired as any, unresolved, undefined), original);
 });
 
 Deno.test("creative-fidelity verifier rejects procedural drift and routes it to the affected beat", async () => {
