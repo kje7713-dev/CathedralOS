@@ -94,6 +94,8 @@ export interface BillableProviderOptions {
   responseFormatTarget?: "chat" | "responses";
   temperature?: number;
   reasoningEffort?: "low" | "medium" | "high";
+  /** Provider service tier requested for this call. */
+  serviceTier?: "default" | "fast";
   /** PR-372: cache capability for this request. */
   cacheMode?: "none" | "implicit" | "explicit";
   /** PR-372: stable cache key for grouping related requests. */
@@ -228,6 +230,7 @@ function providerAttemptRequestMetadata(
       messageCount: req.messages.length,
       messageBytes: new TextEncoder().encode(JSON.stringify(req.messages)).byteLength,
       maxOutputTokens: req.maxOutputTokens,
+      serviceTier: req.providerOptions?.serviceTier ?? null,
       responseFormat: (() => {
         const format = req.providerOptions?.responseFormat as Record<string, unknown> | undefined;
         const schema = format?.json_schema as Record<string, unknown> | undefined;

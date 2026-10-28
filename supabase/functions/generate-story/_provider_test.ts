@@ -339,6 +339,20 @@ Deno.test("OpenAIProvider: Responses structured output preserves cache boundary"
   }
 });
 
+Deno.test("OpenAIProvider: forwards Fast service tier", async () => {
+  installFetchStub(chatCompletionsResponse("ok"));
+  try {
+    const provider = new OpenAIProvider("test-key", "gpt-6-luna", PROVIDER_TIMEOUT_MS);
+    await provider.complete([], 16000, "gpt-6-luna", {
+      responseFormat: { type: "json_schema", json_schema: { name: "outline", strict: true, schema: { type: "object" } } },
+      serviceTier: "fast",
+    });
+    assertEquals(lastRequest?.body.service_tier, "fast");
+  } finally {
+    uninstallFetchStub();
+  }
+});
+
 Deno.test("OpenAIProvider: responseFormat absent preserves Responses API path", async () => {
   installFetchStub(responsesApiResponse("ok"));
   try {

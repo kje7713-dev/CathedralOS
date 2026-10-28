@@ -381,6 +381,8 @@ export interface LLMProviderOptions {
   /** Sampling temperature (0-2). Only forwarded by the chat/completions path. */
   temperature?: number;
   reasoningEffort?: ReasoningEffort;
+  /** Provider service tier requested for this call. */
+  serviceTier?: "default" | "fast";
   /** PR-372: cache capability for this request. */
   cacheMode?: "none" | "implicit" | "explicit";
   /** PR-372: stable cache key for grouping related requests. Generate-story
@@ -524,6 +526,7 @@ export class OpenAIProvider implements LLMProvider {
           : options.responseFormat,
       };
     }
+    if (options?.serviceTier) body.service_tier = options.serviceTier;
     if (options?.promptCacheKey) {
       body.prompt_cache_key = options.promptCacheKey;
     }
@@ -698,6 +701,7 @@ export class OpenAIProvider implements LLMProvider {
     if (reasoningEffort) {
       body.reasoning_effort = reasoningEffort;
     }
+    if (options.serviceTier) body.service_tier = options.serviceTier;
     // PR-372: chat/completions supports prompt_cache_key but NOT
     // prompt_cache_options / prompt_cache_breakpoint (those are Responses
     // API only). When the caller passes cacheMode === "explicit" through

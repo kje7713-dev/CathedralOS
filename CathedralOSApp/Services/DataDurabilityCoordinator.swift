@@ -1486,6 +1486,14 @@ final class DataDurabilityCoordinator: ObservableObject {
             } catch is CancellationError {
                 break
             } catch let error as OutlineSuggestionError {
+                if case .notAuthenticated = error {
+                    markSuggestionConnectionUnavailable(
+                        metadata,
+                        message: "Your sign-in session expired. Reopen the app to refresh it, then reconnect to reconcile the original run before retrying."
+                    )
+                    suggestionPollingTasks[metadata.projectID] = nil
+                    return
+                }
                 guard OutlineSuggestionService.isReconnectable(error) else {
                     failSuggestionRun(metadata.projectID, message: error.localizedDescription)
                     suggestionPollingTasks[metadata.projectID] = nil

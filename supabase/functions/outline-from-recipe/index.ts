@@ -4826,11 +4826,11 @@ export function isRetryableSemanticRepairFailure(run: {
 // margin for request setup, billing settlement, and the durable checkpoint;
 // a 150s provider deadline can be killed by the platform before it throws.
 export const SUPABASE_FREE_WALL_CLOCK_MS = 150_000;
-export const OUTLINE_PROVIDER_TIMEOUT_MS = 130_000;
-// GPT-5.4 mini accepts a larger structured completion than the former 16K
-// ceiling, but 128K exceeds the model-safe request budget for this planner.
-// Keep enough room for a full novel outline without sending an invalid request.
-export const OUTLINE_OUTPUT_TOKEN_BUDGET = 32_000;
+export const OUTLINE_PROVIDER_TIMEOUT_MS = 120_000;
+// The selected GPT-5.4 mini deployment rejects larger structured completion
+// budgets. Keep this at the verified 16K provider ceiling; planning scale is
+// controlled by the bounded expansion stages rather than an invalid request.
+export const OUTLINE_OUTPUT_TOKEN_BUDGET = 16_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
 export const MAX_SUGGESTION_ATTEMPTS = 5;
 export const MAX_SUGGESTION_NO_PROGRESS_MS = 10 * 60 * 1000;
@@ -5368,6 +5368,13 @@ export async function runSuggestionJob(
       );
     }
     providerModelForAlert = model.provider_model ?? selectedModelID;
+    // Fast mode is a 2x provider-price tier for GPT-6 Luna. Keep the catalog's
+    // verified standard rates unchanged and apply the multiplier only to this
+    // request, so preflight, settlement, and cost telemetry agree.
+    const serviceTier = model.provider_model === "gpt-6-luna" ? "fast" as const : undefined;
+    const billableModel = serviceTier === "fast"
+      ? { ...model, billing_multiplier: model.billing_multiplier * 2 }
+      : model;
     const creditStore = dependencies.creditStore ?? new SupabaseCreditStore(db);
     const provider = dependencies.provider ?? new OpenAIProvider(
       openaiKey,
@@ -5459,13 +5466,14 @@ export async function runSuggestionJob(
         userID: userId,
         purpose: "outline-suggestion",
         action,
-        model,
+        model: billableModel,
         messages,
         maxOutputTokens,
         providerOptions: {
           responseFormat,
           ...(supportsCustomTemperature(model) ? { temperature: 0.7 } : {}),
           reasoningEffort: body.reasoningEffort,
+          serviceTier,
           cacheMode: model.cacheMode,
           promptCacheKey: model.cacheMode === "none" ? undefined : promptCacheKey,
         },

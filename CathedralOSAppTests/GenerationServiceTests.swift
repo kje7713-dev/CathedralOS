@@ -550,6 +550,31 @@ final class GenerationServiceTests: XCTestCase {
 }
 
 
+final class OutlineSuggestionAuthContractTests: XCTestCase {
+    func testSupabaseGatewayExpiredJWTTriggersRefresh() {
+        let response = HTTPURLResponse(
+            url: URL(string: "https://example.invalid")!,
+            statusCode: 401,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+
+        XCTAssertTrue(OutlineSuggestionAuthContractTests.expired(
+            #"{\"code\":\"bad_jwt\",\"message\":\"token is expired\"}"#
+        , response: response))
+        XCTAssertTrue(OutlineSuggestionAuthContractTests.expired(
+            #"{\"error\":\"token has invalid claims: token is expired\"}"#
+        , response: response))
+        XCTAssertFalse(OutlineSuggestionAuthContractTests.expired(
+            #"{\"error\":\"permission denied\"}"#
+        , response: response))
+    }
+
+    private static func expired(_ body: String, response: HTTPURLResponse) -> Bool {
+        AuthSessionResolver.isExpiredJWTResponse(data: Data(body.utf8), response: response)
+    }
+}
+
 final class OutlineSuggestionTransportContractTests: XCTestCase {
     func testCancellationAndTransientTransportErrorsReconnect() {
         XCTAssertTrue(OutlineSuggestionService.isReconnectable(.cancelled))
