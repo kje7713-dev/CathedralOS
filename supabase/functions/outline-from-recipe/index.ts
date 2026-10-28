@@ -83,7 +83,7 @@ import {
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 // Requests that omit modelID use the fixed Suggest Sections default.
 // Persisted runs with an explicit modelID retain that identity during recovery.
-export const LEGACY_PLANNING_MODEL_ID = "gpt-5.4-mini";
+export const LEGACY_PLANNING_MODEL_ID = "gpt-6-luna";
 const OPENAI_MODEL = LEGACY_PLANNING_MODEL_ID;
 
 /** Maps every physical outline action to one logical billing/cache stage. */
@@ -1742,9 +1742,9 @@ export function recoverablePlanningModelID(
 export function canonicalizeNewPlanningRequest(
   body: OutlineFromRecipeRequest,
 ): OutlineFromRecipeRequest {
-  return body.modelID && body.modelID.trim()
-    ? body
-    : { ...body, modelID: LEGACY_PLANNING_MODEL_ID };
+  // Suggest Sections is intentionally Luna Fast. Ignore stale client model
+  // preferences so an older app cannot route planner work to GPT-5.4 mini.
+  return { ...body, modelID: LEGACY_PLANNING_MODEL_ID };
 }
 
 export function isLegacyPlanningRequest(requestJSON: unknown): boolean {
