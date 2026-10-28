@@ -4393,29 +4393,24 @@ const CLOSURE_SIGNALS = /\b(settle(?:s|d)?|stabiliz(?:e|es|ed)|new normal|afterm
 // in the Section Contract and rejects plainly ongoing/nondecisive prose. It
 // does not require victory, justice, reconciliation, or institutional success.
 const RESOLUTION_STATE_BOUNDARY = /\b(?:no longer|can(?:not|'t)\s+continue|impossible|permanently|forever|destroy(?:s|ed|ing)?|end(?:s|ed|ing)?|gone|over|fail(?:s|ed|ure)?|abandon(?:s|ed|ing)?|resolved?|settle(?:s|d)?|resolve(?:s|d)?|new normal|sever(?:s|ed|ing)?|dead|die(?:s|d)?|cannot reopen)\b/i;
-const RESOLUTION_OPEN_STATE = /\b(?:make(?:s|d)?\s+no\s+decision|consider(?:s|ed|ing)?\s+(?:their\s+)?options|discuss(?:es|ed|ing)?\s+(?:their\s+)?options|continues?\s+untouched|remain(?:s|ed)?\s+trapped|continues?\s+beyond|remain(?:s|ed)?\s+unresolved|aftermath\s+continues?)\b/i;
-
-function resolutionEvidenceText(section: Suggestion): string {
-  return [section.dramaticEvent, section.resultingChange, section.terminalState]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
 export function hasConcreteResolutionOutcome(section: Suggestion): boolean {
   const change = String(section.resultingChange ?? "").trim();
   const terminal = String(section.terminalState ?? "").trim();
   if (!change || !terminal) return false;
-  const evidence = resolutionEvidenceText(section);
-  // A populated pair of fields, different wording, or narrative movement is
+  const achievedState = `${change} ${terminal}`.toLowerCase();
+  // A populated pair of fields, different wording, or an attempted action in
+  // dramaticEvent is not an outcome. Only the achieved state fields establish
+  // the positive resolution boundary.
   // insufficient. Require an explicit finite boundary: destruction, failure,
   // permanent impossibility, abandonment, separation, a changed normal, or
   // another completed state transition. Wider mysteries may remain open when
   // the particular conflict represented by the section has crossed that
   // boundary.
-  if (!RESOLUTION_STATE_BOUNDARY.test(evidence)) return false;
-  if (RESOLUTION_OPEN_STATE.test(evidence) && !RESOLUTION_STATE_BOUNDARY.test(change)) return false;
-  return true;
+  // A boundary in only one field can describe a failed attempt, a death, or
+  // an isolated consequence while the actual conflict continues. Require the
+  // resulting change and terminal state to both record a finite achieved
+  // condition. This is structural evidence, not a claim of literary meaning.
+  return RESOLUTION_STATE_BOUNDARY.test(change) && RESOLUTION_STATE_BOUNDARY.test(terminal);
 }
 
 function inferredFunction(suggestion: Suggestion): DramaticFunction | null {

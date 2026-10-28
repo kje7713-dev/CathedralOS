@@ -3380,7 +3380,11 @@ Deno.test("PR3 falling action allows consequences but not a new primary conflict
   const pass = validateStoryArcSemantics([
     semanticSection("climax", "The Turning Choice", "Brody makes the irreversible choice that ends the central confrontation.", "climax"),
     semanticSection("fall", "The Coalition Breaks", "The defeated coalition collapses and secondary alliances negotiate the consequences.", "consequence"),
-    semanticSection("den", "A New Balance", "The new order settles and the surviving relationships find a changed normal.", "resolution"),
+    {
+      ...semanticSection("den", "A New Balance", "The new order settles and the surviving relationships find a changed normal.", "resolution"),
+      resultingChange: "The central conflict settles and the surviving relationships accept a changed normal.",
+      terminalState: "The new order holds after the former conflict ends.",
+    },
   ] as any, freytagFixture);
   assertEquals(pass, []);
   const fail = validateStoryArcSemantics([
@@ -3399,14 +3403,26 @@ Deno.test("PR3 Hero's Journey Resurrection remains a legal late climactic test",
   assertEquals(arcRoleContract(template.beats[1], template.name).allowedFunctions.includes("climax"), true);
   assertEquals(validateStoryArcSemantics([
     semanticSection("res", "The Final Test", "The hero faces the final climactic test and transforms.", "climax"),
-    semanticSection("return", "The Changed World", "The hero returns with the elixir and a new normal settles.", "resolution"),
+    {
+      ...semanticSection("return", "The Changed World", "The hero returns with the elixir and a new normal settles.", "resolution"),
+      resultingChange: "The former conflict resolves and the hero accepts the cost of return.",
+      terminalState: "A new normal holds after the old threat ends.",
+    },
   ] as any, template), []);
 });
 
 Deno.test("PR3 server repair reassigns a locally misallocated decisive section", () => {
   const result = repairStoryArcMacroStructure([
-    semanticSection("den", "The Open Bid for Rule", "Brody launches a citywide takeover and seizes the government.", "resolution"),
-    semanticSection("den", "The Quiet Settlement", "The surviving relationships settle into a changed normal.", "resolution"),
+    {
+      ...semanticSection("den", "The Open Bid for Rule", "Brody launches a citywide takeover and seizes the government.", "resolution"),
+      resultingChange: "The takeover begins but the central conflict remains unsettled.",
+      terminalState: "The government is seized while the primary confrontation continues.",
+    },
+    {
+      ...semanticSection("den", "The Quiet Settlement", "The surviving relationships settle into a changed normal.", "resolution"),
+      resultingChange: "The surviving relationships settle into a changed normal.",
+      terminalState: "The former conflict ends and the new order holds.",
+    },
   ] as any, freytagFixture);
   assertEquals(result.repaired.length, 1);
   assertEquals(result.suggestions.some((section) => section.storyArcBeatID === "climax"), true);
@@ -3696,6 +3712,24 @@ Deno.test("resolution validation rejects movement without outcome and accepts co
     resultingChange: "Ted and Fred consider their options but make no decision.",
     terminalState: "The central operation continues untouched and the protagonists remain trapped.",
   };
+  const failedTransmitter: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "Ted tries to destroy the alien transmitter but fails.",
+    resultingChange: "Ted and Fred retreat to regroup without disabling the transmitter.",
+    terminalState: "The alien transmitter remains active and the invasion is still approaching.",
+  };
+  const postponedConspiracy: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "Ted unsuccessfully attempts to end the conspiracy.",
+    resultingChange: "Ted postpones the decisive confrontation until tomorrow.",
+    terminalState: "The conspiracy still operates and the agents continue their pursuit.",
+  };
+  const deadButThreatContinues: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "The protagonist dies while confronting the alien presence.",
+    resultingChange: "The protagonist is gone, but the central threat is untouched.",
+    terminalState: "The invasion continues and the central dramatic question remains open.",
+  };
   const discussionOnly: any = {
     dramaticFunction: "resolution",
     dramaticEvent: "The characters discuss the available options through the night.",
@@ -3744,7 +3778,7 @@ Deno.test("resolution validation rejects movement without outcome and accepts co
     resultingChange: "The survivors mourn what was lost.",
     terminalState: "The aftermath remains unresolved as they wonder what comes next.",
   };
-  for (const section of [tedFredPerimeter, discussionOnly, mourningOnly, aftermathOnly]) {
+  for (const section of [tedFredPerimeter, failedTransmitter, postponedConspiracy, deadButThreatContinues, discussionOnly, mourningOnly, aftermathOnly]) {
     assertEquals(hasConcreteResolutionOutcome(section), false);
   }
   for (const section of [destructive, failedDecisively, abandonedObjective, ambiguous, conventional]) {
@@ -3754,7 +3788,7 @@ Deno.test("resolution validation rejects movement without outcome and accepts co
   for (const section of [destructive, failedDecisively, abandonedObjective, ambiguous, conventional]) {
     assertEquals(validateRequiredStoryArcFunctions([{ ...section, storyArcBeatID: "final" }], template), []);
   }
-  for (const section of [tedFredPerimeter, discussionOnly, mourningOnly, aftermathOnly]) {
+  for (const section of [tedFredPerimeter, failedTransmitter, postponedConspiracy, deadButThreatContinues, discussionOnly, mourningOnly, aftermathOnly]) {
     assertEquals(validateRequiredStoryArcFunctions([{ ...section, storyArcBeatID: "final" }], template).length, 1);
   }
 });
