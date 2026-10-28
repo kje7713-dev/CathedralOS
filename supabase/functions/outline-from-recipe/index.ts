@@ -4388,18 +4388,12 @@ export async function repairStoryArcSemanticObligations(
 const PRIMARY_CONFLICT_SIGNALS = /\b(?:launch(?:es|ed)?\s+(?:a|the|another)\s+(?:larger\s+)?decisive\s+assault|launch(?:es|ed)?\s+(?:a|the|another)\s+(?:citywide\s+)?takeover|mount(?:s|ed)?\s+(?:a|the)\s+decisive\s+assault|wage(?:s|d)?\s+(?:a|the)\s+war|attack(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|assault(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|invade(?:s|d)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|conquer(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|take\s+over\s+(?:the|a)\s+(?:government|kingdom|empire)|seize(?:s|d)?\s+(?:the|a)\s+(?:government|throne|kingdom|empire)|overthrow(?:s|n)?\s+(?:the|a)\s+(?:government|regime|kingdom)|citywide\s+takeover)\b/i;
 const CLOSURE_SIGNALS = /\b(settle(?:s|d)?|stabiliz(?:e|es|ed)|new normal|aftermath|mourning|rebuild(?:s|ing)?|govern(?:s|ed|ance)|peace|accept(?:s|ed)?|legacy|closing image)\b/;
 // “Aftermath” describes what follows an ending; it does not itself answer
-// the central dramatic question. Resolution validation therefore checks the
-// shape of the Section Contract rather than requiring a preferred vocabulary
-// such as justice, peace, restoration, or institutional success.
-const RESOLUTION_ATMOSPHERE_WORDS = new Set([
-  "aftermath", "remember", "remembers", "remembered", "mourn", "mourning",
-  "stare", "stares", "stared", "horizon", "wonder", "wonders", "wondered",
-  "next", "unresolved", "continues", "continuing", "residue", "mood",
-  "reflection", "reflect", "reflects", "reflecting", "quiet", "silence",
-  "silent", "memory", "memories", "survivors", "protagonists", "happened", "lost", "what", "comes", "remain", "remains",
-  "the", "and", "as", "they", "to", "a", "of", "in", "on", "at", "for", "can", "is", "are", "was",
-  "state", "states", "change", "changes", "changed", "materially", "consequence", "consequences",
-]);
+// the central dramatic question. This deterministic gate cannot establish
+// literary meaning, so it deliberately asks only for a finite state boundary
+// in the Section Contract and rejects plainly ongoing/nondecisive prose. It
+// does not require victory, justice, reconciliation, or institutional success.
+const RESOLUTION_STATE_BOUNDARY = /\b(?:no longer|can(?:not|'t)\s+continue|impossible|permanently|forever|destroy(?:s|ed|ing)?|end(?:s|ed|ing)?|gone|over|fail(?:s|ed|ure)?|abandon(?:s|ed|ing)?|resolved?|settle(?:s|d)?|resolve(?:s|d)?|new normal|sever(?:s|ed|ing)?|dead|die(?:s|d)?|cannot reopen)\b/i;
+const RESOLUTION_OPEN_STATE = /\b(?:make(?:s|d)?\s+no\s+decision|consider(?:s|ed|ing)?\s+(?:their\s+)?options|discuss(?:es|ed|ing)?\s+(?:their\s+)?options|continues?\s+untouched|remain(?:s|ed)?\s+trapped|continues?\s+beyond|remain(?:s|ed)?\s+unresolved|aftermath\s+continues?)\b/i;
 
 function resolutionEvidenceText(section: Suggestion): string {
   return [section.dramaticEvent, section.resultingChange, section.terminalState]
@@ -4413,18 +4407,15 @@ export function hasConcreteResolutionOutcome(section: Suggestion): boolean {
   const terminal = String(section.terminalState ?? "").trim();
   if (!change || !terminal) return false;
   const evidence = resolutionEvidenceText(section);
-  const tokens = evidence.match(/[a-z0-9]+/g) ?? [];
-  const substantiveTokens = tokens.filter((token) => !RESOLUTION_ATMOSPHERE_WORDS.has(token));
-  const unresolvedContinuation = /\b(?:unresolved|continues beyond|remains unresolved)\b/.test(evidence);
-  const continuingConsequences = /\bconsequences continue\b/.test(evidence);
-  const concreteTermination = /\b(?:destroyed|destroy|ends?|ended|disappear(?:s|ed)?|gone|over|cannot reopen|no longer|burn(?:s|ed)?|die(?:s|d)?|dead|sever(?:s|ed)?)\b/.test(evidence);
-  const completedChangedNormal = /\b(?:settles?|new normal|resolved?|ends?|over)\b/.test(evidence);
-  // A resolution may be destructive, tragic, ambiguous, or morally compromised.
-  // Reject only contracts whose evidence is still entirely atmospheric/unresolved
-  // or explicitly leaves the central state continuing without a concrete terminal
-  // consequence. No preferred moral or genre outcome is required.
-  if ((unresolvedContinuation && !concreteTermination) || (continuingConsequences && !completedChangedNormal && !concreteTermination)) return false;
-  return substantiveTokens.length >= 2 && change !== terminal;
+  // A populated pair of fields, different wording, or narrative movement is
+  // insufficient. Require an explicit finite boundary: destruction, failure,
+  // permanent impossibility, abandonment, separation, a changed normal, or
+  // another completed state transition. Wider mysteries may remain open when
+  // the particular conflict represented by the section has crossed that
+  // boundary.
+  if (!RESOLUTION_STATE_BOUNDARY.test(evidence)) return false;
+  if (RESOLUTION_OPEN_STATE.test(evidence) && !RESOLUTION_STATE_BOUNDARY.test(change)) return false;
+  return true;
 }
 
 function inferredFunction(suggestion: Suggestion): DramaticFunction | null {

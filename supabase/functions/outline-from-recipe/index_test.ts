@@ -3689,7 +3689,25 @@ Deno.test("targeted Story Arc repair skips healthy resolutions and preserves fai
   assertEquals(failed.suggestions, [aftermathOnly]);
 });
 
-Deno.test("resolution validation accepts concrete destructive and ambiguous outcomes but rejects aftermath", () => {
+Deno.test("resolution validation rejects movement without outcome and accepts complete unconventional endings", () => {
+  const tedFredPerimeter: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "Ted watches the surveillance forces tighten their perimeter.",
+    resultingChange: "Ted and Fred consider their options but make no decision.",
+    terminalState: "The central operation continues untouched and the protagonists remain trapped.",
+  };
+  const discussionOnly: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "The characters discuss the available options through the night.",
+    resultingChange: "They understand the risks but take no action.",
+    terminalState: "The dispute remains open and the same decision awaits them.",
+  };
+  const mourningOnly: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "The survivors mourn beside the site of the conflict.",
+    resultingChange: "They remember what was lost and share their grief.",
+    terminalState: "The aftermath continues while everyone wonders what comes next.",
+  };
   const destructive: any = {
     dramaticFunction: "resolution",
     dramaticEvent: "The central alien device is destroyed before it can open the breach.",
@@ -3701,6 +3719,18 @@ Deno.test("resolution validation accepts concrete destructive and ambiguous outc
     dramaticEvent: "Mara burns the evidence and walks away from both factions.",
     resultingChange: "Neither faction can claim the evidence, and Mara permanently abandons the cause she started.",
     terminalState: "The public outcome is uncertain, but the central struggle for the evidence is over and Mara is gone.",
+  };
+  const failedDecisively: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "The protagonists fail to reach the archive before it burns.",
+    resultingChange: "Their objective becomes permanently impossible, and the evidence cannot be recovered.",
+    terminalState: "The archive is gone and the investigation can never proceed through that evidence.",
+  };
+  const abandonedObjective: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "Mara abandons the campaign rather than sacrifice another recruit.",
+    resultingChange: "She permanently abandons the central objective, forfeiting the alliance it required.",
+    terminalState: "The campaign is over and the abandoned objective reshapes the group's future.",
   };
   const conventional: any = {
     dramaticFunction: "resolution",
@@ -3714,15 +3744,19 @@ Deno.test("resolution validation accepts concrete destructive and ambiguous outc
     resultingChange: "The survivors mourn what was lost.",
     terminalState: "The aftermath remains unresolved as they wonder what comes next.",
   };
-  assertEquals(hasConcreteResolutionOutcome(destructive), true);
-  assertEquals(hasConcreteResolutionOutcome(ambiguous), true);
-  assertEquals(hasConcreteResolutionOutcome(conventional), true);
-  assertEquals(hasConcreteResolutionOutcome(aftermathOnly), false);
+  for (const section of [tedFredPerimeter, discussionOnly, mourningOnly, aftermathOnly]) {
+    assertEquals(hasConcreteResolutionOutcome(section), false);
+  }
+  for (const section of [destructive, failedDecisively, abandonedObjective, ambiguous, conventional]) {
+    assertEquals(hasConcreteResolutionOutcome(section), true);
+  }
   const template: any = { name: "Save the Cat!", beats: [{ id: "final", role: "final_image", label: "Final Image" }] };
-  for (const section of [destructive, ambiguous, conventional]) {
+  for (const section of [destructive, failedDecisively, abandonedObjective, ambiguous, conventional]) {
     assertEquals(validateRequiredStoryArcFunctions([{ ...section, storyArcBeatID: "final" }], template), []);
   }
-  assertEquals(validateRequiredStoryArcFunctions([{ ...aftermathOnly, storyArcBeatID: "final" }], template).length, 1);
+  for (const section of [tedFredPerimeter, discussionOnly, mourningOnly, aftermathOnly]) {
+    assertEquals(validateRequiredStoryArcFunctions([{ ...section, storyArcBeatID: "final" }], template).length, 1);
+  }
 });
 
 Deno.test("resolution validation ignores generic acceptance and uses state-change fields", () => {
