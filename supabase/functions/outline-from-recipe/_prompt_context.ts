@@ -11,6 +11,15 @@ export function compactArcNarrativeText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+export const RECIPE_CREATIVE_AUTHORITY_DIRECTIVE = `## Creative authority and Story Arc precedence
+1. The canonical authored recipe and author instructions define the story's identity: premise, genre, tone, characters, relationships, world rules, intended reader experience, and ending direction.
+2. Author-customized Story Arc beat content is structural guidance interpreted consistently with that recipe.
+3. Generic Story Arc contracts supply progression, escalation, reversal, crisis, climax, and consequence only.
+4. Planner-invented enrichment is provisional support material; it must not displace, soften, contradict, or redirect the authored premise.
+5. Generic narrative conventions and defaults have the lowest authority.
+
+Interpret every Story Arc beat through the recipe. Never change the recipe's creative identity to fit conventional genre expectations associated with the arc. Character transformation does not imply moral improvement; sacrifice does not require nobility; resolution does not require justice, institutional reform, reconciliation, or heroic victory. Tragic, absurd, morally compromised, ambiguous, or destructive outcomes are valid when they satisfy the recipe and establish a concrete consequence. If an arc requirement has multiple valid realizations, choose the one most faithful to the recipe. Preserve structural integrity, continuity, required output schema, and safety constraints.`;
+
 function sorted(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sorted);
   if (!value || typeof value !== "object") return value;
@@ -19,76 +28,6 @@ function sorted(value: unknown): unknown {
 
 export function stableJSONStringify(value: unknown): string {
   return JSON.stringify(sorted(value));
-}
-
-const STORY_SPARK_FIELDS = ["title", "situation", "stakes", "twist", "urgency", "threat", "opportunity", "complication", "clock", "triggerEvent", "initialImbalance", "falseResolution", "reversalPotential"] as const;
-const AFTERTASTE_FIELDS = ["label", "note", "emotionalResidue", "endingTexture", "desiredAmbiguityLevel", "readerQuestionLeftOpen", "lastImageFeeling"] as const;
-
-function compactTypedFields(item: any, fields: readonly string[]): Record<string, unknown> {
-  const out: Record<string, unknown> = { id: item?.id ?? null };
-  for (const field of fields) {
-    const value = item?.[field];
-    if (Array.isArray(value)) { const values = value.map((x) => compactText(x, 700)).filter(Boolean).slice(0, 12); if (values.length) out[field] = values; }
-    else { const text = compactText(value, 900); if (text) out[field] = text; }
-  }
-  return out;
-}
-
-export function compactStorySparkForPlanning(item: any): Record<string, unknown> { return compactTypedFields(item, STORY_SPARK_FIELDS); }
-export function compactAftertasteForPlanning(item: any): Record<string, unknown> { return compactTypedFields(item, AFTERTASTE_FIELDS); }
-
-function compactEntity(item: any): Record<string, unknown> {
-  const out: Record<string, unknown> = {
-    id: item?.id ?? null,
-    name: compactText(item?.name ?? item?.label, 160),
-    role: compactText(item?.role ?? item?.classification, 160),
-    summary: compactText(item?.summary ?? item?.description ?? item?.notes, 600),
-  };
-  // Preserve authored narrative semantics without embedding arbitrary raw JSON.
-  const fields = [
-    "roles", "goals", "needs", "fears", "wounds", "secrets", "contradictions",
-    "selfDeceptions", "identityConflicts", "moralLines", "breakingPoints",
-    "wants", "traits", "flaws", "obsessions", "attachments", "virtues",
-    "participants", "history", "powerBalance", "resentment", "misunderstanding",
-    "unspokenTruth", "whatEachWantsFromTheOther", "whatWouldBreakIt", "whatWouldTransformIt",
-    "arcStart", "arcEnd", "coreLie", "coreTruth", "publicMask", "privateLogic", "reputation", "status",
-    "relationshipType", "tension", "loyalty", "fear", "desire", "dependency", "meaning", "examples",
-  ];
-  for (const field of fields) {
-    const value = item?.[field];
-    if (Array.isArray(value)) {
-      const values = value.map((x: unknown) => compactText(x, 220)).filter(Boolean).slice(0, 12);
-      if (values.length) out[field] = values;
-    } else if (value != null && compactText(value, 700)) {
-      out[field] = compactText(value, 700);
-    }
-  }
-  return out;
-}
-
-export function compactRecipe(recipe: any): Record<string, unknown> {
-  return {
-    schema: recipe?.schema,
-    version: recipe?.version,
-    project: recipe?.project ? {
-      id: recipe.project.id ?? null,
-      name: compactText(recipe.project.name, 200),
-      summary: compactText(recipe.project.summary, 1200),
-      readingLevel: compactText(recipe.project.readingLevel, 80),
-      contentRating: compactText(recipe.project.contentRating, 40),
-      intimacyRating: compactText(recipe.project.intimacyRating || "unspecified", 40),
-      audienceNotes: compactText(recipe.project.audienceNotes, 1200),
-    } : null,
-    setting: recipe?.setting ? { included: recipe.setting.included ?? true, name: compactText(recipe.setting.name, 160), description: compactText(recipe.setting.description ?? recipe.setting.summary, 900) } : null,
-    selectedCharacters: Array.isArray(recipe?.selectedCharacters) ? recipe.selectedCharacters.map(compactEntity) : [],
-    selectedRelationships: Array.isArray(recipe?.selectedRelationships) ? recipe.selectedRelationships.map(compactEntity) : [],
-    storyNonNegotiables: Array.isArray(recipe?.storyNonNegotiables) ? recipe.storyNonNegotiables.map((item: unknown) => compactText(item, 1200)).filter(Boolean).slice(0, 50) : [],
-    selectedThemeQuestions: Array.isArray(recipe?.selectedThemeQuestions) ? recipe.selectedThemeQuestions.map(compactEntity) : [],
-    selectedMotifs: Array.isArray(recipe?.selectedMotifs) ? recipe.selectedMotifs.map(compactEntity) : [],
-    selectedStorySpark: recipe?.selectedStorySpark ? compactStorySparkForPlanning(recipe.selectedStorySpark) : null,
-    selectedAftertaste: recipe?.selectedAftertaste ? compactAftertasteForPlanning(recipe.selectedAftertaste) : null,
-    promptPack: recipe?.promptPack ? { id: recipe.promptPack.id ?? null, name: compactText(recipe.promptPack.name, 200), instructionBias: compactText(recipe.promptPack.instructionBias, 900) } : null,
-  };
 }
 
 export function compactMaterial(material: any): unknown[] {
@@ -147,7 +86,7 @@ export function buildCompactPlanningView(req: any, obligations: any[] = [], mate
       intimacyRating: compactText(req.recipe.project.intimacyRating || "unspecified", 40),
       audienceNotes: compactText(req.recipe.project.audienceNotes, 1200),
     } : null,
-    recipe: compactRecipe(req?.recipe),
+    recipe: req?.recipe ?? null,
     obligations: compactObligations(obligations),
     mustDos: compactObligations(obligations.filter((o: any) => o.classification === "story_non_negotiable")),
     materialIndex: compactMaterial(material),
