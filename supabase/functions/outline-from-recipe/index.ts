@@ -83,7 +83,7 @@ import {
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 // Requests that omit modelID use the fixed Suggest Sections default.
 // Persisted runs with an explicit modelID retain that identity during recovery.
-export const LEGACY_PLANNING_MODEL_ID = "gpt-5.4-mini";
+export const LEGACY_PLANNING_MODEL_ID = "gpt-6-luna";
 const OPENAI_MODEL = LEGACY_PLANNING_MODEL_ID;
 
 /** Maps every physical outline action to one logical billing/cache stage. */

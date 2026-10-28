@@ -10,7 +10,7 @@ private func formatRunCredits(_ value: Double) -> String {
 /// the general generation picker. Availability is resolved from the server's
 /// eligible catalog response; a missing model is shown, not substituted.
 enum OutlineSectionsModelCatalog {
-    static let defaultID = "gpt-5.4-mini"
+    static let defaultID = "gpt-6-luna"
     static let preferenceKey = "cathedralos.outline.selectedModelID"
     static let reasoningPreferenceKey = "cathedralos.outline.selectedReasoningEffort"
     static let reasoningEfforts = ["low", "medium", "high"]
