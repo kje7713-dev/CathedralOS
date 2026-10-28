@@ -1947,6 +1947,30 @@ Deno.test("dynamic suggestion schema enforces every beat minimum and flattening 
   assertEquals(duplicate, true);
 });
 
+Deno.test("first-pass validation rejects a missing allocated Story Arc beat", () => {
+  const allocation = new Map([
+    ["beat-1", { minSections: 1, rationale: "opening" }],
+    ["beat-2", { minSections: 1, rationale: "aftermath" }],
+  ]);
+  const section = (title: string, storyArcBeatID: string) => ({
+    title,
+    summary: `${title} changes the story.`,
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends with a consequential turn.`,
+    storyArcBeatID,
+  });
+  assertThrows(
+    () => validateSuggestions(
+      { suggestions: [section("Opening", "beat-1")] },
+      new Set(["beat-1", "beat-2"]),
+      allocation,
+    ),
+    AllocationCoverageValidationError,
+    "beat beat-2 returned 0 sections; minimum is 1",
+  );
+});
+
 Deno.test("dynamic response contract removes model-owned beat IDs and target/max allocation semantics", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const schema = buildSuggestionResponseSchema([{ id: "beat-1" }], new Map([["beat-1", { minSections: 2, rationale: "coverage" }]]), [], "", "novel") as any;
