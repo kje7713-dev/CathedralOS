@@ -107,7 +107,6 @@ import {
   validateGroundedArcEvidence,
   validatePostRepairBeatCoverage,
   validateRequiredStoryArcFunctions,
-  hasConcreteResolutionOutcome,
   repairRequiredStoryArcFunctions,
   repairStoryArcMacroStructure,
   arcRoleContract,
@@ -119,7 +118,10 @@ import {
   semanticVerificationInput,
   removeDuplicateOutlineSections,
   verifyStoryArcSemantics,
+  repairStoryArcSemanticObligations,
   SELECTED_INTIMACY_LEVEL_OBLIGATION,
+  REQUIRED_RESOLUTION_OUTCOME_OBLIGATION,
+  verificationObligationsForBeat,
   planSectionAllocation,
   checkRateLimit,
   logRequest,
@@ -3623,7 +3625,7 @@ Deno.test("PR3 Final Image aftermath-only content is repaired into an actual res
   const before = validateStoryArcSemantics([aftermathOnly], template as any);
   assertEquals(before.some((issue) => issue.includes("missing required dramatic function resolution")), true);
   const mislabeledAftermath = { ...aftermathOnly, dramaticFunction: "resolution" };
-  assertEquals(validateStoryArcSemantics([mislabeledAftermath], template as any).some((issue) => issue.includes("does not materially resolve")), true);
+  assertEquals(validateStoryArcSemantics([mislabeledAftermath], template as any).some((issue) => issue.includes("does not materially resolve")), false);
 
   const repaired = await repairRequiredStoryArcFunctions(
     [aftermathOnly],
@@ -3701,110 +3703,22 @@ Deno.test("targeted Story Arc repair skips healthy resolutions and preserves fai
     },
   );
   assertEquals(failed.repaired, []);
-  assertEquals(failed.unresolved, ["The Aftermath"]);
+  assertEquals(failed.unresolved, []);
   assertEquals(failed.suggestions, [aftermathOnly]);
 });
 
-Deno.test("resolution validation rejects movement without outcome and accepts complete unconventional endings", () => {
-  const tedFredPerimeter: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "Ted watches the surveillance forces tighten their perimeter.",
-    resultingChange: "Ted and Fred consider their options but make no decision.",
-    terminalState: "The central operation continues untouched and the protagonists remain trapped.",
-  };
-  const failedTransmitter: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "Ted tries to destroy the alien transmitter but fails.",
-    resultingChange: "Ted and Fred retreat to regroup without disabling the transmitter.",
-    terminalState: "The alien transmitter remains active and the invasion is still approaching.",
-  };
-  const postponedConspiracy: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "Ted unsuccessfully attempts to end the conspiracy.",
-    resultingChange: "Ted postpones the decisive confrontation until tomorrow.",
-    terminalState: "The conspiracy still operates and the agents continue their pursuit.",
-  };
-  const deadButThreatContinues: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "The protagonist dies while confronting the alien presence.",
-    resultingChange: "The protagonist is gone, but the central threat is untouched.",
-    terminalState: "The invasion continues and the central dramatic question remains open.",
-  };
-  const discussionOnly: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "The characters discuss the available options through the night.",
-    resultingChange: "They understand the risks but take no action.",
-    terminalState: "The dispute remains open and the same decision awaits them.",
-  };
-  const mourningOnly: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "The survivors mourn beside the site of the conflict.",
-    resultingChange: "They remember what was lost and share their grief.",
-    terminalState: "The aftermath continues while everyone wonders what comes next.",
-  };
-  const destructive: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "The central alien device is destroyed before it can open the breach.",
-    resultingChange: "The imminent threat ends, and the surviving protagonists disappear into the contaminated dark.",
-    terminalState: "The device is gone and the breach cannot reopen, although wider mysteries remain unresolved.",
-  };
-  const ambiguous: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "Mara burns the evidence and walks away from both factions.",
-    resultingChange: "Neither faction can claim the evidence, and Mara permanently abandons the cause she started.",
-    terminalState: "The public outcome is uncertain, but the central struggle for the evidence is over and Mara is gone.",
-  };
-  const failedDecisively: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "The protagonists fail to reach the archive before it burns.",
-    resultingChange: "Their objective becomes permanently impossible, and the evidence cannot be recovered.",
-    terminalState: "The archive is gone and the investigation can never proceed through that evidence.",
-  };
-  const abandonedObjective: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "Mara abandons the campaign rather than sacrifice another recruit.",
-    resultingChange: "She permanently abandons the central objective, forfeiting the alliance it required.",
-    terminalState: "The campaign is over and the abandoned objective reshapes the group's future.",
-  };
-  const conventional: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "The protagonists defeat the threat at the gate.",
-    resultingChange: "The central conflict ends and the survivors accept the cost.",
-    terminalState: "The new normal holds without the former threat continuing.",
-  };
-  const aftermathOnly: any = {
-    dramaticFunction: "resolution",
-    dramaticEvent: "The protagonists remember what happened and stare at the horizon.",
-    resultingChange: "The survivors mourn what was lost.",
-    terminalState: "The aftermath remains unresolved as they wonder what comes next.",
-  };
-  for (const section of [tedFredPerimeter, failedTransmitter, postponedConspiracy, deadButThreatContinues, discussionOnly, mourningOnly, aftermathOnly]) {
-    assertEquals(hasConcreteResolutionOutcome(section), false);
-  }
-  for (const section of [destructive, failedDecisively, abandonedObjective, ambiguous, conventional]) {
-    assertEquals(hasConcreteResolutionOutcome(section), true);
-  }
+Deno.test("resolution function validation is structural, not literary", () => {
   const template: any = { name: "Save the Cat!", beats: [{ id: "final", role: "final_image", label: "Final Image" }] };
-  for (const section of [destructive, failedDecisively, abandonedObjective, ambiguous, conventional]) {
-    assertEquals(validateRequiredStoryArcFunctions([{ ...section, storyArcBeatID: "final" }], template), []);
-  }
-  for (const section of [tedFredPerimeter, failedTransmitter, postponedConspiracy, deadButThreatContinues, discussionOnly, mourningOnly, aftermathOnly]) {
-    assertEquals(validateRequiredStoryArcFunctions([{ ...section, storyArcBeatID: "final" }], template).length, 1);
-  }
-});
-
-Deno.test("resolution validation ignores generic acceptance and uses state-change fields", () => {
-  const template = {
-    name: "Save the Cat!",
-    beats: [{ id: "final", role: "final_image", label: "Final Image" }],
+  const declaredButUnresolved: any = {
+    storyArcBeatID: "final",
+    dramaticFunction: "resolution",
+    dramaticEvent: "Ted tries to destroy the transmitter but fails.",
+    resultingChange: "Ted and Fred retreat without disabling it.",
+    terminalState: "The transmitter remains active and the invasion continues.",
   };
-  const unresolved: any = {
-    ...semanticSection("final", "Acceptance", "Mara accepts that the threat remains.", "resolution"),
-    resultingChange: "She accepts the unresolved situation.",
-    terminalState: "The threat continues beyond the ending.",
-  };
-  const issues = validateRequiredStoryArcFunctions([unresolved], template as any);
-  assertEquals(issues.some((issue) => issue.includes("does not materially resolve")), true);
+  assertEquals(validateRequiredStoryArcFunctions([declaredButUnresolved], template), []);
+  const missingDeclaration = { ...declaredButUnresolved, dramaticFunction: "aftermath" };
+  assertEquals(validateRequiredStoryArcFunctions([missingDeclaration], template).some((issue) => issue.includes("missing required dramatic function resolution")), true);
 });
 
 Deno.test("Story Arc repair prompt includes premise and preceding climax context", async () => {
@@ -3816,7 +3730,7 @@ Deno.test("Story Arc repair prompt includes premise and preceding climax context
     ],
   };
   const climax: any = semanticSection("climax", "The Raccoon Confrontation", "The raccoon confronts the poachers and breaks their trap network.", "climax");
-  const weak: any = semanticSection("final", "The Cleanup", "The survivors clean up after the confrontation.", "resolution");
+  const weak: any = semanticSection("final", "The Cleanup", "The survivors clean up after the confrontation.", "aftermath");
   let capturedContext: any;
   const repaired = await repairRequiredStoryArcFunctions(
     [climax, weak],
@@ -3829,6 +3743,7 @@ Deno.test("Story Arc repair prompt includes premise and preceding climax context
           dramaticEvent: "The survivors resolve the central conflict by stopping the poachers and freeing the raccoon.",
           resultingChange: "The central conflict is resolved and the raccoon can return home.",
           terminalState: "The raccoon is safe; the former threat no longer continues.",
+          dramaticFunction: "resolution",
         },
       });
       capturedContext = JSON.parse(user).context;
@@ -5143,11 +5058,15 @@ function semanticVerifierFixture(request: any): unknown {
   })) };
 }
 
-function validatedWorkerBilling(actions: string[], responseFor: (action: string) => string | unknown) {
+function validatedWorkerBilling(
+  actions: string[],
+  responseFor: (action: string) => string | unknown,
+  semanticResponseFor: (request: any) => string | unknown = semanticVerifierFixture,
+) {
   return async (request: any) => {
     actions.push(request.action);
     const content = request.action === "outline-semantic-verification"
-      ? semanticVerifierFixture(request)
+      ? semanticResponseFor(request)
       : responseFor(request.action);
     if (request.onProviderSuccess) {
       await request.onProviderSuccess({ content: typeof content === "string" ? content : JSON.stringify(content) });
@@ -5312,7 +5231,7 @@ Deno.test("unused enrichment does not expand a novel with scale and beat coverag
   assertEquals(db.row.diagnostics.expansionRounds ?? [], []);
 });
 
-Deno.test("weak resolution is repaired before optional expansion", async () => {
+Deno.test("weak resolution preserves existing no-semantic-call scheduling", async () => {
   const fullBody = await executableWorkerBody();
   const novelMaterial = attachRecipeProvenance({
     ...fullBody.storyMaterialEnrichment,
@@ -5346,20 +5265,29 @@ Deno.test("weak resolution is repaired before optional expansion", async () => {
   const actions: string[] = [];
   const billable = validatedWorkerBilling(actions, (action) => {
     if (action === "outline-suggestions") return { beats: { "beat-1": [weakSection("beat-1", "Opening")], "beat-2": [weakSection("beat-2", "The Aftermath")] } };
-    if (action === "outline-semantic-repair-beat-2-resolution") return { section: repairedSection };
+    if (action === "outline-semantic-repair-batch") return { replacements: [{ sectionIndex: 1, beatID: "beat-2", section: repairedSection }] };
     return { suggestions: [] };
+  }, (request) => {
+    const response: any = semanticVerifierFixture(request);
+    for (const beat of response.beats ?? []) {
+      for (const obligation of beat.obligations ?? []) {
+        if (obligation.obligationID === REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id) {
+          obligation.satisfied = false;
+          obligation.reason = "The aftermath leaves the central conflict unresolved.";
+        }
+      }
+    }
+    return response;
   });
   const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
     db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
   });
   await run();
   assertEquals(actions, ["outline-suggestions"]);
-  assertEquals(db.row.planning_state.nextAction, "story-arc-repair");
-  await run();
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-repair-beat-2-resolution"]);
   assertEquals(db.row.status, "completed");
-  assertEquals(db.row.suggestions.some((section: any) => section.title === "The Settled Cost"), true);
-  assertEquals(db.row.diagnostics.semanticArcIssues, []);
+  assertEquals(db.row.planning_state.nextAction, "completed");
+  assertEquals(db.row.suggestions.some((section: any) => section.title === "The Aftermath"), true);
+  assertEquals(actions.some((action) => action.startsWith("outline-semantic-")), false);
   assertEquals(actions.some((action) => action.startsWith("outline-expansion-")), false);
 });
 
@@ -6759,6 +6687,135 @@ Deno.test("explicit intimacy is a whole-arc verifier obligation and generic arcs
   assertEquals((input.arcWideObligations as any[])[0].sections.length, 1);
   const generic = { name: "Mystery", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "m", role: "the_crime", label: "The Crime", description: "" }] } as any;
   assertEquals((semanticVerificationInput(suggestions as any, generic, recipe).arcWideObligations as any[]).length, 0);
+});
+
+Deno.test("semantic verifier adds resolution outcome only to required-resolution beats", () => {
+  const template: any = {
+    name: "Save the Cat!",
+    beats: [{ id: "final", role: "final_image", label: "Final Image", description: "Close the authored central question." }],
+  };
+  const section = {
+    storyArcBeatID: "final",
+    dramaticEvent: "Ted tries to destroy the transmitter but fails.",
+    resultingChange: "Ted retreats without disabling it.",
+    terminalState: "The transmitter remains active.",
+  };
+  const recipe: any = { ...sparseRequest.recipe, storyNonNegotiables: ["Preserve the author's ending intent."] };
+  const input: any = semanticVerificationInput([section] as any, template, recipe);
+  const beat = input.beats[0];
+  const ids = beat.obligations.map((obligation: any) => obligation.obligationID);
+  assertEquals(ids, ["authored_beat_requirement", REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id]);
+  assertEquals(input.recipe, recipe);
+  assertEquals(verificationObligationsForBeat({ id: "setup", role: "setup", label: "Setup" }, "Save the Cat!").some((obligation) => obligation.id === REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id), false);
+  assertEquals(verificationObligationsForBeat(template.beats[0], template.name).filter((obligation) => obligation.id === REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id).length, 1);
+});
+
+Deno.test("semantic verifier classifies resolution by achieved outcome, not attempted event vocabulary", async () => {
+  const template: any = {
+    name: "Save the Cat!",
+    relationshipFocus: "none",
+    intimacyMilestoneRoles: [],
+    beats: [{ id: "final", role: "final_image", label: "Final Image" }],
+  };
+  const recipe: any = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, summary: "Ted must answer whether the invasion can be stopped." } };
+  const rejected = [
+    ["Failed transmitter destruction", "Ted tries to destroy the transmitter but fails.", "The sabotage fails again and the invaders destroy their safehouse.", "The safehouse is gone, but the transmitter stays active and the invasion proceeds."],
+    ["Postponed confrontation", "Ted unsuccessfully attempts to end the conspiracy.", "Ted postpones the decisive confrontation until tomorrow.", "The conspiracy still operates and the agents continue their pursuit."],
+    ["Unrelated death", "Ted dies confronting the alien presence.", "Ted is gone, but the central threat is untouched.", "The invasion continues and the central question remains open."],
+  ];
+  for (const [, dramaticEvent, resultingChange, terminalState] of rejected) {
+    const section: any = { storyArcBeatID: "final", dramaticEvent, resultingChange, terminalState };
+    const result = await verifyStoryArcSemantics([section], template, async () => ({
+      content: JSON.stringify({ beats: [{ beatID: "final", obligations: [{
+        obligationID: REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id,
+        satisfied: false,
+        sectionIndex: 0,
+        field: "resultingChange",
+        quote: resultingChange,
+        reason: "The achieved state leaves the central commitment unresolved.",
+      }] }] }),
+    }) as any, recipe);
+    assertEquals(result.unsatisfied, [{ beatID: "final", obligationID: REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id, reason: "The achieved state leaves the central commitment unresolved." }]);
+  }
+  const accepted = [
+    ["Destroyed transmitter", "Ted smashes the transmitter with a wrench.", "The transmitter fractures into glass and the invasion signal falls silent.", "The portal seals behind the last refugees as dawn breaks."],
+    ["Permanent impossibility", "The archive burns before the protagonists arrive.", "The objective becomes permanently impossible because the evidence is destroyed.", "The investigation can never recover that evidence, though other mysteries remain."],
+    ["Definitive abandonment", "Mara walks away from the campaign.", "Mara permanently abandons the central objective and forfeits the alliance.", "The campaign is over and her choice reshapes the survivors' future."],
+    ["Tragic defeat", "The protagonist loses the final confrontation.", "The protagonist's failure decisively ends the attempt to reclaim the city.", "The city remains under the regime and the objective is no longer attainable."],
+    ["Morally ambiguous", "Mara burns the evidence to protect one faction.", "Neither faction can claim the evidence and the central struggle for it is over.", "The public consequences remain uncertain, but the evidence conflict is settled."],
+    ["Conventional victory", "The protagonists defeat the threat at the gate.", "The central conflict ends and the survivors accept the cost.", "A new normal holds without the former threat continuing."],
+  ];
+  for (const [, dramaticEvent, resultingChange, terminalState] of accepted) {
+    const section: any = { storyArcBeatID: "final", dramaticEvent, resultingChange, terminalState };
+    const result = await verifyStoryArcSemantics([section], template, async () => ({
+      content: JSON.stringify({ beats: [{ beatID: "final", obligations: [{
+        obligationID: REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id,
+        satisfied: true,
+        sectionIndex: 0,
+        field: "resultingChange",
+        quote: resultingChange,
+        reason: "The achieved state answers the central commitment.",
+      }] }] }),
+    }) as any, recipe);
+    assertEquals(result.unsatisfied, []);
+    assertEquals(result.beats[0].obligations[0].obligationID, REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id);
+    assertEquals(result.beats[0].obligations[0].field, "resultingChange");
+  }
+});
+
+Deno.test("semantic resolution failure uses the existing targeted repair and reverification path", async () => {
+  const template: any = {
+    name: "Save the Cat!",
+    beats: [{ id: "final", role: "final_image", label: "Final Image" }],
+  };
+  const weak: any = {
+    ...semanticSection("final", "The Unfinished Signal", "Ted tries to stop the transmitter but fails.", "resolution"),
+    storyArcBeatID: "final",
+    resultingChange: "Ted retreats without disabling the transmitter.",
+    terminalState: "The transmitter remains active and the invasion continues.",
+  };
+  let capturedRecipe: unknown;
+  let capturedAction = "";
+  const repaired = await repairStoryArcSemanticObligations(
+    [weak],
+    template,
+    [{ beatID: "final", obligationID: REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id, reason: "The central threat remains active." }],
+    async (_system, user, _max, _format, action) => {
+      capturedAction = action;
+      capturedRecipe = JSON.parse(user).recipe;
+      return {
+        content: JSON.stringify({ replacements: [{
+          sectionIndex: 0,
+          beatID: "final",
+          section: {
+            ...weak,
+            resultingChange: "The transmitter fractures and the invasion signal falls silent.",
+            terminalState: "The portal seals behind the refugees and the central threat ends.",
+          },
+        }] }),
+      } as any;
+    },
+    [],
+    sparseRequest.recipe as any,
+  );
+  assertEquals(capturedAction, "outline-semantic-repair-batch");
+  assertEquals(capturedRecipe, sparseRequest.recipe);
+  const reverification = await verifyStoryArcSemantics(
+    repaired,
+    template,
+    async () => ({
+      content: JSON.stringify({ beats: [{ beatID: "final", obligations: [{
+        obligationID: REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id,
+        satisfied: true,
+        sectionIndex: 0,
+        field: "resultingChange",
+        quote: repaired[0].resultingChange,
+        reason: "The revised achieved state resolves the threat.",
+      }] }] }),
+    }) as any,
+    sparseRequest.recipe as any,
+  );
+  assertEquals(reverification.unsatisfied, []);
 });
 
 Deno.test("semantic verifier receives every story non-negotiable with Section Contract fields", () => {

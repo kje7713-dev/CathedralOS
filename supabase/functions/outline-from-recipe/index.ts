@@ -509,6 +509,23 @@ export function arcRoleContract(beat: { role?: string; label?: string; descripti
   };
 }
 
+export const REQUIRED_RESOLUTION_OUTCOME_OBLIGATION: ArcSemanticObligation = {
+  id: "required_resolution_outcome",
+  instruction: "Determine whether the central dramatic question or commitment has received a definite outcome consistent with the complete authored recipe and preceding story. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation does not constitute resolution. Definite failure, destruction, abandonment, tragedy, or morally ambiguous consequences are valid when they conclusively answer the relevant dramatic question. Wider mysteries may remain open.",
+  requiredFields: ["resultingChange", "terminalState"],
+};
+
+/** Keep resolution semantic review local to the independent verifier. */
+export function verificationObligationsForBeat(
+  beat: { role?: string; label?: string; description?: string },
+  templateName: string,
+): ArcSemanticObligation[] {
+  const contract = arcRoleContract(beat, templateName);
+  return contract.requiredFunctions.includes("resolution")
+    ? [...contract.semanticObligations, REQUIRED_RESOLUTION_OUTCOME_OBLIGATION]
+    : contract.semanticObligations;
+}
+
 export function arcRoleContracts(template: Pick<ArcTemplateBlob, "beats" | "name">): Map<string, ArcRoleContract> {
   return new Map(template.beats.map((beat) => [beat.id, arcRoleContract(beat, template.name)]));
 }
@@ -4070,7 +4087,7 @@ export function semanticVerificationInput(
       role: beat.role,
       label: beat.label,
       authoredDescription: beat.description ?? "",
-      obligations: arcRoleContract(beat, template.name).semanticObligations.map((obligation) => ({
+      obligations: verificationObligationsForBeat(beat, template.name).map((obligation) => ({
         obligationID: obligation.id,
         instruction: obligation.instruction,
       })),
@@ -4089,14 +4106,14 @@ export async function verifyStoryArcSemantics(
 ): Promise<SemanticVerificationResult> {
   const input = semanticVerificationInput(suggestions, template, recipe);
   const raw = await billableCall(
-    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and any whole-arc intimacy obligation. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
+    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
     "outline-semantic-verification",
   );
   const expectedObligationIDs = template.beats.flatMap((beat) =>
-    arcRoleContract(beat, template.name).semanticObligations.map((obligation) => `${beat.id}:${obligation.id}`));
+    verificationObligationsForBeat(beat, template.name).map((obligation) => `${beat.id}:${obligation.id}`));
   const recordValidationError = async (error: unknown, extra: Record<string, unknown> = {}) => {
     await raw.recordProviderAttemptMetadata?.({
       semanticVerification: {
@@ -4121,7 +4138,7 @@ export async function verifyStoryArcSemantics(
   const rawArcWide = Array.isArray(parsed.arcWideObligations) ? parsed.arcWideObligations : [];
   const arcWideObligations: SemanticVerificationObligation[] = [];
   const knownBeats = new Map(template.beats.map((beat) => [beat.id, beat]));
-  const knownObligations = new Map(template.beats.flatMap((beat) => arcRoleContract(beat, template.name).semanticObligations.map((obligation) => [`${beat.id}:${obligation.id}`, obligation])));
+  const knownObligations = new Map(template.beats.flatMap((beat) => verificationObligationsForBeat(beat, template.name).map((obligation) => [`${beat.id}:${obligation.id}`, obligation])));
   const seen = new Set<string>();
   const beats: SemanticVerificationResult["beats"] = [];
   const unsatisfied: SemanticVerificationResult["unsatisfied"] = [];
@@ -4197,7 +4214,7 @@ export async function verifyStoryArcSemantics(
     seen.add(beatID);
     const beat = knownBeats.get(beatID)!;
     const sections = suggestions.map((section, sectionIndex) => ({ section, sectionIndex })).filter(({ section }) => section.storyArcBeatID === beatID);
-    const byObligation = new Map(arcRoleContract(beat, template.name).semanticObligations.map((obligation) => [obligation.id, obligation]));
+    const byObligation = new Map(verificationObligationsForBeat(beat, template.name).map((obligation) => [obligation.id, obligation]));
     if (!Array.isArray(rawBeat.obligations)) {
       const error = new Error(`story_arc_semantic_verification: missing obligations for ${beatID}`);
       await recordValidationError(error, {
@@ -4263,7 +4280,7 @@ export async function verifyStoryArcSemantics(
     }
     beats.push({ beatID, obligations });
   }
-  for (const beat of template.beats) if (arcRoleContract(beat, template.name).semanticObligations.length > 0 && !seen.has(beat.id)) {
+  for (const beat of template.beats) if (verificationObligationsForBeat(beat, template.name).length > 0 && !seen.has(beat.id)) {
     const error = new Error(`story_arc_semantic_verification: missing beat ${beat.id}`);
     await recordValidationError(error, {
       returnedBeatIDs: (parsed.beats as any[]).map((candidate) => String(candidate?.beatID ?? "")),
@@ -4387,32 +4404,6 @@ export async function repairStoryArcSemanticObligations(
 // an expansion creates a new primary conflict in a beat that forbids one.
 const PRIMARY_CONFLICT_SIGNALS = /\b(?:launch(?:es|ed)?\s+(?:a|the|another)\s+(?:larger\s+)?decisive\s+assault|launch(?:es|ed)?\s+(?:a|the|another)\s+(?:citywide\s+)?takeover|mount(?:s|ed)?\s+(?:a|the)\s+decisive\s+assault|wage(?:s|d)?\s+(?:a|the)\s+war|attack(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|assault(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|invade(?:s|d)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|conquer(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|take\s+over\s+(?:the|a)\s+(?:government|kingdom|empire)|seize(?:s|d)?\s+(?:the|a)\s+(?:government|throne|kingdom|empire)|overthrow(?:s|n)?\s+(?:the|a)\s+(?:government|regime|kingdom)|citywide\s+takeover)\b/i;
 const CLOSURE_SIGNALS = /\b(settle(?:s|d)?|stabiliz(?:e|es|ed)|new normal|aftermath|mourning|rebuild(?:s|ing)?|govern(?:s|ed|ance)|peace|accept(?:s|ed)?|legacy|closing image)\b/;
-// “Aftermath” describes what follows an ending; it does not itself answer
-// the central dramatic question. This deterministic gate cannot establish
-// literary meaning, so it deliberately asks only for a finite state boundary
-// in the Section Contract and rejects plainly ongoing/nondecisive prose. It
-// does not require victory, justice, reconciliation, or institutional success.
-const RESOLUTION_STATE_BOUNDARY = /\b(?:no longer|can(?:not|'t)\s+continue|impossible|permanently|forever|destroy(?:s|ed|ing)?|end(?:s|ed|ing)?|gone|over|fail(?:s|ed|ure)?|abandon(?:s|ed|ing)?|resolved?|settle(?:s|d)?|resolve(?:s|d)?|new normal|sever(?:s|ed|ing)?|dead|die(?:s|d)?|cannot reopen)\b/i;
-export function hasConcreteResolutionOutcome(section: Suggestion): boolean {
-  const change = String(section.resultingChange ?? "").trim();
-  const terminal = String(section.terminalState ?? "").trim();
-  if (!change || !terminal) return false;
-  const achievedState = `${change} ${terminal}`.toLowerCase();
-  // A populated pair of fields, different wording, or an attempted action in
-  // dramaticEvent is not an outcome. Only the achieved state fields establish
-  // the positive resolution boundary.
-  // insufficient. Require an explicit finite boundary: destruction, failure,
-  // permanent impossibility, abandonment, separation, a changed normal, or
-  // another completed state transition. Wider mysteries may remain open when
-  // the particular conflict represented by the section has crossed that
-  // boundary.
-  // A boundary in only one field can describe a failed attempt, a death, or
-  // an isolated consequence while the actual conflict continues. Require the
-  // resulting change and terminal state to both record a finite achieved
-  // condition. This is structural evidence, not a claim of literary meaning.
-  return RESOLUTION_STATE_BOUNDARY.test(change) && RESOLUTION_STATE_BOUNDARY.test(terminal);
-}
-
 function inferredFunction(suggestion: Suggestion): DramaticFunction | null {
   const text = semanticText(suggestion);
   if (/\b(resolve|resolution|settle|aftermath|new normal|closing image)\b/.test(text)) return "resolution";
@@ -4461,10 +4452,6 @@ export function validateRequiredStoryArcFunctions(
       const requiredSections = sections.filter((section) => section.dramaticFunction === required);
       if (requiredSections.length === 0) {
         issues.push(`beat ${beat.label} (${beat.id}) is missing required dramatic function ${required}; present functions: ${present}`);
-      } else if (required === "resolution" && !requiredSections.some((section) =>
-        hasConcreteResolutionOutcome(section)
-      )) {
-        issues.push(`beat ${beat.label} (${beat.id}) declares resolution but does not materially resolve the central dramatic question or conflict`);
       }
     }
   }
