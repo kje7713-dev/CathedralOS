@@ -6335,7 +6335,7 @@ export async function runSuggestionJob(
         (content, finishReason) => {
           const flattened = flattenSuggestionResponse(parseOutlineJSON(content, finishReason), body.arcTemplate.beats);
           diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
-          const validated = validateSuggestions(flattened, beatIds, undefined, recipeObligations, body.arcTemplate);
+          const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
           const deduped = removeDuplicateOutlineSections(validated.suggestions);
           validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
           const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true);
@@ -6349,7 +6349,7 @@ export async function runSuggestionJob(
         parseOutlineJSON(rawResponse.content, rawResponse.finishReason),
         body.arcTemplate.beats,
       );
-      const validated = validateSuggestions(flattened, beatIds, undefined, recipeObligations, body.arcTemplate);
+      const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
       const deduped = removeDuplicateOutlineSections(validated.suggestions);
       validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true), warnings: validated.warnings };
