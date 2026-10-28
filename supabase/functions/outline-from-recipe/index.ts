@@ -4034,11 +4034,12 @@ export function chooseBestSemanticOutline(
 ): Suggestion[] {
   if (original.length === 0) return repaired;
   if (repaired.length === 0) return original;
-  if (!repairedVerification) return original;
-  if (!originalVerification) return repaired;
-  return repairedVerification.unsatisfied.length < originalVerification.unsatisfied.length
-    ? repaired
-    : original;
+  if (!originalVerification || !repairedVerification) return original;
+  const originalFailures = new Set(originalVerification.unsatisfied.map((failure) => `${failure.beatID}:${failure.obligationID}`));
+  const repairedFailures = new Set(repairedVerification.unsatisfied.map((failure) => `${failure.beatID}:${failure.obligationID}`));
+  const resolvesExistingFailure = [...originalFailures].some((failure) => !repairedFailures.has(failure));
+  const introducesNewFailure = [...repairedFailures].some((failure) => !originalFailures.has(failure));
+  return resolvesExistingFailure && !introducesNewFailure ? repaired : original;
 }
 
 const SEMANTIC_VERIFICATION_SCHEMA = {
@@ -6062,12 +6063,16 @@ export async function runSuggestionJob(
       }
       const selectedSuggestions = chooseBestSemanticOutline(originalSemanticSuggestions, persistedSemanticSuggestions, originalVerification, verification);
       const selectedRepaired = selectedSuggestions === persistedSemanticSuggestions;
+      const selectedVerification = selectedRepaired ? verification : originalVerification;
       diagnostics = {
         ...diagnostics,
         stage: "semantic_reverified",
-        semanticVerification: verification,
+        // The authoritative verification must describe the persisted outline.
+        semanticVerification: selectedVerification,
         ...(selectedRepaired ? {} : {
           semanticRepairFallback: "original_outline_preserved_no_objective_improvement",
+          semanticRepairOriginalVerification: originalVerification,
+          semanticRepairRejectedVerification: verification,
           semanticRepairOriginalUnresolved: originalVerification?.unsatisfied.length ?? null,
           semanticRepairCandidateUnresolved: verification.unsatisfied.length,
         }),

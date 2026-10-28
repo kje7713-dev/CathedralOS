@@ -6699,13 +6699,86 @@ Deno.test("explicit authored non-negotiables remain in the verifier without chan
   assertEquals(intimacyPlanningDirective({ recipe, arcTemplate: template } as any), "");
 });
 
-Deno.test("semantic repair preserves the best usable paid outline", () => {
+Deno.test("semantic repair selection requires resolving existing keys without introducing new ones", () => {
   const original: any[] = [{ title: "Original", storyArcBeatID: "b", dramaticEvent: "The authored conflict advances." }];
   const repaired: any[] = [{ title: "Repair", storyArcBeatID: "b", dramaticEvent: "A generic subplot replaces the conflict." }];
-  const unresolved = { unsatisfied: [{ beatID: "b", obligationID: CREATIVE_FIDELITY_OBLIGATION, reason: "drift" }] } as any;
-  assertEquals(chooseBestSemanticOutline(original as any, repaired as any, unresolved, unresolved), original);
-  assertEquals(chooseBestSemanticOutline(original as any, repaired as any, unresolved, { unsatisfied: [] }), repaired);
-  assertEquals(chooseBestSemanticOutline(original as any, repaired as any, unresolved, undefined), original);
+  const originalVerification: any = { unsatisfied: [
+    { beatID: "b", obligationID: "creative_fidelity", reason: "drift" },
+    { beatID: "c", obligationID: "required_resolution_outcome", reason: "unresolved" },
+  ] };
+  assertEquals(chooseBestSemanticOutline(original, repaired, originalVerification, {
+    unsatisfied: [{ beatID: "c", obligationID: "required_resolution_outcome", reason: "unresolved" }],
+  }), repaired);
+  assertEquals(chooseBestSemanticOutline(original, repaired, originalVerification, {
+    unsatisfied: [{ beatID: "b", obligationID: "creative_fidelity", reason: "still unresolved" }, { beatID: "new", obligationID: "new_failure", reason: "introduced" }],
+  }), original);
+  assertEquals(chooseBestSemanticOutline(original, repaired, originalVerification, {
+    unsatisfied: [{ beatID: "b", obligationID: "creative_fidelity", reason: "same failure" }, { beatID: "c", obligationID: "required_resolution_outcome", reason: "same failure" }],
+  }), original);
+  assertEquals(chooseBestSemanticOutline(original, repaired, originalVerification, undefined), original);
+});
+
+Deno.test("worker persists selected original suggestions with authoritative original verification", async () => {
+  const body = await executableWorkerBody();
+  const section = (title: string, beatID: string, dramaticFunction: string, dramaticEvent: string) => ({
+    title,
+    summary: `${title} summary`,
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends`,
+    entryState: "The prior state holds.",
+    storyArcBeatID: beatID,
+    dramaticFunction,
+    dramaticEvent,
+    resultingChange: `${title} changes the achieved state.`,
+    terminalState: `${title} establishes the resulting state.`,
+    recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`),
+  });
+  const original = [section("Original paid section", "beat-1", "setup", "The authored route advances."), section("Original resolution", "beat-2", "resolution", "The cost is faced.")] as any[];
+  const repaired = [{ ...original[0], title: "Rejected repair" }, { ...original[1], title: "Rejected resolution" }] as any[];
+  const originalVerification: any = {
+    arcWideObligations: [],
+    beats: [],
+    unsatisfied: [{ beatID: "beat-1", obligationID: "authored_beat_requirement", reason: "original warning" }],
+  };
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    suggestions: repaired,
+    planning_state: {
+      version: 2,
+      phase: "semantic_reverification_pending",
+      nextAction: "semantic-reverification",
+      semanticRepairOriginalSuggestions: original,
+    },
+    diagnostics: { semanticVerification: originalVerification },
+  });
+  const actions: string[] = [];
+  const billable = validatedWorkerBilling(actions, () => ({}), (request) => {
+    const input = JSON.parse(request.messages.find((message: any) => message.role === "user").content);
+    return JSON.stringify({
+      arcWideObligations: (input.arcWideObligations ?? []).map((obligation: any) => {
+        const section = obligation.sections?.[0];
+        const field = obligation.obligationID === CREATIVE_FIDELITY_OBLIGATION ? "dramaticEvent" : "resultingChange";
+        return { obligationID: obligation.obligationID, satisfied: true, sectionIndex: section?.sectionIndex ?? -1, field, quote: section?.[field] ?? "evidence", reason: "candidate evidence" };
+      }),
+      beats: (input.beats ?? []).map((beat: any) => ({
+        beatID: beat.beatID,
+        obligations: (beat.obligations ?? []).map((obligation: any) => {
+          const section = beat.sections?.[0];
+          const isIntroducedFailure = beat.beatID === "beat-2" && obligation.obligationID === "authored_beat_requirement";
+          return { obligationID: obligation.obligationID, satisfied: !isIntroducedFailure, sectionIndex: section?.sectionIndex ?? -1, field: "resultingChange", quote: section?.resultingChange ?? "evidence", reason: isIntroducedFailure ? "repair introduced an unresolved beat requirement" : "candidate evidence" };
+        }),
+      })),
+    });
+  });
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(actions, ["outline-semantic-verification"]);
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.suggestions, original);
+  assertEquals(db.row.diagnostics.semanticVerification, originalVerification);
+  assertEquals(db.row.diagnostics.semanticRepairRejectedVerification.unsatisfied, [{ beatID: "beat-2", obligationID: "authored_beat_requirement", reason: "repair introduced an unresolved beat requirement" }]);
 });
 
 Deno.test("creative-fidelity verifier rejects procedural drift and routes it to the affected beat", async () => {
