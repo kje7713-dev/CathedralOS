@@ -1161,7 +1161,7 @@ export function buildEnrichmentPrompt(
   return {
     system: `${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
 
-You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Apply the recipe authority above before inventing support: opposition, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation must emerge from the author's distinctive premise. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. For a novel, develop enough interconnected conflict and opposition, escalation and reversals, character and relationship development, consequences and discoveries, and meaningful tactical and emotional state changes to support the approximately 115,000-word planning target. Do not chase that target with filler, fixed item counts, or unrelated subplots; prioritize substantive connected story material and let the outline planner determine its natural distribution. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Preserve the defining traits, behaviors, moral complexity, tonal intensity, absurdity, and narrative uncertainty explicitly stated by the author. Treat them as creative commitments, not optional inspiration. Invent supporting material that develops those elements rather than explaining them away, softening them, or replacing them with a different central conflict. Do not default to conventional investigations, bureaucratic procedures, military operations, chosen-one narratives, moral redemption, or institutional resolutions unless the recipe supports them; these are defaults to avoid, not globally prohibited mechanisms. Every planner-invented item is a replaceable development candidate, not a new authorial obligation. Ensure the antagonist, escalation ladder, and major reversals materially demonstrate the original premise through concrete story events, not just descriptions or rationale. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
+You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Apply the recipe authority above before inventing support. Invention must be governed first by the author's premise and defining conflicts, then by character behavior, flaws, desires, contradictions, relationships, tone, genre, intensity, absurdity, and intended reader experience, then by consequences and reversals caused by those elements. Add supporting locations, institutions, antagonists, and mechanics only when they express those priorities. For a character-driven satire, primarily invent events caused by destructive character behavior and the world's response; for an investigative thriller or political procedural, investigations and institutions may drive the story when the recipe actually makes them central. Do not let a coherent invented operational objective, technical mechanism, or institutional solution prematurely solve the whole narrative unless the authored material supports it. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. For a novel, develop enough interconnected conflict and opposition, escalation and reversals, character and relationship development, consequences and discoveries, and meaningful tactical and emotional state changes to support the approximately 115,000-word planning target. Do not chase that target with filler, fixed item counts, or unrelated subplots; prioritize substantive connected story material and let the outline planner determine its natural distribution. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Preserve the defining traits, behaviors, moral complexity, tonal intensity, absurdity, and narrative uncertainty explicitly stated by the author. Treat them as creative commitments, not optional inspiration. Invent supporting material that develops those elements rather than explaining them away, softening them, or replacing them with a different central conflict. Do not default to conventional investigations, bureaucratic procedures, military operations, chosen-one narratives, moral redemption, or institutional resolutions unless the recipe supports them; these are defaults to avoid, not globally prohibited mechanisms. Every planner-invented item is a replaceable development candidate, not a new authorial obligation or canon fact. Ensure the antagonist, escalation ladder, and major reversals materially demonstrate the original premise through concrete character-caused story events, not just descriptions or rationale. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Do not fill categories mechanically, do not make one elegant planner-created mechanism the mandatory explanation for every later event, and ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
     user: JSON.stringify({
       recipe: req.recipe,
       recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)),
@@ -2795,6 +2795,29 @@ export function calculateRepairAllocation(
 
 
 export const SELECTED_INTIMACY_LEVEL_OBLIGATION = "selected_intimacy_level";
+export const CREATIVE_FIDELITY_OBLIGATION = "creative_fidelity";
+
+function hasCreativeFidelityDirectives(recipe?: CanonicalRecipeEnvelope): boolean {
+  const project = recipe?.project as Record<string, unknown> | undefined;
+  const setting = recipe?.setting as Record<string, unknown> | undefined;
+  const populated = (value: unknown): boolean => Array.isArray(value) ? value.length > 0 : typeof value === "string" ? value.trim() !== "" : Boolean(value && typeof value === "object");
+  const characterDirective = (recipe?.selectedCharacters ?? []).some((character) => {
+    const row = character as Record<string, unknown>;
+    return ["instructionBias", "failurePatterns", "contradictions", "goals", "flaws", "desires", "notes", "coreLie", "coreTruth", "moralLines"].some((key) => populated(row[key]));
+  });
+  return Boolean(
+    populated(project?.audienceNotes) ||
+    populated(setting?.instructionBias) ||
+    populated(setting?.worldRules) ||
+    populated(setting?.constraints) ||
+    characterDirective ||
+    populated(recipe?.selectedRelationships) ||
+    populated(recipe?.selectedStorySpark) ||
+    populated(recipe?.selectedThemeQuestions) ||
+    populated(recipe?.selectedMotifs) ||
+    populated(recipe?.selectedAftertaste),
+  );
+}
 
 export function intimacyRequirement(
   req: Pick<OutlineFromRecipeRequest, "recipe" | "arcTemplate">,
@@ -2829,7 +2852,7 @@ function intimacyEligibleBeats(req: Pick<OutlineFromRecipeRequest, "arcTemplate"
 export function intimacyPlanningDirective(req: OutlineFromRecipeRequest): string {
   const rating = normalizeIntimacyRating(req.recipe?.project?.intimacyRating);
   const requirement = intimacyRequirement(req);
-  if (rating === "unspecified") return "";
+  if (rating === "unspecified" && !requirement) return "";
   if (!requirement) {
     return `## Intimacy level\nThe selected intimacy level is ${rating}, but the Story Arc template declares no primary relationship focus. Treat intimacy as a rendering permission/ceiling only. Do not invent romance or sexual content solely because of this setting.`;
   }
@@ -2903,7 +2926,7 @@ Do not solve redundant dramatic work by adding sections. Allocation, minimum sec
 
 A later section may revisit the same characters, antagonist, conflict, location, or thematic question, but must advance it through a genuinely new development: a new consequence; an increased or different cost; a reversal; changed knowledge; changed power; transferred agency; a harder decision; resolution of a different thread; a changed relationship; a transformed meaning of the earlier event; or a materially different tactical state. Each section should earn its place by changing something the previous sections have not already changed.
 
-Names from the supplied recipe and enriched story material are canonical. Copy character, institution, and location names exactly. Never rename, merge, abbreviate, or invent a variant of an existing named entity.
+Author-supplied names and facts, and identities established by previously accepted story sections, are canonical: preserve them exactly for continuity. Enrichment entries marked source=planner are provisional candidates, not established entities. A planner-created location, institution, antagonist, clue, object, or mechanism may be used when it serves the recipe, adapted, replaced by a better recipe-faithful idea, or discarded entirely. Never rename, merge, abbreviate, or invent a variant of an author-supplied or previously accepted named entity.
 
 A revelation, discovery, confession, or relationship change may occur only once as the primary dramatic event. Later sections may build on its consequences, but must not rediscover or restate the same fact as a new revelation.
 
@@ -2936,7 +2959,7 @@ ${renderStoryNonNegotiableMustDos(obligations)}
 These are mandatory acceptance criteria, not descriptive tags. Reserve concrete sections/events for every must-do. If a must-do contains a number, treat that number as the minimum count of distinct realized events, not prose flavor. Only assign a must-do ID when the section's dramaticEvent, resultingChange, or terminalState materially realizes the stated requirement; never attach the ID to an unrelated section to make coverage appear complete. Before finalizing, audit every must-do against the actual section contracts. If one is not realized, leave it unsatisfied for the server's repair path rather than falsely labeling an unrelated section.
 
 ## Compact planning context
-Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation. When the planning context supplies a concrete location, clue, institution, object, threat mechanism, or consequence, use it rather than generic phrases such as "damaged site", "weak point", "psychic pressure", or "thin place".
+Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation. Use planner candidates only when they strengthen the authored narrative experience; adapt or discard them when they pull the story toward a different genre, conflict, or solution. Prefer a concrete recipe-backed or already-accepted detail over a generic phrase, but do not promote a planner proposal to canon merely because it is specific.
 
 ${allocationDirective}
 
@@ -3998,6 +4021,27 @@ export type SemanticVerificationResult = {
   unsatisfied: Array<{ beatID: string; obligationID: string; reason: string }>;
 };
 
+/**
+ * Prefer an accepted structural draft over a repair that did not objectively
+ * improve verification. This is deliberately not a literary score: the only
+ * comparison is the verifier's validated unresolved-obligation set.
+ */
+export function chooseBestSemanticOutline(
+  original: Suggestion[],
+  repaired: Suggestion[],
+  originalVerification?: Pick<SemanticVerificationResult, "unsatisfied">,
+  repairedVerification?: Pick<SemanticVerificationResult, "unsatisfied">,
+): Suggestion[] {
+  if (original.length === 0) return repaired;
+  if (repaired.length === 0) return original;
+  if (!originalVerification || !repairedVerification) return original;
+  const originalFailures = new Set(originalVerification.unsatisfied.map((failure) => `${failure.beatID}:${failure.obligationID}`));
+  const repairedFailures = new Set(repairedVerification.unsatisfied.map((failure) => `${failure.beatID}:${failure.obligationID}`));
+  const resolvesExistingFailure = [...originalFailures].some((failure) => !repairedFailures.has(failure));
+  const introducesNewFailure = [...repairedFailures].some((failure) => !originalFailures.has(failure));
+  return resolvesExistingFailure && !introducesNewFailure ? repaired : original;
+}
+
 const SEMANTIC_VERIFICATION_SCHEMA = {
   type: "object",
   properties: {
@@ -4073,7 +4117,19 @@ export function semanticVerificationInput(
         terminalState: section.terminalState ?? "",
       })),
     })),
-    arcWideObligations: requirement ? [{
+    arcWideObligations: [...(hasCreativeFidelityDirectives(recipe) ? [{
+      obligationID: CREATIVE_FIDELITY_OBLIGATION,
+      instruction: "Assess the whole outline's creative fidelity to the canonical recipe. Decide whether the sequence of actual dramatic events delivers the author's specified premise, character behavior, relationships, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience, rather than merely mentioning those ingredients. Treat planner-generated enrichment as provisional: reject only when it materially redirects the story into a different narrative experience, and accept unusual, destructive, morally compromised, or mixed-genre events when they remain faithful to the recipe. If rejecting, identify a concrete section and quote the field that demonstrates the drift.",
+      sections: suggestions.map((section, sectionIndex) => ({
+        sectionIndex,
+        beatID: section.storyArcBeatID,
+        title: section.title ?? "",
+        dramaticFunction: section.dramaticFunction ?? "",
+        dramaticEvent: section.dramaticEvent ?? "",
+        resultingChange: section.resultingChange ?? "",
+        terminalState: section.terminalState ?? "",
+      })),
+    }] : []), ...(requirement ? [{
       obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION,
       instruction: requirement.instruction,
       eligibleMilestoneRoles: requirement.roles,
@@ -4081,7 +4137,7 @@ export function semanticVerificationInput(
         const beat = template.beats.find((candidate) => candidate.id === section.storyArcBeatID);
         return beat && eligible.has(beat.role) ? [{ sectionIndex, beatID: beat.id, role: beat.role, label: beat.label, dramaticEvent: section.dramaticEvent ?? "", resultingChange: section.resultingChange ?? "", terminalState: section.terminalState ?? "" }] : [];
       }),
-    }] : [],
+    }] : [])],
     beats: template.beats.map((beat) => ({
       beatID: beat.id,
       role: beat.role,
@@ -4106,14 +4162,16 @@ export async function verifyStoryArcSemantics(
 ): Promise<SemanticVerificationResult> {
   const input = semanticVerificationInput(suggestions, template, recipe);
   const raw = await billableCall(
-    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
+    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and the required whole-outline creative_fidelity assessment, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. For creative_fidelity, evaluate the sequence of dramatic events against the complete canonical recipe's premise, populated character and relationship directives, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience; do not pass merely because names or keywords appear. This is a material-drift review, not a perfection or style score: a coherent, usable outline with minor weaknesses, uneven emphasis, legitimate mixed-genre scenes, or editorial opportunities is satisfied. Planner-generated candidates are provisional and may be discarded. Accept procedural or institutional material when the recipe makes it central, and reject it only when it fundamentally redirects the authored story or omits essential creative commitments needed for a usable outline. If rejecting, provide a grounded quote from the section that demonstrates the material drift. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
     "outline-semantic-verification",
   );
-  const expectedObligationIDs = template.beats.flatMap((beat) =>
-    verificationObligationsForBeat(beat, template.name).map((obligation) => `${beat.id}:${obligation.id}`));
+  const expectedObligationIDs = [
+    ...(hasCreativeFidelityDirectives(recipe) ? ["arc-wide:" + CREATIVE_FIDELITY_OBLIGATION] : []),
+    ...template.beats.flatMap((beat) =>
+    verificationObligationsForBeat(beat, template.name).map((obligation) => `${beat.id}:${obligation.id}`))];
   const recordValidationError = async (error: unknown, extra: Record<string, unknown> = {}) => {
     await raw.recordProviderAttemptMetadata?.({
       semanticVerification: {
@@ -4142,6 +4200,32 @@ export async function verifyStoryArcSemantics(
   const seen = new Set<string>();
   const beats: SemanticVerificationResult["beats"] = [];
   const unsatisfied: SemanticVerificationResult["unsatisfied"] = [];
+  if (hasCreativeFidelityDirectives(recipe)) {
+    const creativeRaw = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === CREATIVE_FIDELITY_OBLIGATION);
+    const creativeSectionIndex = Number(creativeRaw?.sectionIndex);
+    const creativeSection = suggestions[creativeSectionIndex];
+    const creativeQuote = normalizeEvidenceText(String(creativeRaw?.quote ?? ""));
+    const creativeGroundedField = findGroundedSemanticField(creativeSection, creativeQuote, ["dramaticEvent", "resultingChange", "terminalState"]);
+    const creativeVerified = {
+      obligationID: CREATIVE_FIDELITY_OBLIGATION,
+      satisfied: Boolean(creativeRaw?.satisfied) && Boolean(creativeGroundedField),
+      sectionIndex: Number.isInteger(creativeSectionIndex) ? creativeSectionIndex : -1,
+      field: creativeGroundedField ?? "dramaticEvent",
+      quote: creativeQuote,
+      reason: Boolean(creativeRaw?.satisfied) && !creativeGroundedField
+        ? "creative-fidelity evidence quote was not grounded in a Section Contract field; creative-fidelity review required"
+        : String(creativeRaw?.reason ?? "missing whole-outline creative-fidelity assessment"),
+    } as SemanticVerificationObligation;
+    arcWideObligations.push(creativeVerified);
+    if (!creativeVerified.satisfied) {
+      const repairSection = creativeSection ?? suggestions[0];
+      unsatisfied.push({
+        beatID: repairSection?.storyArcBeatID ?? "__story_arc__",
+        obligationID: CREATIVE_FIDELITY_OBLIGATION,
+        reason: creativeVerified.reason,
+      });
+    }
+  }
   const storyNonNegotiables = (Array.isArray(recipe?.storyNonNegotiables) ? recipe.storyNonNegotiables : [])
     .map((item, index) => ({
       obligationID: `story_non_negotiable_${index}`,
@@ -5918,7 +6002,13 @@ export async function runSuggestionJob(
       }
       diagnostics = { ...diagnostics, stage: "semantic_verified", semanticVerification: verification };
       if (verification.unsatisfied.length > 0) {
-        planningState = { ...planningState, phase: "semantic_repair_pending", nextAction: "semantic-repair", semanticRepairFailures: verification.unsatisfied };
+        planningState = {
+          ...planningState,
+          phase: "semantic_repair_pending",
+          nextAction: "semantic-repair",
+          semanticRepairFailures: verification.unsatisfied,
+          semanticRepairOriginalSuggestions: persistedSemanticSuggestions,
+        };
         diagnostics = { ...diagnostics, stage: "semantic_repair_pending", semanticRepairFailures: verification.unsatisfied };
         await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
         throw new SuggestionWorkerYield();
@@ -5928,6 +6018,9 @@ export async function runSuggestionJob(
       return;
     }
     if (planningState.nextAction === "semantic-repair") {
+      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
+        ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
+        : persistedSemanticSuggestions;
       let repaired = persistedSemanticSuggestions;
       try {
         repaired = await repairStoryArcSemanticObligations(
@@ -5942,34 +6035,58 @@ export async function runSuggestionJob(
         recordSemanticWarning(`Semantic repair was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
         planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
         diagnostics = { ...diagnostics, stage: "semantic_repair_warning" };
-        await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(repaired);
+        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(originalSemanticSuggestions);
         return;
       }
-      planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification" };
+      planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification", semanticRepairOriginalSuggestions: originalSemanticSuggestions };
       const { semanticRepairProviderCheckpoint: _semanticRepairProviderCheckpoint, ...diagnosticsAfterRepair } = diagnostics;
       diagnostics = { ...diagnosticsAfterRepair, stage: "semantic_reverification_pending" };
       await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
       throw new SuggestionWorkerYield();
     }
     if (planningState.nextAction === "semantic-reverification") {
+      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
+        ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
+        : persistedSemanticSuggestions;
+      const originalVerification = diagnostics.semanticVerification as SemanticVerificationResult | undefined;
       let verification: SemanticVerificationResult | undefined;
       try {
         verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
       } catch (error) {
-        recordSemanticWarning(`Semantic re-verification was unavailable; continuing with the repaired outline: ${error instanceof Error ? error.message : String(error)}`);
+        recordSemanticWarning(`Semantic re-verification was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
         planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_reverification_warning" };
-        await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(persistedSemanticSuggestions);
+        diagnostics = { ...diagnostics, stage: "semantic_reverification_warning", semanticRepairFallback: "original_outline_provider_unavailable" };
+        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(originalSemanticSuggestions);
         return;
       }
-      diagnostics = { ...diagnostics, stage: "semantic_reverified", semanticVerification: verification };
-      await updateRun({ suggestions: persistedSemanticSuggestions, diagnostics });
+      const selectedSuggestions = chooseBestSemanticOutline(originalSemanticSuggestions, persistedSemanticSuggestions, originalVerification, verification);
+      const selectedRepaired = selectedSuggestions === persistedSemanticSuggestions;
+      const selectedVerification = selectedRepaired ? verification : originalVerification;
+      diagnostics = {
+        ...diagnostics,
+        stage: "semantic_reverified",
+        // The authoritative verification must describe the persisted outline.
+        semanticVerification: selectedVerification,
+        ...(selectedRepaired ? {} : {
+          semanticRepairFallback: "original_outline_preserved_no_objective_improvement",
+          semanticRepairOriginalVerification: originalVerification,
+          semanticRepairRejectedVerification: verification,
+          semanticRepairOriginalUnresolved: originalVerification?.unsatisfied.length ?? null,
+          semanticRepairCandidateUnresolved: verification.unsatisfied.length,
+        }),
+      };
       if (verification.unsatisfied.length > 0) {
-        recordSemanticWarning(`Semantic obligations remained after bounded repair; continuing with the best repaired outline (${verification.unsatisfied.length} unresolved).`);
+        recordSemanticWarning(
+          selectedRepaired
+            ? `Semantic obligations remained after bounded repair; continuing with the repaired outline (${verification.unsatisfied.length} unresolved).`
+            : `Semantic repair did not objectively improve the outline; preserving the original usable paid draft (${verification.unsatisfied.length} unresolved in the repair candidate).`,
+        );
       }
-      await continueAfterSemanticVerification(persistedSemanticSuggestions);
+      planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
+      await updateRun({ suggestions: selectedSuggestions, planning_state: planningState, diagnostics });
+      await continueAfterSemanticVerification(selectedSuggestions);
       return;
     }
     if (planningState.nextAction === "story-arc-repair" || planningState.nextAction === "story-arc-repair-completion") {

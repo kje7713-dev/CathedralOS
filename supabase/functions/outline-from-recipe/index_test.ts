@@ -120,6 +120,8 @@ import {
   verifyStoryArcSemantics,
   repairStoryArcSemanticObligations,
   SELECTED_INTIMACY_LEVEL_OBLIGATION,
+  CREATIVE_FIDELITY_OBLIGATION,
+  chooseBestSemanticOutline,
   REQUIRED_RESOLUTION_OUTCOME_OBLIGATION,
   verificationObligationsForBeat,
   planSectionAllocation,
@@ -1208,8 +1210,8 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Every section must commit to one canonical event."), true);
   assertEquals(system.includes("Each section must produce a materially new resulting state."), true);
   assertEquals(system.includes("The Resurrection must not replay the Ordeal at greater scale."), true);
-  assertEquals(system.includes("When the planning context supplies a concrete location, clue, institution, object, threat mechanism, or consequence"), true);
-  assertEquals(system.includes("Names from the supplied recipe and enriched story material are canonical."), true);
+  assertEquals(system.includes("Use planner candidates only when they strengthen the authored narrative experience"), true);
+  assertEquals(system.includes("Author-supplied names and facts"), true);
   assertEquals(system.includes("A revelation, discovery, confession, or relationship change may occur only once as the primary dramatic event."), true);
   assertEquals(system.includes("Maintain the established narrative POV mode across the outline unless the supplied recipe explicitly requires a POV change."), true);
   assertEquals(system.includes("Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation."), true);
@@ -3127,6 +3129,9 @@ Deno.test("enrichment prompt preserves sparse recipe facts and separates planner
   assertEquals(prompt.system.includes("Do not chase that target with filler, fixed item counts, or unrelated subplots"), true);
   assertEquals(prompt.system.includes("source=recipe"), false);
   assertEquals(prompt.system.includes("source=planner"), true);
+  assertEquals(prompt.system.includes("character behavior, flaws, desires, contradictions, relationships"), true);
+  assertEquals(prompt.system.includes("prematurely solve the whole narrative"), true);
+  assertEquals(prompt.system.includes("replaceable development candidate"), true);
   assertEquals(prompt.user.includes("Monsters kill humans"), true);
   assertEquals(prompt.user.includes("Douche"), true);
 });
@@ -5047,15 +5052,23 @@ function fakeWorkerBilling(requestedActions: string[], providerCalls = requested
 
 function semanticVerifierFixture(request: any): unknown {
   const input = JSON.parse(request.messages?.find((message: any) => message.role === "user")?.content ?? "{}");
-  return { beats: (input.beats ?? []).map((beat: any) => ({
-    beatID: beat.beatID,
-    obligations: (beat.obligations ?? []).map((obligation: any) => {
-      const section = (beat.sections ?? [])[0];
-      const field = "resultingChange";
+  return {
+    arcWideObligations: (input.arcWideObligations ?? []).map((obligation: any) => {
+      const section = (obligation.sections ?? [])[0];
+      const field = obligation.obligationID === CREATIVE_FIDELITY_OBLIGATION ? "dramaticEvent" : "resultingChange";
       const quote = section?.[field] ?? "";
       return { obligationID: obligation.obligationID, satisfied: Boolean(section && quote), sectionIndex: section?.sectionIndex ?? -1, field, quote, reason: "fixture evidence" };
     }),
-  })) };
+    beats: (input.beats ?? []).map((beat: any) => ({
+      beatID: beat.beatID,
+      obligations: (beat.obligations ?? []).map((obligation: any) => {
+        const section = (beat.sections ?? [])[0];
+        const field = "resultingChange";
+        const quote = section?.[field] ?? "";
+        return { obligationID: obligation.obligationID, satisfied: Boolean(section && quote), sectionIndex: section?.sectionIndex ?? -1, field, quote, reason: "fixture evidence" };
+      }),
+    })),
+  };
 }
 
 function validatedWorkerBilling(
@@ -6657,6 +6670,148 @@ Deno.test("Story Arc obligations are beat-level rather than required on every se
   assertEquals(validateArcSemanticObligations(suggestions as any, template), []);
 });
 
+
+Deno.test("creative authority keeps planner candidates provisional in enrichment and outline prompts", () => {
+  const material = enrichmentFixture();
+  material.institutionsAndGroups = [{ id: "planner-institution", source: "planner", sourceReference: null, label: "Emergency network", description: "A planner candidate." }];
+  const prompt = buildPrompt({ ...sparseRequest, storyMaterialEnrichment: material } as any, new Map(), [], material).system;
+  assertStringIncludes(prompt, "source=planner are development candidates");
+  assertStringIncludes(prompt, "adapted, replaced by a better recipe-faithful idea, or discarded entirely");
+  assertStringIncludes(prompt, "do not promote a planner proposal to canon");
+});
+
+Deno.test("intimacy permission and non-negotiables do not manufacture a Story Arc milestone", () => {
+  const template: any = { name: "Epic Fantasy Quest", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  const permissiveRecipe: any = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, intimacyRating: "explicit" } };
+  assertEquals(intimacyRequirement({ recipe: permissiveRecipe, arcTemplate: template }), null);
+  const negativeRecipe: any = { ...permissiveRecipe, storyNonNegotiables: ["No sexual content." ] };
+  assertEquals(intimacyRequirement({ recipe: negativeRecipe, arcTemplate: template }), null);
+  assertEquals((semanticVerificationInput([], template, negativeRecipe).arcWideObligations as any[]).some((item) => item.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION), false);
+});
+
+Deno.test("explicit authored non-negotiables remain in the verifier without changing generic arc intimacy", () => {
+  const recipe: any = { ...sparseRequest.recipe, storyNonNegotiables: ["The author requires frequent explicit sexual content between consenting adults."] };
+  const template: any = { name: "Epic Fantasy Quest", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "b", role: "setup", label: "Setup" }] };
+  assertEquals(intimacyRequirement({ recipe, arcTemplate: template }), null);
+  const input: any = semanticVerificationInput([], template, recipe);
+  assertEquals(input.storyNonNegotiables[0].instruction, recipe.storyNonNegotiables[0]);
+  assertEquals(input.arcWideObligations.some((item: any) => item.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION), false);
+  assertEquals(intimacyPlanningDirective({ recipe, arcTemplate: template } as any), "");
+});
+
+Deno.test("semantic repair selection requires resolving existing keys without introducing new ones", () => {
+  const original: any[] = [{ title: "Original", storyArcBeatID: "b", dramaticEvent: "The authored conflict advances." }];
+  const repaired: any[] = [{ title: "Repair", storyArcBeatID: "b", dramaticEvent: "A generic subplot replaces the conflict." }];
+  const originalVerification: any = { unsatisfied: [
+    { beatID: "b", obligationID: "creative_fidelity", reason: "drift" },
+    { beatID: "c", obligationID: "required_resolution_outcome", reason: "unresolved" },
+  ] };
+  assertEquals(chooseBestSemanticOutline(original, repaired, originalVerification, {
+    unsatisfied: [{ beatID: "c", obligationID: "required_resolution_outcome", reason: "unresolved" }],
+  }), repaired);
+  assertEquals(chooseBestSemanticOutline(original, repaired, originalVerification, {
+    unsatisfied: [{ beatID: "b", obligationID: "creative_fidelity", reason: "still unresolved" }, { beatID: "new", obligationID: "new_failure", reason: "introduced" }],
+  }), original);
+  assertEquals(chooseBestSemanticOutline(original, repaired, originalVerification, {
+    unsatisfied: [{ beatID: "b", obligationID: "creative_fidelity", reason: "same failure" }, { beatID: "c", obligationID: "required_resolution_outcome", reason: "same failure" }],
+  }), original);
+  assertEquals(chooseBestSemanticOutline(original, repaired, originalVerification, undefined), original);
+});
+
+Deno.test("worker persists selected original suggestions with authoritative original verification", async () => {
+  const body = await executableWorkerBody();
+  const section = (title: string, beatID: string, dramaticFunction: string, dramaticEvent: string) => ({
+    title,
+    summary: `${title} summary`,
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends`,
+    entryState: "The prior state holds.",
+    storyArcBeatID: beatID,
+    dramaticFunction,
+    dramaticEvent,
+    resultingChange: `${title} changes the achieved state.`,
+    terminalState: `${title} establishes the resulting state.`,
+    recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`),
+  });
+  const original = [section("Original paid section", "beat-1", "setup", "The authored route advances."), section("Original resolution", "beat-2", "resolution", "The cost is faced.")] as any[];
+  const repaired = [{ ...original[0], title: "Rejected repair" }, { ...original[1], title: "Rejected resolution" }] as any[];
+  const originalVerification: any = {
+    arcWideObligations: [],
+    beats: [],
+    unsatisfied: [{ beatID: "beat-1", obligationID: "authored_beat_requirement", reason: "original warning" }],
+  };
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    suggestions: repaired,
+    planning_state: {
+      version: 2,
+      phase: "semantic_reverification_pending",
+      nextAction: "semantic-reverification",
+      semanticRepairOriginalSuggestions: original,
+    },
+    diagnostics: { semanticVerification: originalVerification },
+  });
+  const actions: string[] = [];
+  const billable = validatedWorkerBilling(actions, () => ({}), (request) => {
+    const input = JSON.parse(request.messages.find((message: any) => message.role === "user").content);
+    return JSON.stringify({
+      arcWideObligations: (input.arcWideObligations ?? []).map((obligation: any) => {
+        const section = obligation.sections?.[0];
+        const field = obligation.obligationID === CREATIVE_FIDELITY_OBLIGATION ? "dramaticEvent" : "resultingChange";
+        return { obligationID: obligation.obligationID, satisfied: true, sectionIndex: section?.sectionIndex ?? -1, field, quote: section?.[field] ?? "evidence", reason: "candidate evidence" };
+      }),
+      beats: (input.beats ?? []).map((beat: any) => ({
+        beatID: beat.beatID,
+        obligations: (beat.obligations ?? []).map((obligation: any) => {
+          const section = beat.sections?.[0];
+          const isIntroducedFailure = beat.beatID === "beat-2" && obligation.obligationID === "authored_beat_requirement";
+          return { obligationID: obligation.obligationID, satisfied: !isIntroducedFailure, sectionIndex: section?.sectionIndex ?? -1, field: "resultingChange", quote: section?.resultingChange ?? "evidence", reason: isIntroducedFailure ? "repair introduced an unresolved beat requirement" : "candidate evidence" };
+        }),
+      })),
+    });
+  });
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(actions, ["outline-semantic-verification"]);
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.suggestions, original);
+  assertEquals(db.row.diagnostics.semanticVerification, originalVerification);
+  assertEquals(db.row.diagnostics.semanticRepairRejectedVerification.unsatisfied, [{ beatID: "beat-2", obligationID: "authored_beat_requirement", reason: "repair introduced an unresolved beat requirement" }]);
+});
+
+Deno.test("creative-fidelity verifier rejects procedural drift and routes it to the affected beat", async () => {
+  const template: any = { name: "Custom", beats: [{ id: "b", role: "setup", label: "Setup", description: "" }] };
+  const recipe: any = {
+    ...sparseRequest.recipe,
+    project: { ...sparseRequest.recipe.project, audienceNotes: "Grotesque character-driven satire; absurdity and destructive behavior should drive the reader experience." },
+    selectedCharacters: [{ id: "c", name: "Mara", instructionBias: "Selfish and chaotic.", failurePatterns: ["Turns every escape into a public spectacle."], contradictions: ["Accidental savior who rejects responsibility."] }],
+  };
+  const section: any = { storyArcBeatID: "b", dramaticEvent: "A contractor synchronizes emergency databases to locate the protagonists.", resultingChange: "The investigation becomes the story's central engine.", terminalState: "The protagonists prepare to interrupt the synchronization system." };
+  const result = await verifyStoryArcSemantics([section], template, async () => ({
+    content: JSON.stringify({
+      arcWideObligations: [{ obligationID: CREATIVE_FIDELITY_OBLIGATION, satisfied: false, sectionIndex: 0, field: "dramaticEvent", quote: section.dramaticEvent, reason: "The sequence replaces the authored character-driven satire with a procedural infrastructure thriller." }],
+      beats: [{ beatID: "b", obligations: [] }],
+    }),
+  }) as any, recipe);
+  assertEquals(result.arcWideObligations[0].obligationID, CREATIVE_FIDELITY_OBLIGATION);
+  assertEquals(result.arcWideObligations[0].satisfied, false);
+  assertEquals(result.unsatisfied, [{ beatID: "b", obligationID: CREATIVE_FIDELITY_OBLIGATION, reason: "The sequence replaces the authored character-driven satire with a procedural infrastructure thriller." }]);
+});
+
+Deno.test("creative-fidelity verifier accepts institutional scenes when the recipe makes them central", async () => {
+  const template: any = { name: "Custom", beats: [{ id: "b", role: "setup", label: "Setup", description: "" }] };
+  const recipe: any = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, audienceNotes: "A procedural investigation of institutional corruption with evidence chains and emergency communications." } };
+  const section: any = { storyArcBeatID: "b", dramaticEvent: "The investigator matches the emergency communications log to the contractor's evidence chain.", resultingChange: "The institutional case becomes independently verifiable.", terminalState: "The investigator can confront the agency with the matched records." };
+  const result = await verifyStoryArcSemantics([section], template, async () => ({
+    content: JSON.stringify({
+      arcWideObligations: [{ obligationID: CREATIVE_FIDELITY_OBLIGATION, satisfied: true, sectionIndex: 0, field: "dramaticEvent", quote: section.dramaticEvent, reason: "The procedural sequence realizes the authored investigation." }],
+      beats: [{ beatID: "b", obligations: [] }],
+    }),
+  }) as any, recipe);
+  assertEquals(result.unsatisfied, []);
+});
 
 Deno.test("relationship metadata drives intimacy capability without role detection", async () => {
   const darkRomance = {

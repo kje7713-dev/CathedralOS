@@ -15,10 +15,10 @@ export const RECIPE_CREATIVE_AUTHORITY_DIRECTIVE = `## Creative authority and St
 1. The canonical authored recipe and author instructions define the story's identity: premise, genre, tone, characters, relationships, world rules, intended reader experience, and ending direction.
 2. Author-customized Story Arc beat content is structural guidance interpreted consistently with that recipe.
 3. Generic Story Arc contracts supply progression, escalation, reversal, crisis, climax, and consequence only.
-4. Planner-invented enrichment is provisional support material; it must not displace, soften, contradict, or redirect the authored premise.
+4. Planner-invented enrichment is provisional support material; it must not displace, soften, contradict, or redirect the authored premise. It may be used, adapted, replaced, or discarded before acceptance.
 5. Generic narrative conventions and defaults have the lowest authority.
 
-Interpret every Story Arc beat through the recipe. Never change the recipe's creative identity to fit conventional genre expectations associated with the arc. Character transformation does not imply moral improvement; sacrifice does not require nobility; resolution does not require justice, institutional reform, reconciliation, or heroic victory. Tragic, absurd, morally compromised, ambiguous, or destructive outcomes are valid when they satisfy the recipe and establish a concrete consequence. If an arc requirement has multiple valid realizations, choose the one most faithful to the recipe. Preserve structural integrity, continuity, required output schema, and safety constraints.`;
+Interpret every Story Arc beat through the recipe. Never change the recipe's creative identity to fit conventional genre expectations associated with the arc. Author-created names and facts, plus events already accepted into the story, are binding; generated candidates are not. Character transformation does not imply moral improvement; sacrifice does not require nobility; resolution does not require justice, institutional reform, reconciliation, or heroic victory. Tragic, absurd, morally compromised, ambiguous, or destructive outcomes are valid when they satisfy the recipe and establish a concrete consequence. If an arc requirement has multiple valid realizations, choose the one most faithful to the recipe. Preserve structural integrity, continuity, required output schema, and safety constraints.`;
 
 function sorted(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sorted);
