@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects, assertThrows, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { deriveRecipeObligations, obligationCoverage, renderStoryNonNegotiableMustDos } from "./_recipe_obligations.ts";
-import { compactArcNarrativeText, compactMaterial } from "./_prompt_context.ts";
+import { compactArcNarrativeText, compactMaterial, compactRecipe, RECIPE_CREATIVE_AUTHORITY_DIRECTIVE } from "./_prompt_context.ts";
 
 Deno.test("continuation auth keeps user JWT out of apikey and authenticates watchdog explicitly", () => {
   assertEquals(continuationHeaders("Bearer user-access-jwt", "operator-secret"), {
@@ -202,6 +202,71 @@ const sparseRequest = {
     ],
   },
 };
+
+Deno.test("compact recipe preserves authored creative identity and behavioral guidance", () => {
+  const recipe: any = {
+    ...sparseRequest.recipe,
+    project: {
+      ...sparseRequest.recipe.project,
+      audienceNotes: "Grotesque American satire; do not soften the violence.",
+    },
+    setting: {
+      included: true,
+      name: "The Unstable County",
+      summary: "A county where causality is legally negotiable.",
+      worldRules: ["Every official record changes one fact when copied."],
+      hiddenTruths: ["The county was built around an alien organism."],
+      constraints: ["No institution can verify the original version of an event."],
+      mythicFrame: "A failed civic myth keeps repeating itself.",
+      instructionBias: "Do not impose a heroic or orderly interpretation.",
+      institutions: ["The Bureau of Misfiled Things"],
+      taboos: ["Never call the violence a necessary cleansing."],
+    },
+    selectedCharacters: [{
+      id: "author-character",
+      name: "Mara",
+      instructionBias: "Do not give Mara a redemption arc.",
+      speechStyle: "Short, evasive, and funny under pressure.",
+      behavioralConstraints: ["She never confesses to protect someone else."],
+    }],
+    selectedStorySpark: { id: "spark", title: "The Wrong Revolution", situation: "Mara starts a revolution by accident." },
+    selectedAftertaste: { id: "aftertaste", endingTexture: "The damage remains useful and unresolved." },
+  };
+  const compact = compactRecipe(recipe) as any;
+  assertEquals(compact.project.audienceNotes.includes("Grotesque American satire"), true);
+  assertEquals(compact.setting.worldRules[0].includes("Every official record"), true);
+  assertEquals(compact.setting.hiddenTruths[0].includes("alien organism"), true);
+  assertEquals(compact.setting.instructionBias.includes("heroic"), true);
+  assertEquals(compact.selectedCharacters[0].instructionBias.includes("redemption"), true);
+  assertEquals(compact.selectedCharacters[0].speechStyle.includes("evasive"), true);
+  assertEquals(compact.selectedCharacters[0].behavioralConstraints[0].includes("never confesses"), true);
+  assertEquals(compact.selectedStorySpark.situation.includes("accident"), true);
+  assertEquals(compact.selectedAftertaste.endingTexture.includes("unresolved"), true);
+});
+
+Deno.test("recipe authority governs enrichment, allocation, outline, and expansion prompts", () => {
+  const request: any = {
+    ...sparseRequest,
+    recipe: {
+      ...sparseRequest.recipe,
+      project: { ...sparseRequest.recipe.project, audienceNotes: "Do not make the protagonist heroic." },
+      setting: { included: true, worldRules: ["The dead can alter one living memory."], hiddenTruths: ["The supposed prophecy is a fraud."] },
+      selectedCharacters: [{ id: "mara", name: "Mara", instructionBias: "Never reward Mara with moral redemption." }],
+    },
+  };
+  const allocation = buildAllocationPrompt(request).system;
+  const outline = buildPrompt(request, new Map()).system;
+  const expansion = buildExpansionPrompt(request, []).system;
+  const enrichment = buildEnrichmentPrompt(request).system;
+  for (const prompt of [allocation, outline, expansion, enrichment]) {
+    assertEquals(prompt.includes(RECIPE_CREATIVE_AUTHORITY_DIRECTIVE), true);
+    assertEquals(prompt.includes("Never change the recipe's creative identity"), true);
+  }
+  assertEquals(outline.includes("Planner-generated material may be rejected or replaced"), true);
+  assertEquals(expansion.includes("Planner-generated enrichment is provisional"), true);
+  assertEquals(enrichment.includes("Do not default to conventional investigations"), true);
+  assertEquals(JSON.parse(buildExpansionPrompt(request, []).user).global.recipe.setting.worldRules[0].includes("dead"), true);
+});
 
 Deno.test("malformed selected recipe entities fail before any billable call", () => {
   assertEquals(
@@ -3683,9 +3748,19 @@ Deno.test("Story Arc repair prompt includes premise and preceding climax context
       return { content, creditCostCharged: 1, remainingCredits: 9 };
     },
     [],
-    { premise: "A raccoon protects its den from a widening poaching operation." },
+    {
+      premise: "A raccoon protects its den from a widening poaching operation.",
+      recipe: {
+        project: { id: "raccoon", summary: "A morally compromised defense with no redemption arc." },
+        setting: { included: true, worldRules: ["The den remembers every trespass."], hiddenTruths: ["The poachers are protecting a worse secret."] },
+        selectedCharacters: [{ id: "raccoon", instructionBias: "Do not make the raccoon heroic.", speechStyle: "Silent and physical." }],
+        selectedAftertaste: { endingTexture: "Ambiguous and damaged." },
+      },
+    },
   );
   assertEquals(capturedContext.premise, "A raccoon protects its den from a widening poaching operation.");
+  assertEquals(capturedContext.recipe.setting.worldRules[0], "The den remembers every trespass.");
+  assertEquals(capturedContext.recipe.selectedCharacters[0].instructionBias, "Do not make the raccoon heroic.");
   assertEquals(capturedContext.precedingClimax.title, "The Raccoon Confrontation");
   assertEquals(repaired.unresolved, []);
   assertEquals(repaired.repaired, ["The Cleanup: resolution"]);

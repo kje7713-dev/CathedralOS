@@ -3,6 +3,25 @@ export function compactText(value: unknown, max = 500): string {
   return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+/** Preserve authored nested guidance without forwarding arbitrary/unbounded JSON. */
+function compactAuthoredValue(value: unknown, depth = 0): unknown {
+  if (value == null || typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value === "string") return compactText(value, 900);
+  if (depth >= 3) return compactText(value, 900);
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((entry) => compactAuthoredValue(entry, depth + 1));
+  }
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry != null && entry !== "" && (!Array.isArray(entry) || entry.length > 0))
+        .slice(0, 32)
+        .map(([key, entry]) => [key, compactAuthoredValue(entry, depth + 1)]),
+    );
+  }
+  return compactText(value, 900);
+}
+
 // Story Arc beat descriptions are authored narrative contracts, not expendable
 // prompt decoration. Preserve the complete text when carrying them between
 // the request, planning view, and provider prompts; truncating these strings
@@ -10,6 +29,15 @@ export function compactText(value: unknown, max = 500): string {
 export function compactArcNarrativeText(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
+
+export const RECIPE_CREATIVE_AUTHORITY_DIRECTIVE = `## Creative authority and Story Arc precedence
+1. The canonical authored recipe and author instructions define the story's identity: premise, genre, tone, characters, relationships, world rules, intended reader experience, and ending direction.
+2. Author-customized Story Arc beat content is structural guidance interpreted consistently with that recipe.
+3. Generic Story Arc contracts supply progression, escalation, reversal, crisis, climax, and consequence only.
+4. Planner-invented enrichment is provisional support material; it must not displace, soften, contradict, or redirect the authored premise.
+5. Generic narrative conventions and defaults have the lowest authority.
+
+Interpret every Story Arc beat through the recipe. Never change the recipe's creative identity to fit conventional genre expectations associated with the arc. Character transformation does not imply moral improvement; sacrifice does not require nobility; resolution does not require justice, institutional reform, reconciliation, or heroic victory. Tragic, absurd, morally compromised, ambiguous, or destructive outcomes are valid when they satisfy the recipe and establish a concrete consequence. If an arc requirement has multiple valid realizations, choose the one most faithful to the recipe. Preserve structural integrity, continuity, required output schema, and safety constraints.`;
 
 function sorted(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sorted);
@@ -53,6 +81,7 @@ function compactEntity(item: any): Record<string, unknown> {
     "unspokenTruth", "whatEachWantsFromTheOther", "whatWouldBreakIt", "whatWouldTransformIt",
     "arcStart", "arcEnd", "coreLie", "coreTruth", "publicMask", "privateLogic", "reputation", "status",
     "relationshipType", "tension", "loyalty", "fear", "desire", "dependency", "meaning", "examples",
+    "instructionBias", "speechStyle", "preferences", "resources", "failurePatterns", "behavioralConstraints",
   ];
   for (const field of fields) {
     const value = item?.[field];
@@ -67,6 +96,7 @@ function compactEntity(item: any): Record<string, unknown> {
 }
 
 export function compactRecipe(recipe: any): Record<string, unknown> {
+  const setting = recipe?.setting;
   return {
     schema: recipe?.schema,
     version: recipe?.version,
@@ -79,7 +109,15 @@ export function compactRecipe(recipe: any): Record<string, unknown> {
       intimacyRating: compactText(recipe.project.intimacyRating || "unspecified", 40),
       audienceNotes: compactText(recipe.project.audienceNotes, 1200),
     } : null,
-    setting: recipe?.setting ? { included: recipe.setting.included ?? true, name: compactText(recipe.setting.name, 160), description: compactText(recipe.setting.description ?? recipe.setting.summary, 900) } : null,
+    setting: setting ? {
+      // Preserve populated authored setting fields (world rules, hidden truths,
+      // constraints, mythic frame, institutions, taboos, and future fields)
+      // while keeping prompt context deterministic and bounded.
+      ...(compactAuthoredValue(setting) as Record<string, unknown>),
+      included: setting.included ?? true,
+      name: compactText(setting.name, 160),
+      description: compactText(setting.description ?? setting.summary, 900),
+    } : null,
     selectedCharacters: Array.isArray(recipe?.selectedCharacters) ? recipe.selectedCharacters.map(compactEntity) : [],
     selectedRelationships: Array.isArray(recipe?.selectedRelationships) ? recipe.selectedRelationships.map(compactEntity) : [],
     storyNonNegotiables: Array.isArray(recipe?.storyNonNegotiables) ? recipe.storyNonNegotiables.map((item: unknown) => compactText(item, 1200)).filter(Boolean).slice(0, 50) : [],
