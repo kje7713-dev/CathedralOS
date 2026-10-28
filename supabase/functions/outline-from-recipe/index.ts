@@ -5368,6 +5368,13 @@ export async function runSuggestionJob(
       );
     }
     providerModelForAlert = model.provider_model ?? selectedModelID;
+    // Fast mode is a 2x provider-price tier for GPT-6 Luna. Keep the catalog's
+    // verified standard rates unchanged and apply the multiplier only to this
+    // request, so preflight, settlement, and cost telemetry agree.
+    const serviceTier = model.provider_model === "gpt-6-luna" ? "fast" as const : undefined;
+    const billableModel = serviceTier === "fast"
+      ? { ...model, billing_multiplier: model.billing_multiplier * 2 }
+      : model;
     const creditStore = dependencies.creditStore ?? new SupabaseCreditStore(db);
     const provider = dependencies.provider ?? new OpenAIProvider(
       openaiKey,
@@ -5459,13 +5466,14 @@ export async function runSuggestionJob(
         userID: userId,
         purpose: "outline-suggestion",
         action,
-        model,
+        model: billableModel,
         messages,
         maxOutputTokens,
         providerOptions: {
           responseFormat,
           ...(supportsCustomTemperature(model) ? { temperature: 0.7 } : {}),
           reasoningEffort: body.reasoningEffort,
+          serviceTier,
           cacheMode: model.cacheMode,
           promptCacheKey: model.cacheMode === "none" ? undefined : promptCacheKey,
         },
