@@ -1742,9 +1742,9 @@ export function recoverablePlanningModelID(
 export function canonicalizeNewPlanningRequest(
   body: OutlineFromRecipeRequest,
 ): OutlineFromRecipeRequest {
-  return body.modelID && body.modelID.trim()
-    ? body
-    : { ...body, modelID: LEGACY_PLANNING_MODEL_ID };
+  // Suggest Sections is intentionally Luna Fast. Ignore stale client model
+  // preferences so an older app cannot route planner work to GPT-5.4 mini.
+  return { ...body, modelID: LEGACY_PLANNING_MODEL_ID };
 }
 
 export function isLegacyPlanningRequest(requestJSON: unknown): boolean {

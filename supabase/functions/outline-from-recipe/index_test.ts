@@ -17,6 +17,7 @@ Deno.test("continuation auth keeps user JWT out of apikey and authenticates watc
 Deno.test("Suggest Sections defaults missing model selection to GPT-6 Luna", () => {
   assertEquals(LEGACY_PLANNING_MODEL_ID, "gpt-6-luna");
   assertEquals(canonicalizeNewPlanningRequest({} as any).modelID, "gpt-6-luna");
+  assertEquals(canonicalizeNewPlanningRequest({ modelID: "gpt-5.4-mini" } as any).modelID, "gpt-6-luna");
   assertEquals(canonicalizeNewPlanningRequest({ modelID: "gpt-6-luna" } as any).modelID, "gpt-6-luna");
 });
 
