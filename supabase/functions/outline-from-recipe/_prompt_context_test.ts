@@ -1,5 +1,5 @@
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { buildCompactPlanningView, compactMaterial, stableJSONStringify, promptMetrics, compactStorySparkForPlanning, compactAftertasteForPlanning } from "./_prompt_context.ts";
+import { buildCompactPlanningView, compactMaterial, stableJSONStringify, promptMetrics } from "./_prompt_context.ts";
 
 const req = { recipe: { project: { id: "p", name: "A", summary: "A story" }, selectedCharacters: [{ id: "c", name: "Hero", summary: "A sentinel" }] }, arcTemplate: { id: "a", name: "Arc", beats: [{ id: "b", label: "Beat", description: "Turn" }] }, existingSections: [] };
 Deno.test("compact planning context is deterministic and carries provenance", () => {
@@ -18,18 +18,21 @@ Deno.test("prompt metrics estimate serialized input without retaining prompt tex
   assertEquals("system" in metrics, false);
 });
 
-Deno.test("typed Story Spark and Aftertaste compaction preserves canonical semantics once", () => {
-  const spark = compactStorySparkForPlanning({ id: "spark", title: "S", situation: "SITUATION_SENTINEL", stakes: "STAKES_SENTINEL", twist: "TWIST_SENTINEL", urgency: "URGENCY_SENTINEL", clock: "CLOCK_SENTINEL", triggerEvent: "TRIGGER_SENTINEL", reversalPotential: "REVERSAL_SENTINEL" });
-  const aftertaste = compactAftertasteForPlanning({ id: "after", label: "A", emotionalResidue: "RESIDUE_SENTINEL", endingTexture: "TEXTURE_SENTINEL", desiredAmbiguityLevel: "AMBIGUITY_SENTINEL", readerQuestionLeftOpen: "QUESTION_SENTINEL", lastImageFeeling: "IMAGE_SENTINEL" });
-  for (const value of ["SITUATION_SENTINEL", "STAKES_SENTINEL", "TWIST_SENTINEL", "URGENCY_SENTINEL", "CLOCK_SENTINEL", "TRIGGER_SENTINEL", "REVERSAL_SENTINEL"]) assert(JSON.stringify(spark).includes(value));
-  for (const value of ["RESIDUE_SENTINEL", "TEXTURE_SENTINEL", "AMBIGUITY_SENTINEL", "QUESTION_SENTINEL", "IMAGE_SENTINEL"]) assert(JSON.stringify(aftertaste).includes(value));
-});
-
-Deno.test("compact recipe preserves frozen audience and intimacy metadata exactly", () => {
-  const view = buildCompactPlanningView({ recipe: { project: { id: "p", name: "Frozen", summary: "Summary", readingLevel: "adult", contentRating: "18_plus", intimacyRating: "explicit", audienceNotes: "FROZEN_NOTES" } }, arcTemplate: { id: "a", name: "Arc", beats: [] }, existingSections: [] });
-  const project = view.recipe && (view.recipe as Record<string, unknown>).project as Record<string, unknown>;
-  assertEquals(project.readingLevel, "adult");
-  assertEquals(project.contentRating, "18_plus");
-  assertEquals(project.intimacyRating, "explicit");
-  assertEquals(project.audienceNotes, "FROZEN_NOTES");
+Deno.test("planning context preserves the complete canonical recipe exactly", () => {
+  const recipe: any = {
+    project: { id: "p", name: "Frozen", summary: "Summary", audienceNotes: "AUDIENCE", nested: { deep: { sentinel: "DEEP_SENTINEL" } } },
+    setting: { included: true, worldRules: ["RULE_" + "x".repeat(1000)], hiddenTruths: ["HIDDEN"], nested: { level: { value: "NESTED_SETTING" } } },
+    selectedCharacters: Array.from({ length: 25 }, (_, index) => ({ id: `c-${index}`, name: `Character ${index}`, instructionBias: `CHARACTER_${index}`, deeplyNested: { level: { value: `NESTED_CHARACTER_${index}` } } })),
+    selectedRelationships: [{ id: "r", relationshipType: "RELATIONSHIP" }],
+    selectedThemeQuestions: [{ id: "t", question: "THEME_QUESTION", coreTension: "THEME_TENSION", valueConflict: "THEME_VALUE", moralFaultLine: "THEME_FAULT" }],
+    selectedMotifs: [{ id: "m", meaning: "MOTIF" }],
+    selectedStorySpark: { id: "spark", situation: "SPARK" },
+    selectedAftertaste: { id: "after", endingTexture: "AFTERTASTE" },
+    storyNonNegotiables: ["NON_NEGOTIABLE"],
+    promptPack: { id: "pack", name: "Pack", notes: "PACK_NOTES", instructionBias: "PACK_BIAS" },
+  };
+  const view = buildCompactPlanningView({ recipe, arcTemplate: { id: "a", name: "Arc", beats: [] }, existingSections: [] });
+  assertEquals(view.recipe, recipe);
+  assertEquals(JSON.stringify(view.recipe).includes("DEEP_SENTINEL"), true);
+  assertEquals((view.recipe as any).selectedCharacters.length, 25);
 });

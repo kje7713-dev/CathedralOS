@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects, assertThrows, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { deriveRecipeObligations, obligationCoverage, renderStoryNonNegotiableMustDos } from "./_recipe_obligations.ts";
-import { compactArcNarrativeText, compactMaterial, compactRecipe, RECIPE_CREATIVE_AUTHORITY_DIRECTIVE } from "./_prompt_context.ts";
+import { buildCompactPlanningView, compactArcNarrativeText, compactMaterial, RECIPE_CREATIVE_AUTHORITY_DIRECTIVE } from "./_prompt_context.ts";
 
 Deno.test("continuation auth keeps user JWT out of apikey and authenticates watchdog explicitly", () => {
   assertEquals(continuationHeaders("Bearer user-access-jwt", "operator-secret"), {
@@ -107,6 +107,7 @@ import {
   validateGroundedArcEvidence,
   validatePostRepairBeatCoverage,
   validateRequiredStoryArcFunctions,
+  hasConcreteResolutionOutcome,
   repairRequiredStoryArcFunctions,
   repairStoryArcMacroStructure,
   arcRoleContract,
@@ -203,45 +204,27 @@ const sparseRequest = {
   },
 };
 
-Deno.test("compact recipe preserves authored creative identity and behavioral guidance", () => {
+Deno.test("provider-facing prompts preserve the complete canonical recipe exactly", () => {
   const recipe: any = {
     ...sparseRequest.recipe,
-    project: {
-      ...sparseRequest.recipe.project,
-      audienceNotes: "Grotesque American satire; do not soften the violence.",
-    },
-    setting: {
-      included: true,
-      name: "The Unstable County",
-      summary: "A county where causality is legally negotiable.",
-      worldRules: ["Every official record changes one fact when copied."],
-      hiddenTruths: ["The county was built around an alien organism."],
-      constraints: ["No institution can verify the original version of an event."],
-      mythicFrame: "A failed civic myth keeps repeating itself.",
-      instructionBias: "Do not impose a heroic or orderly interpretation.",
-      institutions: ["The Bureau of Misfiled Things"],
-      taboos: ["Never call the violence a necessary cleansing."],
-    },
-    selectedCharacters: [{
-      id: "author-character",
-      name: "Mara",
-      instructionBias: "Do not give Mara a redemption arc.",
-      speechStyle: "Short, evasive, and funny under pressure.",
-      behavioralConstraints: ["She never confesses to protect someone else."],
-    }],
-    selectedStorySpark: { id: "spark", title: "The Wrong Revolution", situation: "Mara starts a revolution by accident." },
-    selectedAftertaste: { id: "aftertaste", endingTexture: "The damage remains useful and unresolved." },
+    project: { ...sparseRequest.recipe.project, audienceNotes: "TED_AUDIENCE", nested: { deep: { value: "DEEP_PROJECT" } } },
+    setting: { included: true, worldRules: ["RULE_" + "x".repeat(1200)], hiddenTruths: ["HIDDEN_TRUTH"], nested: { level: { value: "DEEP_SETTING" } } },
+    selectedCharacters: Array.from({ length: 25 }, (_, index) => ({ id: `character-${index}`, name: `Character ${index}`, instructionBias: `CHARACTER_${index}`, speechStyle: `STYLE_${index}`, nested: { deep: { value: `DEEP_CHARACTER_${index}` } } })),
+    selectedRelationships: [{ id: "relationship-1", relationshipType: "RELATIONSHIP" }],
+    selectedThemeQuestions: [{ id: "theme-1", question: "Can people who are incapable of governing themselves save everyone else?", coreTension: "Private ruin versus public salvation", valueConflict: "Survival versus responsibility", moralFaultLine: "The difference between consequential action and moral worth" }],
+    selectedMotifs: [{ id: "motif-1", meaning: "MOTIF" }],
+    selectedStorySpark: { id: "spark-1", situation: "SPARK" },
+    selectedAftertaste: { id: "aftertaste-1", endingTexture: "AFTERTASTE" },
+    storyNonNegotiables: ["NON_NEGOTIABLE"],
+    promptPack: { ...sparseRequest.recipe.promptPack, notes: "PACK_NOTES", instructionBias: "PACK_BIAS" },
   };
-  const compact = compactRecipe(recipe) as any;
-  assertEquals(compact.project.audienceNotes.includes("Grotesque American satire"), true);
-  assertEquals(compact.setting.worldRules[0].includes("Every official record"), true);
-  assertEquals(compact.setting.hiddenTruths[0].includes("alien organism"), true);
-  assertEquals(compact.setting.instructionBias.includes("heroic"), true);
-  assertEquals(compact.selectedCharacters[0].instructionBias.includes("redemption"), true);
-  assertEquals(compact.selectedCharacters[0].speechStyle.includes("evasive"), true);
-  assertEquals(compact.selectedCharacters[0].behavioralConstraints[0].includes("never confesses"), true);
-  assertEquals(compact.selectedStorySpark.situation.includes("accident"), true);
-  assertEquals(compact.selectedAftertaste.endingTexture.includes("unresolved"), true);
+  const request: any = { ...sparseRequest, recipe };
+  assertEquals(buildCompactPlanningView(request).recipe, recipe);
+  assertEquals(JSON.parse(buildEnrichmentPrompt(request).user).recipe, recipe);
+  assertEquals(JSON.parse(buildPrompt(request, new Map()).user).planningContext.recipe, recipe);
+  assertEquals(JSON.parse(buildExpansionPrompt(request, []).user).global.recipe, recipe);
+  assertEquals(JSON.parse(buildObligationRepairPrompt(request, [], [], []).user).recipe, recipe);
+  assertEquals(semanticVerificationInput([], request.arcTemplate, recipe).recipe, recipe);
 });
 
 Deno.test("recipe authority governs enrichment, allocation, outline, and expansion prompts", () => {
@@ -3322,7 +3305,8 @@ Deno.test("PR3 expansion prioritizes unused enrichment and exposes soft word ran
   const prompt = buildExpansionPrompt({ ...sparseRequest, storyMaterialEnrichment: material } as any, current as any);
   assertEquals(prompt.user.includes("unusedStoryMaterial"), true);
   assertEquals(prompt.user.includes("force-emergency-network"), true);
-  assertEquals(prompt.system.includes("unused or underdeveloped enrichment items"), true);
+  assertEquals(prompt.system.includes("deepen the authored recipe's premise"), true);
+  assertEquals(prompt.system.includes("unused or underdeveloped enrichment items"), false);
   assertEquals(prompt.system.includes("soft literary planning range"), false);
 });
 
@@ -3703,6 +3687,42 @@ Deno.test("targeted Story Arc repair skips healthy resolutions and preserves fai
   assertEquals(failed.repaired, []);
   assertEquals(failed.unresolved, ["The Aftermath"]);
   assertEquals(failed.suggestions, [aftermathOnly]);
+});
+
+Deno.test("resolution validation accepts concrete destructive and ambiguous outcomes but rejects aftermath", () => {
+  const destructive: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "The central alien device is destroyed before it can open the breach.",
+    resultingChange: "The imminent threat ends, and the surviving protagonists disappear into the contaminated dark.",
+    terminalState: "The device is gone and the breach cannot reopen, although wider mysteries remain unresolved.",
+  };
+  const ambiguous: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "Mara burns the evidence and walks away from both factions.",
+    resultingChange: "Neither faction can claim the evidence, and Mara permanently abandons the cause she started.",
+    terminalState: "The public outcome is uncertain, but the central struggle for the evidence is over and Mara is gone.",
+  };
+  const conventional: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "The protagonists defeat the threat at the gate.",
+    resultingChange: "The central conflict ends and the survivors accept the cost.",
+    terminalState: "The new normal holds without the former threat continuing.",
+  };
+  const aftermathOnly: any = {
+    dramaticFunction: "resolution",
+    dramaticEvent: "The protagonists remember what happened and stare at the horizon.",
+    resultingChange: "The survivors mourn what was lost.",
+    terminalState: "The aftermath remains unresolved as they wonder what comes next.",
+  };
+  assertEquals(hasConcreteResolutionOutcome(destructive), true);
+  assertEquals(hasConcreteResolutionOutcome(ambiguous), true);
+  assertEquals(hasConcreteResolutionOutcome(conventional), true);
+  assertEquals(hasConcreteResolutionOutcome(aftermathOnly), false);
+  const template: any = { name: "Save the Cat!", beats: [{ id: "final", role: "final_image", label: "Final Image" }] };
+  for (const section of [destructive, ambiguous, conventional]) {
+    assertEquals(validateRequiredStoryArcFunctions([{ ...section, storyArcBeatID: "final" }], template), []);
+  }
+  assertEquals(validateRequiredStoryArcFunctions([{ ...aftermathOnly, storyArcBeatID: "final" }], template).length, 1);
 });
 
 Deno.test("resolution validation ignores generic acceptance and uses state-change fields", () => {

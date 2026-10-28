@@ -26,7 +26,6 @@ import {
   compactMaterial,
   compactMaterialForOutline,
   compactObligations,
-  compactRecipe,
   RECIPE_CREATIVE_AUTHORITY_DIRECTIVE,
   stableJSONStringify,
   promptMetrics,
@@ -1147,7 +1146,7 @@ export function buildEnrichmentPrompt(
 
 You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Apply the recipe authority above before inventing support: opposition, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation must emerge from the author's distinctive premise. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. For a novel, develop enough interconnected conflict and opposition, escalation and reversals, character and relationship development, consequences and discoveries, and meaningful tactical and emotional state changes to support the approximately 115,000-word planning target. Do not chase that target with filler, fixed item counts, or unrelated subplots; prioritize substantive connected story material and let the outline planner determine its natural distribution. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Preserve the defining traits, behaviors, moral complexity, tonal intensity, absurdity, and narrative uncertainty explicitly stated by the author. Treat them as creative commitments, not optional inspiration. Invent supporting material that develops those elements rather than explaining them away, softening them, or replacing them with a different central conflict. Do not default to conventional investigations, bureaucratic procedures, military operations, chosen-one narratives, moral redemption, or institutional resolutions unless the recipe supports them; these are defaults to avoid, not globally prohibited mechanisms. Every planner-invented item is a replaceable development candidate, not a new authorial obligation. Ensure the antagonist, escalation ladder, and major reversals materially demonstrate the original premise through concrete story events, not just descriptions or rationale. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Do not fill categories mechanically, but ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
     user: JSON.stringify({
-      recipe: compactRecipe(req.recipe),
+      recipe: req.recipe,
       recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)),
       priorEnrichment: candidate ?? null,
       arcTemplate: req.arcTemplate,
@@ -2245,7 +2244,7 @@ export function mergeObligationRepairOperations(
 export function buildObligationRepairPrompt(req: OutlineFromRecipeRequest, current: Suggestion[], existing: ExistingSectionBlob[], missing: RecipeObligation[]) {
   return {
     system: `${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}\n\nRepair only the missing required recipe obligations. Add one focused section or replace one appropriate section by its zero-based replaceIndex; never delete, move unrelated sections, drop covered obligations, use unknown IDs, replace by title, or violate Story Arc contracts.`,
-    user: JSON.stringify({ recipe: compactRecipe(req.recipe), arc: req.arcTemplate, existingAcceptedSections: existing, currentSuggestions: current.map((section, replaceIndex) => ({ replaceIndex, section })), missingRequiredObligations: missing }),
+    user: JSON.stringify({ recipe: req.recipe, arc: req.arcTemplate, existingAcceptedSections: existing, currentSuggestions: current.map((section, replaceIndex) => ({ replaceIndex, section })), missingRequiredObligations: missing }),
   };
 }
 
@@ -2645,14 +2644,14 @@ export function buildExpansionPrompt(
   return {
     system: `${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
 
-The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. The current sections and the supplied recipe together form a used-event ledger: do not replay an existing title, revelation, confrontation, relationship turn, solution, or resulting state under another Story Arc beat. Every addition must advance the recipe's authored premise, character/relationship material, tone, and ending intent when applicable—not merely increase word-count. Planner-generated enrichment is provisional: do not prefer an unused item over richer development of the author's characters and conflicts, and do not fill length with generic institutional or procedural steps. Fresh developments are allowed when they remain consistent with the recipe. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop material in this order: unused or underdeveloped enrichment items; deeper causal chains; meaningful complications; relationships; opposition; consequences and aftermath; geographic/social/strategic scope; reversals and discoveries; additional phases inside complex set pieces; and only then genuinely separate new dramatic developments. Do not add a new section for the same dramatic state. Prefer the currently unused enrichment items listed in the request; connect them to existing relationships, opposition, consequences, and discoveries before inventing generic replacements. Every Story Non-Negotiable is a must-do acceptance criterion. Preserve and materially realize any unmet must-do before adding optional expansion; if a must-do contains a number, produce that many distinct realized events. Never attach a must-do ID to an unrelated section. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a terminalBeat naming the concrete closing dramatic action or moment, plus a plannedWordRange as a soft literary target subordinate to the container and natural stopping point. Never use a Story Arc UUID, beat label, or END as terminalBeat; storyArcBeatID is the separate structural identity. Every addition must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
+The current outline is compressed for a ${requestedStoryMaterialFormat(req)}. This is bounded progressive expansion round ${round} of ${MAX_EXPANSION_ROUNDS}. The current projection is approximately ${Math.round(projectedWords).toLocaleString()} words (${Math.round(projectedTokens).toLocaleString()} tokens), versus the preferred broad ${requestedStoryMaterialFormat(req)} range of ${NOVEL_TARGET_WORDS[0].toLocaleString()}-${NOVEL_TARGET_WORDS[1].toLocaleString()} words. The remaining estimated deficit is approximately ${Math.round(remainingDeficitTokens).toLocaleString()} tokens. ${beatDirective} Return ONLY ADDITIONAL section suggestions; never return, rewrite, reorder, or omit existing sections. The current sections and the supplied recipe together form a used-event ledger: do not replay an existing title, revelation, confrontation, relationship turn, solution, or resulting state under another Story Arc beat. Every addition must advance the recipe's authored premise, character/relationship material, tone, and ending intent when applicable—not merely increase word-count. Planner-generated enrichment is provisional: do not prefer an unused item over richer development of the author's characters and conflicts, and do not fill length with generic institutional or procedural steps. Fresh developments are allowed when they remain consistent with the recipe. Add distinct events, consequences, decisions, reversals, tests, discoveries, and aftermath where the current outline is compressed. Develop additional dramatic material in this priority order: (1) deepen the authored recipe's premise, characters, relationships, conflicts, themes, and intended narrative experience; (2) extend established causal developments through new consequences, complications, reversals, decisions, and discoveries; (3) use planner-generated enrichment where it meaningfully strengthens the authored story; (4) invent fresh supporting material when necessary. Planner-generated enrichment is optional. Its presence or non-use does not create a requirement to include it. Do not introduce unused enrichment simply to fill allocated length. Preserve required Story Arc functions while interpreting them through the recipe. Do not add a new section for the same dramatic state. Every Story Non-Negotiable is a must-do acceptance criterion. Preserve and materially realize any unmet must-do before adding optional expansion; if a must-do contains a number, produce that many distinct realized events. Never attach a must-do ID to an unrelated section. Each addition must use the same container semantics: scene = one continuous dramatic event (800-1,800 expected tokens); developedScene = escalation with multiple tactics (1,500-3,000); setPiece = major action/confrontation/reveal (2,000-5,000); sceneSequence = several connected scenes pursuing one objective (3,000-7,000). These are literary planning ranges only, not provider ceilings. Do not inflate containers to satisfy the size check by converting smaller containers into larger containers. Every addition must explicitly include entryState, dramaticEvent, resultingChange, terminalState, and a terminalBeat naming the concrete closing dramatic action or moment, plus a plannedWordRange as a soft literary target subordinate to the container and natural stopping point. Never use a Story Arc UUID, beat label, or END as terminalBeat; storyArcBeatID is the separate structural identity. Every addition must reference a valid beat and include insertAfterTitle for an existing section, or null to append within its beat. Assign only applicable recipeRequirementIDs from the supplied obligation list; additions may contain an empty list. Return JSON matching the expansion schema.
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.`,
     user: JSON.stringify({
       global: {
         project: req.recipe?.project ? { id: req.recipe.project.id ?? null, name: compactText((req.recipe.project as any).name, 200), summary: compactText(req.recipe.project.summary, 1200) } : null,
-        recipe: compactRecipe(req.recipe),
+        recipe: req.recipe,
         arc: {
           name: req.arcTemplate.name,
           description: compactArcNarrativeText(req.arcTemplate.description),
@@ -4036,11 +4035,12 @@ const SEMANTIC_VERIFICATION_SCHEMA = {
 export function semanticVerificationInput(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
-  recipe?: Pick<CanonicalRecipeEnvelope, "project" | "storyNonNegotiables">,
+  recipe?: CanonicalRecipeEnvelope,
 ): Record<string, unknown> {
   const requirement = intimacyRequirement({ arcTemplate: template as ArcTemplateBlob, recipe: recipe as CanonicalRecipeEnvelope });
   const eligible = new Set((template.intimacyMilestoneRoles ?? []));
   return {
+    recipe: recipe ?? null,
     storyArcName: template.name,
     relationshipFocus: template.relationshipFocus ?? "none",
     intimacyMilestoneRoles: template.intimacyMilestoneRoles ?? [],
@@ -4085,7 +4085,7 @@ export async function verifyStoryArcSemantics(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
   billableCall: SuggestionLLMCall,
-  recipe?: Pick<CanonicalRecipeEnvelope, "project" | "storyNonNegotiables">,
+  recipe?: CanonicalRecipeEnvelope,
 ): Promise<SemanticVerificationResult> {
   const input = semanticVerificationInput(suggestions, template, recipe);
   const raw = await billableCall(
@@ -4337,7 +4337,7 @@ export async function repairStoryArcSemanticObligations(
   }));
   const raw = await billableCall(
     `${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}\n\nRepair only the affected Section Contracts. Preserve beat identity, recipe requirement IDs, established causal state, and the primary conflict. Rewrite the minimum number of sections so their dramaticEvent, resultingChange, and terminalState materially satisfy the failed obligations. ${intimacyFailure && intimacy ? `The whole-arc obligation ${SELECTED_INTIMACY_LEVEL_OBLIGATION} requires this selected ${intimacy.level} milestone to occur in the current eligible section; do not use implication, kissing, rumpled sheets, or a relationship label as a substitute.` : ""} Return only the required JSON.`,
-    JSON.stringify({ recipe: compactRecipe(recipe), affectedBeats: input }),
+    JSON.stringify({ recipe: recipe ?? null, affectedBeats: input }),
     7000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_repair", strict: true, schema: SEMANTIC_REPAIR_SCHEMA } },
     "outline-semantic-repair-batch",
@@ -4388,16 +4388,43 @@ export async function repairStoryArcSemanticObligations(
 const PRIMARY_CONFLICT_SIGNALS = /\b(?:launch(?:es|ed)?\s+(?:a|the|another)\s+(?:larger\s+)?decisive\s+assault|launch(?:es|ed)?\s+(?:a|the|another)\s+(?:citywide\s+)?takeover|mount(?:s|ed)?\s+(?:a|the)\s+decisive\s+assault|wage(?:s|d)?\s+(?:a|the)\s+war|attack(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|assault(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|invade(?:s|d)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|conquer(?:s|ed)?\s+(?:the|a)\s+(?:capital|city|kingdom|empire)|take\s+over\s+(?:the|a)\s+(?:government|kingdom|empire)|seize(?:s|d)?\s+(?:the|a)\s+(?:government|throne|kingdom|empire)|overthrow(?:s|n)?\s+(?:the|a)\s+(?:government|regime|kingdom)|citywide\s+takeover)\b/i;
 const CLOSURE_SIGNALS = /\b(settle(?:s|d)?|stabiliz(?:e|es|ed)|new normal|aftermath|mourning|rebuild(?:s|ing)?|govern(?:s|ed|ance)|peace|accept(?:s|ed)?|legacy|closing image)\b/;
 // “Aftermath” describes what follows an ending; it does not itself answer
-// the central dramatic question. Required resolution beats therefore need a
-// concrete settling/answering action in the state-change fields, not merely a
-// final-looking label or the word “aftermath”.
-const RESOLUTION_ACTION_SIGNALS = /\b(?<!un)(?:resolve(?:s|d)?|answer(?:s|ed)?|settle(?:s|d)?|stabiliz(?:e|es|ed)?|end(?:s|ed)?\s+(?:the|its|a)\s+(?:central\s+)?(?:conflict|threat|war|crisis|cycle|reign|pursuit)|defeat(?:s|ed)?|disarm(?:s|ed)?|dismantle(?:s|d)?|restore(?:s|d)?|rebuild(?:s|ing)?|govern(?:s|ed|ance)|make(?:s|d)? peace)\b/;
+// the central dramatic question. Resolution validation therefore checks the
+// shape of the Section Contract rather than requiring a preferred vocabulary
+// such as justice, peace, restoration, or institutional success.
+const RESOLUTION_ATMOSPHERE_WORDS = new Set([
+  "aftermath", "remember", "remembers", "remembered", "mourn", "mourning",
+  "stare", "stares", "stared", "horizon", "wonder", "wonders", "wondered",
+  "next", "unresolved", "continues", "continuing", "residue", "mood",
+  "reflection", "reflect", "reflects", "reflecting", "quiet", "silence",
+  "silent", "memory", "memories", "survivors", "protagonists", "happened", "lost", "what", "comes", "remain", "remains",
+  "the", "and", "as", "they", "to", "a", "of", "in", "on", "at", "for", "can", "is", "are", "was",
+  "state", "states", "change", "changes", "changed", "materially", "consequence", "consequences",
+]);
 
 function resolutionEvidenceText(section: Suggestion): string {
   return [section.dramaticEvent, section.resultingChange, section.terminalState]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+}
+
+export function hasConcreteResolutionOutcome(section: Suggestion): boolean {
+  const change = String(section.resultingChange ?? "").trim();
+  const terminal = String(section.terminalState ?? "").trim();
+  if (!change || !terminal) return false;
+  const evidence = resolutionEvidenceText(section);
+  const tokens = evidence.match(/[a-z0-9]+/g) ?? [];
+  const substantiveTokens = tokens.filter((token) => !RESOLUTION_ATMOSPHERE_WORDS.has(token));
+  const unresolvedContinuation = /\b(?:unresolved|continues beyond|remains unresolved)\b/.test(evidence);
+  const continuingConsequences = /\bconsequences continue\b/.test(evidence);
+  const concreteTermination = /\b(?:destroyed|destroy|ends?|ended|disappear(?:s|ed)?|gone|over|cannot reopen|no longer|burn(?:s|ed)?|die(?:s|d)?|dead|sever(?:s|ed)?)\b/.test(evidence);
+  const completedChangedNormal = /\b(?:settles?|new normal|resolved?|ends?|over)\b/.test(evidence);
+  // A resolution may be destructive, tragic, ambiguous, or morally compromised.
+  // Reject only contracts whose evidence is still entirely atmospheric/unresolved
+  // or explicitly leaves the central state continuing without a concrete terminal
+  // consequence. No preferred moral or genre outcome is required.
+  if ((unresolvedContinuation && !concreteTermination) || (continuingConsequences && !completedChangedNormal && !concreteTermination)) return false;
+  return substantiveTokens.length >= 2 && change !== terminal;
 }
 
 function inferredFunction(suggestion: Suggestion): DramaticFunction | null {
@@ -4449,7 +4476,7 @@ export function validateRequiredStoryArcFunctions(
       if (requiredSections.length === 0) {
         issues.push(`beat ${beat.label} (${beat.id}) is missing required dramatic function ${required}; present functions: ${present}`);
       } else if (required === "resolution" && !requiredSections.some((section) =>
-        RESOLUTION_ACTION_SIGNALS.test(resolutionEvidenceText(section))
+        hasConcreteResolutionOutcome(section)
       )) {
         issues.push(`beat ${beat.label} (${beat.id}) declares resolution but does not materially resolve the central dramatic question or conflict`);
       }
@@ -4480,7 +4507,7 @@ export async function repairRequiredStoryArcFunctions(
   template: Pick<ArcTemplateBlob, "name" | "beats">,
   billableCall: SuggestionLLMCall,
   obligations: RecipeObligation[] = [],
-  context: { premise?: string; recipe?: unknown } = {},
+  context: { premise?: string; recipe?: CanonicalRecipeEnvelope } = {},
 ): Promise<{ suggestions: Suggestion[]; repaired: string[]; unresolved: string[] }> {
   let result = suggestions.map((section) => ({ ...section }));
   const repaired: string[] = [];
@@ -4508,7 +4535,7 @@ export async function repairRequiredStoryArcFunctions(
         beat: { id: beat.id, role: beat.role, label: beat.label, contract: roleContract },
         requiredFunction: required,
         context: {
-          recipe: compactRecipe(context.recipe),
+          recipe: context.recipe ?? null,
           premise: context.premise ?? null,
           precedingClimax: precedingClimax ?? null,
         },
@@ -5425,7 +5452,7 @@ export async function runSuggestionJob(
         : action;
       const measuredPrompt = {
         ...promptMetrics(messages, {
-          recipeBytes: new TextEncoder().encode(JSON.stringify(compactRecipe(body.recipe))).byteLength,
+          recipeBytes: new TextEncoder().encode(JSON.stringify(body.recipe ?? null)).byteLength,
           enrichmentBytes: new TextEncoder().encode(JSON.stringify(compactMaterial(body.storyMaterialEnrichment))).byteLength,
           existingSectionCount: body.existingSections?.length ?? 0,
         }),
