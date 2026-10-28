@@ -6271,7 +6271,7 @@ Deno.test("scheduler recovery delay never terminalizes a saved checkpoint", () =
 
 Deno.test("outline provider deadline leaves margin before Supabase Free wall clock", () => {
   assertEquals(OUTLINE_PROVIDER_TIMEOUT_MS < SUPABASE_FREE_WALL_CLOCK_MS, true);
-  assertEquals(SUPABASE_FREE_WALL_CLOCK_MS - OUTLINE_PROVIDER_TIMEOUT_MS, 20_000);
+  assertEquals(SUPABASE_FREE_WALL_CLOCK_MS - OUTLINE_PROVIDER_TIMEOUT_MS, 30_000);
 });
 
 Deno.test("outline provider output budget stays within the verified provider ceiling", () => {

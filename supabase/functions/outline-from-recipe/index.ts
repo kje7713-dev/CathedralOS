@@ -4826,7 +4826,7 @@ export function isRetryableSemanticRepairFailure(run: {
 // margin for request setup, billing settlement, and the durable checkpoint;
 // a 150s provider deadline can be killed by the platform before it throws.
 export const SUPABASE_FREE_WALL_CLOCK_MS = 150_000;
-export const OUTLINE_PROVIDER_TIMEOUT_MS = 130_000;
+export const OUTLINE_PROVIDER_TIMEOUT_MS = 120_000;
 // The selected GPT-5.4 mini deployment rejects larger structured completion
 // budgets. Keep this at the verified 16K provider ceiling; planning scale is
 // controlled by the bounded expansion stages rather than an invalid request.
