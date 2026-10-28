@@ -129,8 +129,14 @@ final class AuthSessionResolver: SupabaseSessionProvider {
         // Functions authenticate with auth.getUser() and return the same
         // condition as { errorCode: "unauthorized", message: "invalid JWT" }.
         // Both responses must trigger the one-shot session refresh.
-        return (body.contains("pgrst303") && body.contains("jwt expired"))
-            || body.contains("invalid jwt")
+        let normalized = body
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+        return (normalized.contains("pgrst303") && normalized.contains("jwt expired"))
+            || normalized.contains("invalid jwt")
+            || normalized.contains("bad jwt")
+            || normalized.contains("token is expired")
+            || normalized.contains("token has invalid claims")
     }
 
     static func isSessionExpiredError(_ error: Error) -> Bool {
