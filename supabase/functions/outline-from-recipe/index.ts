@@ -4827,10 +4827,10 @@ export function isRetryableSemanticRepairFailure(run: {
 // a 150s provider deadline can be killed by the platform before it throws.
 export const SUPABASE_FREE_WALL_CLOCK_MS = 150_000;
 export const OUTLINE_PROVIDER_TIMEOUT_MS = 130_000;
-// GPT-5.4 mini accepts a larger structured completion than the former 16K
-// ceiling, but 128K exceeds the model-safe request budget for this planner.
-// Keep enough room for a full novel outline without sending an invalid request.
-export const OUTLINE_OUTPUT_TOKEN_BUDGET = 32_000;
+// The selected GPT-5.4 mini deployment rejects larger structured completion
+// budgets. Keep this at the verified 16K provider ceiling; planning scale is
+// controlled by the bounded expansion stages rather than an invalid request.
+export const OUTLINE_OUTPUT_TOKEN_BUDGET = 16_000;
 const SUGGESTION_LEASE_MS = 3 * 60 * 1000;
 export const MAX_SUGGESTION_ATTEMPTS = 5;
 export const MAX_SUGGESTION_NO_PROGRESS_MS = 10 * 60 * 1000;
