@@ -6274,7 +6274,7 @@ Deno.test("outline provider deadline leaves margin before Supabase Free wall clo
   assertEquals(SUPABASE_FREE_WALL_CLOCK_MS - OUTLINE_PROVIDER_TIMEOUT_MS, 30_000);
 });
 
-Deno.test("outline provider output budget stays within the verified provider ceiling", () => {
+Deno.test("outline billing estimate remains bounded while Luna Fast owns provider output ceiling", () => {
   assertEquals(OUTLINE_OUTPUT_TOKEN_BUDGET, 16_000);
 });
 

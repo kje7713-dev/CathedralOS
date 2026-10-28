@@ -348,6 +348,7 @@ Deno.test("OpenAIProvider: forwards Fast service tier", async () => {
       serviceTier: "fast",
     });
     assertEquals(lastRequest?.body.service_tier, "fast");
+    assertEquals(lastRequest?.body.max_completion_tokens, undefined);
   } finally {
     uninstallFetchStub();
   }
