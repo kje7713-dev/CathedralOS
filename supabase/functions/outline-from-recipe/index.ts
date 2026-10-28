@@ -1161,7 +1161,7 @@ export function buildEnrichmentPrompt(
   return {
     system: `${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
 
-You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Apply the recipe authority above before inventing support. Invention must be governed first by the author's premise and defining conflicts, then by character behavior, flaws, desires, contradictions, relationships, tone, genre, intensity, absurdity, and intended reader experience, then by consequences and reversals caused by those elements. Add supporting locations, institutions, antagonists, and mechanics only when they express those priorities. For a character-driven satire, primarily invent events caused by destructive character behavior and the world's response; for an investigative thriller or political procedural, investigations and institutions may drive the story when the recipe actually makes them central. Do not let a coherent invented operational objective, technical mechanism, or institutional solution prematurely solve the whole narrative unless the authored material supports it. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. For a novel, develop enough interconnected conflict and opposition, escalation and reversals, character and relationship development, consequences and discoveries, and meaningful tactical and emotional state changes to support the approximately 115,000-word planning target. Do not chase that target with filler, fixed item counts, or unrelated subplots; prioritize substantive connected story material and let the outline planner determine its natural distribution. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Preserve the defining traits, behaviors, moral complexity, tonal intensity, absurdity, and narrative uncertainty explicitly stated by the author. Treat them as creative commitments, not optional inspiration. Invent supporting material that develops those elements rather than explaining them away, softening them, or replacing them with a different central conflict. Do not default to conventional investigations, bureaucratic procedures, military operations, chosen-one narratives, moral redemption, or institutional resolutions unless the recipe supports them; these are defaults to avoid, not globally prohibited mechanisms. Every planner-invented item is a replaceable development candidate, not a new authorial obligation or canon fact. Ensure the antagonist, escalation ladder, and major reversals materially demonstrate the original premise through concrete character-caused story events, not just descriptions or rationale. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Do not fill categories mechanically, do not make one elegant planner-created mechanism the mandatory explanation for every later event, and ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
+You are the story-material enrichment planner for CathedralOS. Create a concrete package before outline planning, not prose or a final outline. Apply the recipe authority above before inventing support. Invention must be governed first by the author's premise and defining conflicts, then by character behavior, flaws, desires, contradictions, relationships, tone, genre, intensity, absurdity, and intended reader experience, then by consequences and reversals caused by those elements. Identify the consequential central outcome promised by the premise and build supporting material so the protagonists' distinctive traits, flaws, decisions, and characteristic actions can materially cause or complicate that outcome. Add supporting locations, institutions, antagonists, and mechanics only when they express those priorities. For a character-driven satire, primarily invent events caused by destructive character behavior and the world's response; for an investigative thriller or political procedural, investigations and institutions may drive the story when the recipe actually makes them central. Do not let a coherent invented operational objective, technical mechanism, or institutional solution prematurely solve the whole narrative unless the authored material supports it. Sparse input does NOT mean a shorter or simpler story: Cathedral has a larger invention burden and must invent the opposition, supporting cast, institutions, locations, objectives, failures, discoveries, relationships, consequences, reversals, and escalation needed for ${format}-scale development while respecting authored facts. For a novel, develop enough interconnected conflict and opposition, escalation and reversals, character and relationship development, consequences and discoveries, and meaningful tactical and emotional state changes to support the approximately 115,000-word planning target. Do not chase that target with filler, fixed item counts, or unrelated subplots; prioritize substantive connected story material and let the outline planner determine its natural distribution. Rich input means preserve, connect, and deepen supplied material before inventing replacements; do not make detailed recipes less ambitious. Preserve the defining traits, behaviors, moral complexity, tonal intensity, absurdity, and narrative uncertainty explicitly stated by the author. Treat them as creative commitments, not optional inspiration. Invent supporting material that develops those elements rather than explaining them away, softening them, or replacing them with a different central conflict. Do not default to conventional investigations, bureaucratic procedures, military operations, chosen-one narratives, moral redemption, or institutional resolutions unless the recipe supports them; these are defaults to avoid, not globally prohibited mechanisms. Every planner-invented item is a replaceable development candidate, not a new authorial obligation or canon fact. Ensure the antagonist, escalation ladder, and major reversals materially demonstrate the original premise through concrete character-caused story events, not just descriptions or rationale. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Do not fill categories mechanically, do not make one elegant planner-created mechanism the mandatory explanation for every later event, and ensure the package is concrete enough that the outline planner does not invent the entire plot section by section. Return only JSON matching the enrichment schema.${repairInstruction}`,
     user: JSON.stringify({
       recipe: req.recipe,
       recipeMaterialHandles: Object.fromEntries(recipeMaterialHandles(req.recipe)),
@@ -2951,6 +2951,9 @@ ${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
 The recipe is the governing creative brief, not metadata to distribute as section tags. Required recipe obligations outrank generic outline habits, filler, and even the desire for evenly balanced Story Arc coverage. Materially dramatize the premise, selected characters, relationships, story spark, themes, setting, tone/audience guidance, and ending intent wherever the recipe supplies them. A section may carry a recipe ID only when its Section Contract actually advances that requirement; never tag a section merely to make coverage counts pass. Planner-generated material may be rejected or replaced when it creates genre drift or contradicts the recipe; unused planner material is not a narrative quota. A character can transform without becoming morally better; a quest can remain chaotic, accidental, selfish, or destructive; a revelation need not provide neat explanatory closure; and a resolution settles the relevant dramatic question without requiring every mystery or conflict to be resolved. Before finalizing, audit the whole outline against every required obligation and redesign weak or generic sections until the recipe visibly drives the plot, escalation, relationship movement, and payoff.
 Every defining behavior, event, or conflict explicitly specified by the author must have a concrete realization somewhere in the outline. At least one relevant Section Contract must require that realization through its dramaticEvent, resultingChange, or terminalState. Mentioning it in a summary, labeling a character with the trait, or assigning a recipe requirement ID does not constitute realization. Preserve creative freedom over how and when the requirement is realized.
 
+## Premise outcome and ending causality
+Identify the central outcome the authored premise promises before distributing events. Make the protagonists' distinctive traits, flaws, decisions, and characteristic actions materially cause or complicate that outcome; do not let a generic technical, institutional, or tactical solution replace their authored agency. The climax must change the central conflict and produce the promised consequential outcome, not merely interrupt one incident or operation. In the final substantive sections, make resultingChange state what the climax achieved and terminalState establish the achieved condition handed forward. The result may be ambiguous, tragic, grotesque, destructive, morally compromised, or only partly understood by the characters; it need not solve every mystery or eliminate every antagonist, but the premise's consequential promise must actually occur.
+
 ## Recipe obligations
 The JSON planning context contains the authoritative obligations exactly once.
 
@@ -3937,18 +3940,27 @@ function semanticText(suggestion: Suggestion): string {
  * the provider, but the server still checks that the obligated state-change
  * fields are present rather than trusting a role label alone.
  */
-function normalizeEvidenceText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+export function normalizeEvidenceText(value: string): string {
+  let normalized = value.replace(/\s+/g, " ").trim();
+  const wrappers: Array<[string, string]> = [["\"", "\""], ["“", "”"], ["'", "'"], ["‘", "’"]];
+  for (const [opening, closing] of wrappers) {
+    if (normalized.startsWith(opening) && normalized.endsWith(closing) && normalized.length >= opening.length + closing.length) {
+      normalized = normalized.slice(opening.length, normalized.length - closing.length).trim();
+      break;
+    }
+  }
+  return normalized.replace(/\s+/g, " ").trim();
 }
 
-function findGroundedSemanticField(
+export function findGroundedSemanticField(
   section: Partial<Suggestion> | undefined,
   quote: string,
   allowedFields: ArcSemanticField[],
 ): ArcSemanticField | undefined {
-  if (!section || !quote) return undefined;
+  const normalizedQuote = normalizeEvidenceText(quote);
+  if (!section || !normalizedQuote) return undefined;
   return allowedFields.find((candidate) =>
-    normalizeEvidenceText(String((section as any)[candidate] ?? "")).includes(quote)
+    normalizeEvidenceText(String((section as any)[candidate] ?? "")).includes(normalizedQuote)
   );
 }
 
@@ -4026,6 +4038,14 @@ export type SemanticVerificationResult = {
  * improve verification. This is deliberately not a literary score: the only
  * comparison is the verifier's validated unresolved-obligation set.
  */
+function semanticFailureIdentity(failure: { beatID: string; obligationID: string }): string {
+  const { obligationID } = failure;
+  const isStoryWide = obligationID === CREATIVE_FIDELITY_OBLIGATION ||
+    obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION ||
+    obligationID.startsWith("story_non_negotiable_");
+  return isStoryWide ? `story:${obligationID}` : `beat:${failure.beatID}:${obligationID}`;
+}
+
 export function chooseBestSemanticOutline(
   original: Suggestion[],
   repaired: Suggestion[],
@@ -4034,9 +4054,9 @@ export function chooseBestSemanticOutline(
 ): Suggestion[] {
   if (original.length === 0) return repaired;
   if (repaired.length === 0) return original;
-  if (!originalVerification || !repairedVerification) return original;
-  const originalFailures = new Set(originalVerification.unsatisfied.map((failure) => `${failure.beatID}:${failure.obligationID}`));
-  const repairedFailures = new Set(repairedVerification.unsatisfied.map((failure) => `${failure.beatID}:${failure.obligationID}`));
+  if (!originalVerification || !repairedVerification || !Array.isArray(originalVerification.unsatisfied) || !Array.isArray(repairedVerification.unsatisfied)) return original;
+  const originalFailures = new Set(originalVerification.unsatisfied.map(semanticFailureIdentity));
+  const repairedFailures = new Set(repairedVerification.unsatisfied.map(semanticFailureIdentity));
   const resolvesExistingFailure = [...originalFailures].some((failure) => !repairedFailures.has(failure));
   const introducesNewFailure = [...repairedFailures].some((failure) => !originalFailures.has(failure));
   return resolvesExistingFailure && !introducesNewFailure ? repaired : original;

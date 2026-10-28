@@ -105,6 +105,8 @@ import {
   validateStoryArcSemantics,
   validateArcSemanticObligations,
   validateGroundedArcEvidence,
+  normalizeEvidenceText,
+  findGroundedSemanticField,
   validatePostRepairBeatCoverage,
   validateRequiredStoryArcFunctions,
   repairRequiredStoryArcFunctions,
@@ -1216,6 +1218,10 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Maintain the established narrative POV mode across the outline unless the supplied recipe explicitly requires a POV change."), true);
   assertEquals(system.includes("Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation."), true);
   assertEquals(system.includes("Whenever practical, relationship and character-arc turns should cause or complicate plot events rather than occurring as isolated character-development scenes."), true);
+  assertEquals(system.includes("## Premise outcome and ending causality"), true);
+  assertEquals(system.includes("The climax must change the central conflict and produce the promised consequential outcome"), true);
+  assertEquals(system.includes("resultingChange state what the climax achieved and terminalState establish the achieved condition"), true);
+  assertEquals(system.includes("The result may be ambiguous, tragic, grotesque, destructive, morally compromised"), true);
   assertEquals(system.includes("Favor specific, memorable events and evocative section titles over functional briefing, regrouping, mapping, or explanatory scenes."), true);
 });
 
@@ -3130,6 +3136,8 @@ Deno.test("enrichment prompt preserves sparse recipe facts and separates planner
   assertEquals(prompt.system.includes("source=recipe"), false);
   assertEquals(prompt.system.includes("source=planner"), true);
   assertEquals(prompt.system.includes("character behavior, flaws, desires, contradictions, relationships"), true);
+  assertEquals(prompt.system.includes("central outcome promised by the premise"), true);
+  assertEquals(prompt.system.includes("distinctive traits, flaws, decisions, and characteristic actions"), true);
   assertEquals(prompt.system.includes("prematurely solve the whole narrative"), true);
   assertEquals(prompt.system.includes("replaceable development candidate"), true);
   assertEquals(prompt.user.includes("Monsters kill humans"), true);
@@ -6661,6 +6669,34 @@ Deno.test("Story Arc evidence must quote the actual Section Contract field", () 
   assertEquals(grounded.value?.authored_beat_requirement?.length, 1);
 });
 
+Deno.test("semantic evidence normalization accepts harmless wrappers but not paraphrases", () => {
+  const section: any = {
+    dramaticEvent: "Elin and Temur arrange the source documents at the winter court.",
+    resultingChange: "The case becomes auditable.",
+    terminalState: "The court has a documented evidence sequence.",
+  };
+  assertEquals(normalizeEvidenceText("The   case becomes auditable."), "The case becomes auditable.");
+  assertEquals(normalizeEvidenceText("“The   case becomes auditable.”"), "The case becomes auditable.");
+  assertEquals(normalizeEvidenceText('"The case becomes auditable."'), "The case becomes auditable.");
+  assertEquals(findGroundedSemanticField(section, "The case becomes auditable.", ["resultingChange"]), "resultingChange");
+  assertEquals(findGroundedSemanticField(section, "“The case becomes auditable.”", ["resultingChange"]), "resultingChange");
+  assertEquals(findGroundedSemanticField(section, "The case is now verifiable.", ["resultingChange"]), undefined);
+  assertEquals(findGroundedSemanticField(section, "The court has no evidence.", ["terminalState"]), undefined);
+});
+
+Deno.test("semantic verifier preserves a provider false judgment even with grounded evidence", async () => {
+  const section: any = { storyArcBeatID: "beat", dramaticEvent: "The source is filed.", resultingChange: "The case becomes auditable.", terminalState: "The court has a documented evidence sequence." };
+  const recipe: any = { ...sparseRequest.recipe, storyNonNegotiables: ["The case must become auditable."] };
+  const result = await verifyStoryArcSemantics([section], { name: "Custom", beats: [{ id: "beat", role: "setup", label: "Setup" }] } as any, async () => ({
+    content: JSON.stringify({
+      arcWideObligations: [{ obligationID: "story_non_negotiable_0", satisfied: false, sectionIndex: 0, field: "resultingChange", quote: "“The case becomes auditable.”", reason: "provider determined the requirement is not met" }],
+      beats: [{ beatID: "beat", obligations: [] }],
+    }),
+  }) as any, recipe);
+  assertEquals(result.arcWideObligations[0].satisfied, false);
+  assertEquals(result.unsatisfied[0].obligationID, "story_non_negotiable_0");
+});
+
 Deno.test("Story Arc obligations are beat-level rather than required on every section", () => {
   const template: any = { name: "Custom", beats: [{ id: "beat", role: "midpoint_intimacy", label: "Midpoint", description: "Deepen the relationship." }] };
   const suggestions: any[] = [
@@ -6716,6 +6752,15 @@ Deno.test("semantic repair selection requires resolving existing keys without in
     unsatisfied: [{ beatID: "b", obligationID: "creative_fidelity", reason: "same failure" }, { beatID: "c", obligationID: "required_resolution_outcome", reason: "same failure" }],
   }), original);
   assertEquals(chooseBestSemanticOutline(original, repaired, originalVerification, undefined), original);
+  assertEquals(chooseBestSemanticOutline(original, repaired,
+    { unsatisfied: [{ beatID: "first", obligationID: CREATIVE_FIDELITY_OBLIGATION, reason: "same story-wide failure" }] },
+    { unsatisfied: [] }), repaired);
+  assertEquals(chooseBestSemanticOutline(original, repaired,
+    { unsatisfied: [{ beatID: "first", obligationID: "story_non_negotiable_0", reason: "one story-wide failure" }] },
+    { unsatisfied: [{ beatID: "story_arc", obligationID: "story_non_negotiable_1", reason: "different story-wide failure" }] }), original);
+  assertEquals(chooseBestSemanticOutline(original, repaired,
+    { unsatisfied: [{ beatID: "first", obligationID: "authored_beat_requirement", reason: "beat failure" }] },
+    { unsatisfied: [{ beatID: "second", obligationID: "authored_beat_requirement", reason: "different beat failure" }] }), original);
 });
 
 Deno.test("worker persists selected original suggestions with authoritative original verification", async () => {
