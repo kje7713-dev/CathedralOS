@@ -6047,6 +6047,19 @@ export async function runSuggestionJob(
       }
       await postValidatedOutline(suggestions, completionWarnings);
     };
+    // A worker can be interrupted after persisting semantic-completion but
+    // before recording the completed outline. Resume from the paid draft;
+    // never repeat its outline or verifier provider calls.
+    if (planningState.nextAction === "semantic-completion" && persistedSemanticSuggestions.length > 0) {
+      const previousWarnings = Array.isArray(diagnostics.semanticVerification?.unsatisfied)
+        ? (diagnostics.semanticVerification as SemanticVerificationResult).unsatisfied
+        : [];
+      await continueAfterSemanticVerification(persistedSemanticSuggestions,
+        previousWarnings.length > 0
+          ? [`Outline needs review: semantic verification flagged ${previousWarnings.length} unmet requirements. Original paid sections preserved; no automatic AI repair was attempted.`]
+          : []);
+      return;
+    }
     if (planningState.nextAction === "semantic-verification") {
       let verification: SemanticVerificationResult | undefined;
       try {
