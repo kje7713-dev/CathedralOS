@@ -6074,7 +6074,7 @@ export async function runSuggestionJob(
     // Compatibility for in-flight runs checkpointed before AI repair was disabled.
     // Recover the earliest paid outline rather than invoking another writer or
     // risking a terminal failure when a repair's target is no longer valid.
-    if (["semantic-repair", "semantic-reverification", "story-arc-repair", "story-arc-repair-completion", "obligation-repair"].includes(planningState.nextAction ?? "")) {
+    if (["semantic-repair", "semantic-reverification", "story-arc-repair", "story-arc-repair-completion", "obligation-repair"].includes(String(planningState.nextAction ?? ""))) {
       const skippedAction = planningState.nextAction;
       const original = Array.isArray(planningState.semanticRepairOriginalSuggestions)
         ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
