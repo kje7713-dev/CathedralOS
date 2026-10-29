@@ -6054,9 +6054,9 @@ export async function runSuggestionJob(
       } catch (error) {
         recordSemanticWarning(`Semantic verification was unavailable; continuing with the best structural outline: ${error instanceof Error ? error.message : String(error)}`);
         planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_verification_warning" };
+        diagnostics = { ...diagnostics, stage: "semantic_verification_warning", firstPassQualityStatus: "needs_review" };
         await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(persistedSemanticSuggestions);
+        await continueAfterSemanticVerification(persistedSemanticSuggestions, ["Outline needs review: semantic verification was unavailable. Original paid sections preserved."]);
         return;
       }
       diagnostics = { ...diagnostics, stage: "semantic_verified", semanticVerification: verification };
@@ -6064,7 +6064,7 @@ export async function runSuggestionJob(
         ? [`Outline needs review: semantic verification flagged ${verification.unsatisfied.length} unmet requirements. Original paid sections preserved; no automatic AI repair was attempted.`]
         : [];
       if (semanticWarnings.length) {
-        diagnostics = { ...diagnostics, firstPassQualityStatus: "needs_review", semanticRepairFailures: verification.unsatisfied };
+        diagnostics = { ...diagnostics, firstPassQualityStatus: "needs_review", semanticUnmetRequirements: verification.unsatisfied };
       }
       planningState = { ...planningState, phase: "semantic_verified", nextAction: "semantic-completion" };
       await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
