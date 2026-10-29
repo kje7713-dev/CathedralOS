@@ -3130,36 +3130,73 @@ Deno.test("story material enrichment validates provenance and remains inspectabl
 Deno.test("enrichment prompt preserves sparse recipe facts and separates planner invention", () => {
   const prompt = buildEnrichmentPrompt(sparseRequest as any);
   assertEquals(prompt.system.includes("Preserve supplied material and deepen it rather than replacing it"), true);
-  assertEquals(prompt.system.includes("support the approximately 115,000-word target"), true);
+  assertEquals(prompt.system.includes("support the approximately 115,000-word planning target"), true);
   assertEquals(prompt.system.includes("connected conflicts, consequences, reversals, discoveries, relationships"), true);
   assertEquals(prompt.system.includes("not a large inventory of disconnected concepts"), true);
   assertEquals(prompt.system.includes("source=recipe"), false);
   assertEquals(prompt.system.includes("source=planner"), true);
-  assertEquals(prompt.system.includes("Distinctive protagonists"), true);
-  assertEquals(prompt.system.includes("Original, concrete dramatic situations"), true);
-  assertEquals(prompt.system.includes("remove or consolidate candidates that repeat another item's dramatic function"), true);
-  assertEquals(prompt.system.includes("Do not fill every category because the schema permits it"), true);
+  assertEquals(prompt.system.includes("Character-first invention"), true);
+  assertEquals(prompt.system.includes("Situations caused by people"), true);
+  assertEquals(prompt.system.includes("Escalation through character consequence"), true);
+  assertEquals(prompt.system.includes("World mechanics last"), true);
+  assertEquals(prompt.system.includes("Do not suppress supporting-character invention"), true);
+  assertEquals(prompt.system.includes("There is no cast quota"), true);
+  assertEquals(prompt.system.includes("Do not minimize candidate count as an objective"), true);
   assertEquals(prompt.system.includes("replaceable development candidate"), true);
   assertEquals(prompt.user.includes("Monsters kill humans"), true);
   assertEquals(prompt.user.includes("Douche"), true);
 });
 
+Deno.test("enrichment prompt favors audacity, adult intensity, and memorable experiences without flattening genre", () => {
+  const prompt = buildEnrichmentPrompt(sparseRequest as any).system;
+  assertStringIncludes(prompt, "## Entertainment, Audacity, and Creative Intensity");
+  assertStringIncludes(prompt, "most compelling, original, entertaining, and dramatically exciting");
+  assertStringIncludes(prompt, "wild, eccentric, larger-than-life supporting characters");
+  assertStringIncludes(prompt, "spectacular mistakes, escalating disasters, reckless decisions");
+  assertStringIncludes(prompt, "addictions, appetites, obsessions, moral corruption");
+  assertStringIncludes(prompt, "Do not automatically transform morally compromised protagonists into responsible heroes");
+  assertStringIncludes(prompt, "Do not impose redemption arcs, moral lessons, institutional reform");
+  assertStringIncludes(prompt, "Do not unnecessarily sanitize or dilute authored adult intensity");
+  assertStringIncludes(prompt, "subject to applicable content constraints");
+  assertStringIncludes(prompt, "## Prioritize experiences over explanations");
+  assertStringIncludes(prompt, "Invent events worth reading, not explanations worth filing");
+  assertStringIncludes(prompt, "quiet literary novel, restrained romance, cozy mystery, or procedural thriller");
+  assertStringIncludes(prompt, "Do not add arbitrary violence, sex, comedy, or spectacle");
+  assertEquals(prompt.includes("Do not default to rosters, manifests, inventories, ledgers"), true);
+  assertEquals(prompt.includes("There is no cast quota"), true);
+});
+
 Deno.test("enrichment prompt favors inventive situations over generic machinery", () => {
   const prompt = buildEnrichmentPrompt(sparseRequest as any);
   const payload = JSON.parse(prompt.user);
-  assertStringIncludes(prompt.system, "Invent what happens before inventing machinery that explains it");
-  assertStringIncludes(prompt.system, "Unexpected but causally earned");
-  assertStringIncludes(prompt.system, "Supporting antagonists, locations, institutions, and mechanisms only when they are necessary");
-  assertStringIncludes(prompt.system, "Story Arc template is structural guidance, not genre authority");
-  assertStringIncludes(prompt.system, "a quest need not be a conventional mission");
-  assertStringIncludes(prompt.system, "Do not fill every category because the schema permits it");
-  assertStringIncludes(prompt.system, "Do not return entries that merely restate a theme, profile, beat label, or generic plot function");
-  assertStringIncludes(prompt.system, "character-driven stories");
-  assertStringIncludes(prompt.system, "institutions and systems may drive the plot when the authored material actually requests that experience");
-  assertStringIncludes(prompt.system, "existing sufficiency requirements remain authoritative");
+  assertStringIncludes(prompt.system, "personality, independent desire, flaw or contradiction");
+  assertStringIncludes(prompt.system, "bad decisions, misunderstandings, confrontations, bargains, betrayals");
+  assertStringIncludes(prompt.system, "Something interesting must happen");
+  assertStringIncludes(prompt.system, "Do not default to rosters, manifests, inventories, ledgers");
+  assertStringIncludes(prompt.system, "A document is not a dramatic event; a list is not an antagonist; reconciliation is not a climax");
+  assertStringIncludes(prompt.system, "Do not cosmetically replace paperwork with recordings");
+  assertStringIncludes(prompt.system, "If the author specifically requests a legal procedural");
+  assertStringIncludes(prompt.system, "Sparse input still carries a larger invention burden");
+  assertStringIncludes(prompt.system, "retain distinct people and situations");
+  assertStringIncludes(prompt.system, "The schema and existing sufficiency requirements remain authoritative");
   assertStringIncludes(prompt.system, "existing enrichment schema");
   assertEquals(payload.arcTemplate, sparseRequest.arcTemplate);
   assertEquals(payload.recipe, sparseRequest.recipe);
+});
+
+Deno.test("character-first enrichment direction precedes situations, escalation, and mechanics", () => {
+  const prompt = buildEnrichmentPrompt(sparseRequest as any).system;
+  const characters = prompt.indexOf("## Character-first invention");
+  const situations = prompt.indexOf("## Situations caused by people");
+  const escalation = prompt.indexOf("## Escalation through character consequence");
+  const mechanics = prompt.indexOf("## World mechanics last");
+  assertEquals(characters >= 0, true);
+  assertEquals(characters < situations, true);
+  assertEquals(situations < escalation, true);
+  assertEquals(escalation < mechanics, true);
+  assertEquals(prompt.includes("independent desire"), true);
+  assertEquals(prompt.includes("derail the protagonists' plans"), true);
+  assertEquals(prompt.includes("Do not advance the plot through a succession of documents"), true);
 });
 
 Deno.test("request validation accepts a previously persisted enrichment package", () => {
