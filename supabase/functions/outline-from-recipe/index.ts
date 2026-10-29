@@ -3045,7 +3045,15 @@ Respond with structured JSON matching the schema. This is the only provider call
   planningView.materialIndex = compactMaterialForOutline(storyMaterial);
   const user = JSON.stringify({
     planningContext: planningView,
-    allocation: Array.from(allocation.entries()),
+    // Only quantitative constraints cross into the creative generation call.
+    // The saved allocation retains rationale for diagnostics; the model does
+    // not receive speculative plot direction from that earlier stage.
+    allocation: Array.from(allocation.entries(), ([beatId, info]) => [beatId, {
+      minSections: info.minSections,
+      ...(info.coverageMinimum !== undefined ? { coverageMinimum: info.coverageMinimum } : {}),
+      ...(info.allocationMinimum !== undefined ? { allocationMinimum: info.allocationMinimum } : {}),
+      ...(info.containerCounts ? { containerCounts: info.containerCounts } : {}),
+    }]),
     allocationContract: isNovel
       ? "Complete first-pass novel distribution; each allocation is substantial new work and shorter containers count at their actual midpoint."
       : "Minimum section coverage for this non-novel format; preserve existing format semantics.",
