@@ -6051,9 +6051,8 @@ export async function runSuggestionJob(
     // before recording the completed outline. Resume from the paid draft;
     // never repeat its outline or verifier provider calls.
     if (planningState.nextAction === "semantic-completion" && persistedSemanticSuggestions.length > 0) {
-      const previousWarnings = Array.isArray(diagnostics.semanticVerification?.unsatisfied)
-        ? (diagnostics.semanticVerification as SemanticVerificationResult).unsatisfied
-        : [];
+      const savedVerification = diagnostics.semanticVerification as SemanticVerificationResult | undefined;
+      const previousWarnings = Array.isArray(savedVerification?.unsatisfied) ? savedVerification.unsatisfied : [];
       await continueAfterSemanticVerification(persistedSemanticSuggestions,
         previousWarnings.length > 0
           ? [`Outline needs review: semantic verification flagged ${previousWarnings.length} unmet requirements. Original paid sections preserved; no automatic AI repair was attempted.`]
