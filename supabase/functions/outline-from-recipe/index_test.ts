@@ -5990,6 +5990,29 @@ Deno.test("legacy obligation-repair checkpoint resumes without another provider 
   assertEquals(db.row.diagnostics.firstPassQualityStatus, "needs_review");
 });
 
+Deno.test("resumed semantic-completion preserves paid first pass without repeating provider calls", async () => {
+  const body = await executableWorkerBody();
+  const original = [
+    { title: "Original beginning", summary: "A first change.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "The route changes.", entryState: "Before", dramaticEvent: "A first change occurs.", resultingChange: "Pressure rises.", terminalState: "The route is changed.", storyArcBeatID: "beat-1", dramaticFunction: "setup", recipeRequirementIDs: [] },
+    { title: "Original ending", summary: "A confrontation ends.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "The conflict ends.", entryState: "After", dramaticEvent: "The conflict resolves.", resultingChange: "The threat is stopped.", terminalState: "The new normal persists.", storyArcBeatID: "beat-2", dramaticFunction: "resolution", recipeRequirementIDs: [] },
+  ];
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    suggestions: original,
+    planning_state: { version: 2, phase: "semantic_completion", nextAction: "semantic-completion", allocationEntries: [["beat-1", { minSections: 1, rationale: "fixture" }], ["beat-2", { minSections: 1, rationale: "fixture" }]] },
+    diagnostics: { semanticVerification: { unsatisfied: [{ beatID: "beat-2", obligationID: "authored_beat_requirement", reason: "Review ending" }] } },
+  });
+  const calls: string[] = [];
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: fakeWorkerBilling(calls) as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(calls, []);
+  assertEquals(db.row.status, "completed", JSON.stringify({ error: db.row.error, diagnostics: db.row.diagnostics }));
+  assertEquals(db.row.suggestions, original);
+  assertEquals(db.row.diagnostics.firstPassQualityStatus, "needs_review");
+  assertEquals(db.row.warnings.some((w: string) => w.includes("semantic verification")), true);
+});
+
 Deno.test("first-pass quality scheduling cannot launch repair before semantic verification", async () => {
   const fullBody = await executableWorkerBody();
   const body = fullBody as any;
