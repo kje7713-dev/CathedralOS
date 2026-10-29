@@ -6687,6 +6687,21 @@ Deno.test("Story Arc evidence must quote the actual Section Contract field", () 
   assertEquals(grounded.value?.authored_beat_requirement?.length, 1);
 });
 
+Deno.test("empty optional Story Arc evidence does not fail outline validation", () => {
+  const section: any = {
+    dramaticEvent: "The lie gets them through the motel lobby.",
+    resultingChange: "The crowd now believes Ted is leading a movement.",
+    terminalState: "Their route is exposed and the next stop is no longer safe.",
+  };
+  const result = validateGroundedArcEvidence(
+    { authored_beat_requirement: [] },
+    section,
+    new Set(["authored_beat_requirement"]),
+  );
+  assertEquals(result.error, undefined);
+  assertEquals(result.value, {});
+});
+
 Deno.test("semantic evidence normalization accepts harmless wrappers but not paraphrases", () => {
   const section: any = {
     dramaticEvent: "Elin and Temur arrange the source documents at the winter court.",

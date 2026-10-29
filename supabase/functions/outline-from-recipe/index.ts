@@ -3993,7 +3993,12 @@ export function validateGroundedArcEvidence(
   const out: Record<string, Array<{ field: "dramaticEvent" | "resultingChange" | "terminalState"; quote: string }>> = {};
   for (const [obligationID, entries] of Object.entries(raw as Record<string, unknown>)) {
     if (!allowedObligationIDs.has(obligationID)) return { error: `unknown obligation ${obligationID}` };
-    if (!Array.isArray(entries) || entries.length === 0) return { error: `obligation ${obligationID} needs grounded references` };
+    // Evidence is optional. A strict-schema provider may still emit an empty
+    // array for an obligation it could not ground; treat that as no evidence
+    // and let the independent semantic verifier decide whether repair is
+    // needed instead of failing the entire outline structurally.
+    if (!Array.isArray(entries)) return { error: `obligation ${obligationID} has malformed evidence` };
+    if (entries.length === 0) continue;
     out[obligationID] = [];
     for (const entry of entries) {
       if (!entry || typeof entry !== "object") return { error: `obligation ${obligationID} has malformed evidence` };
