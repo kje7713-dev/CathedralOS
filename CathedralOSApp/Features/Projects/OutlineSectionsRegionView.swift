@@ -739,7 +739,9 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private var suggestionsFeedbackTitle: String {
-        recoverableSuggestionFailureCode != nil ? "Suggestions Saved — Review Required" : "Suggestions Ready"
+        if recoverableSuggestionFailureCode != nil { return "Suggestions Saved — Review Required" }
+        if !(recoverableSuggestions?.warnings.isEmpty ?? true) { return "Suggestions Ready — Review Warnings" }
+        return "Suggestions Ready"
     }
 
     private var suggestionsReady: Bool {
@@ -787,6 +789,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             }
             if let remaining = result.remainingCredits, !isRecoverableDraft {
                 feedback += " Remaining balance: \(String(format: "%.2f", remaining)) credits."
+            }
+            if !isRecoverableDraft && !result.warnings.isEmpty {
+                let reviewNotes = result.warnings.prefix(2).map { String($0.prefix(350)) }.joined(separator: "  ")
+                feedback += " Review warnings before accepting: \(reviewNotes)"
             }
             suggestionsFeedback = feedback
         } else if durabilityCoordinator.completedSuggestionRun?.projectID == project.id {
