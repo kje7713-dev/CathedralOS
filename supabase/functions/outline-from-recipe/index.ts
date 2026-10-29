@@ -5492,6 +5492,10 @@ export async function runSuggestionJob(
   let latestValidSuggestions: Suggestion[] = Array.isArray(claimedRun.suggestions)
     ? claimedRun.suggestions as Suggestion[]
     : [];
+  // Keep the raw provider candidate durable before structural validation can
+  // reject one malformed reference. This preserves the expensive response for
+  // diagnostics/recovery without treating it as an accepted outline.
+  let latestProviderCandidate: Suggestion[] | null = null;
   try {
     const modelStore = dependencies.model ? null : new SupabaseGenerationModelStore(db);
     const selectedModelID = recoverablePlanningModelID(body);
@@ -6518,9 +6522,20 @@ export async function runSuggestionJob(
         OUTLINE_OUTPUT_TOKEN_BUDGET,
         responseFormat,
         "outline-suggestions",
-        (content, finishReason) => {
+        async (content, finishReason) => {
           const flattened = flattenSuggestionResponse(parseOutlineJSON(content, finishReason), body.arcTemplate.beats);
-          diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
+          latestProviderCandidate = flattened.suggestions as Suggestion[];
+          // Persist before validation: a recoverable structural defect must
+          // not discard a paid provider response or force completed stages to
+          // run again on the next recovery attempt.
+          diagnostics = {
+            ...diagnostics,
+            stage: "outline_candidate_persisted",
+            outlineCandidatePersistedBeforeValidation: true,
+            firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions),
+          };
+          await updateRun({ suggestions: latestProviderCandidate, diagnostics });
+          diagnostics = { ...diagnostics, stage: "outline_validating" };
           const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
           const deduped = removeDuplicateOutlineSections(validated.suggestions);
           validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
@@ -6692,7 +6707,7 @@ export async function runSuggestionJob(
     };
     await updateRun({
       status: "failed",
-      suggestions: latestValidSuggestions,
+      suggestions: latestProviderCandidate ?? latestValidSuggestions,
       planning_state: planningState,
       error_code: errorCode,
       error: publicError,
