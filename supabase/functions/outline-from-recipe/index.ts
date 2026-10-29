@@ -2988,14 +2988,14 @@ Every defining behavior, event, or conflict explicitly specified by the author m
 When multiple developments satisfy the recipe, Story Arc, continuity, and section contract, choose the most entertaining, original, surprising, and dramatically compelling option. Let authored and invented characters' distinctive personalities, desires, flaws, obsessions, relationships, and unpredictable decisions generate events: supporting characters should create complications, change relationships, trigger reversals, and produce lasting consequences rather than serving as informants, exposition, transportation, or other functional devices. When the authored genre and tone support it, favor outrageous encounters, reckless decisions, dark humor, grotesque absurdity, dangerous confrontations, unexpected reversals, and escalating chaos over conventional investigations, administrative discoveries, tactical missions, or procedural problem-solving. Preserve intended adult intensity without sanitizing it; make the climax emerge from the protagonists' distinctive choices and behavior and deliver the premise's consequential outcome rather than merely completing a generic tactical objective. Do not force randomness, spectacle, or artificial chaos into restrained stories. Preserve causality, continuity, and authorial intent.
 
 ## Premise outcome and ending causality
-Before drafting ANY section, work out the entire cause-and-effect trajectory in order, including what changes the conflict, the single decisive climax, its irreversible outcome, and the aftermath that inherits that outcome. The final resolution must be caused by these characters' distinctive choices and experiences, not by an interchangeable institutional mechanism. Decide the story's end before assigning sections; then distribute distinct events across the required Story Arc functions. A crisis may fail or change the plan, but it must not resolve the same central conflict already resolved in the climax. Once an irreversible event occurs (the threat is stopped, a character dies, a bargain is rejected, an object is destroyed), all later sections must inherit it: never restart the same countdown, reopen the same closed confrontation, or deliver a second version of the victory without a new and explicitly caused change. Check the complete resultingChange and terminalState sequence before returning the first draft. Make the protagonists' traits, flaws, decisions, and characteristic actions materially cause or complicate the promised outcome; generic technical, institutional, or tactical solutions must not replace their agency. The outcome may be ambiguous, tragic, grotesque, destructive, or partly misunderstood; it need not explain every mystery, but the premise's consequential promise must actually occur.
+Before drafting sections, determine the whole story's cause-and-effect trajectory, including the decisive climax, the irreversible change it causes, and an ending that inherits that change. Plan the final outcome before distributing distinct events across Story Arc beats. The protagonists' specific traits, choices, and relationships must materially cause or complicate that outcome; an interchangeable tactical or institutional solution must not replace their agency. Across the entire sequence, preserve irreversible events: a threat stopped in one section stays stopped unless a new and expressly caused event changes that state; deaths, departures, promises, discoveries, and destroyed objects persist. Do not let a subsequent section restart the same countdown, restage a resolved confrontation, or resolve the central conflict a second time. Check the complete resultingChange and terminalState sequence before returning the first-pass outline. The ending can be ambiguous, tragic, grotesque, destructive, morally compromised, or only partly understood; it need not answer every question, but must deliver the premise's consequential promise.
 
 ## Recipe obligations
 The JSON planning context contains the authoritative obligations exactly once.
 
 ## STORY NON-NEGOTIABLE MUST-DOS (acceptance criteria)
 ${renderStoryNonNegotiableMustDos(obligations)}
-These are mandatory acceptance criteria, not descriptive tags. Reserve concrete sections/events for every must-do. If a must-do contains a number, treat that number as the minimum count of distinct realized events, not prose flavor. Only assign a must-do ID when the section's dramaticEvent, resultingChange, or terminalState materially realizes the stated requirement; never attach the ID to an unrelated section to make coverage appear complete. Before finalizing, audit every must-do against the actual section contracts. If one is not realized, redesign the original first-pass outline to deliver it rather than falsely labeling an unrelated section. No downstream AI creative repair will rewrite the paid draft; any remaining shortfall is reported as a review warning.
+These are mandatory acceptance criteria, not descriptive tags. Reserve concrete sections/events for every must-do. If a must-do contains a number, treat that number as the minimum count of distinct realized events, not prose flavor. Only assign a must-do ID when the section's dramaticEvent, resultingChange, or terminalState materially realizes the stated requirement; never attach the ID to an unrelated section to make coverage appear complete. Before finalizing, audit every must-do against the actual section contracts. If one is not realized, leave it unsatisfied for the server's repair path rather than falsely labeling an unrelated section.
 
 ## Compact planning context
 Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation. Use planner candidates only when they strengthen the authored narrative experience; adapt or discard them when they pull the story toward a different genre, conflict, or solution. Prefer a concrete recipe-backed or already-accepted detail over a generic phrase, but do not promote a planner proposal to canon merely because it is specific.
@@ -5840,11 +5840,7 @@ export async function runSuggestionJob(
         missingRequiredRecipeObligations: finalCoverage.missingRequired.map((obligation) => obligation.id),
       };
       if (finalCoverage.missingRequired.length > 0) {
-        // A quality shortfall must not turn a structurally valid, paid first pass
-        // into a failed run or trigger a second AI rewrite. Preserve the draft
-        // and surface explicit review warnings instead of marking it clean.
-        diagnostics = { ...diagnostics, firstPassQualityStatus: "needs_review" };
-        completionWarnings.push(`Outline needs review: required recipe obligations not established in section contracts (${finalCoverage.missingRequired.map((obligation) => obligation.id).join(", ")}). Original paid outline preserved; no automatic AI repair was attempted.`);
+        throw new RecipeObligationValidationError(`missing_recipe_obligations: ${finalCoverage.missingRequired.map((obligation) => obligation.id).join(", ")}`);
       }
       const finalScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
       const belowLengthTolerance = needsNovelExpansion(completedSuggestions, body.existingSections ?? []);
@@ -6026,39 +6022,37 @@ export async function runSuggestionJob(
       diagnostics = { ...diagnostics, semanticWarnings: [...previous, message] };
     };
     const continueAfterSemanticVerification = async (suggestions: Suggestion[], completionWarnings: string[] = []) => {
-      // Creative/semantic warnings are advisory: do not rewrite paid sections,
-      // schedule a repair provider call, or introduce a new failure path.
-      const storyArcIssues = validateRequiredStoryArcFunctions(suggestions, body.arcTemplate);
-      const coverage = obligationCoverage([...(body.existingSections ?? []), ...suggestions], recipeObligations);
-      const reviewIssues = [
-        ...storyArcIssues.map((issue) => `Story Arc: ${issue}`),
-        ...coverage.missingRequired.map((item) => `Required recipe obligation not established: ${item.id}`),
-      ];
-      diagnostics = {
-        ...diagnostics,
-        firstPassQualityStatus: reviewIssues.length || diagnostics.firstPassQualityStatus === "needs_review" ? "needs_review" : "no_flagged_issues",
-        firstPassQualityIssues: reviewIssues,
-        storyArcRepairIssues: storyArcIssues,
-        recipeObligationCoverage: coverage.covered,
-        missingRequiredRecipeObligations: coverage.missingRequired.map((item) => item.id),
-      };
-      if (reviewIssues.length) {
-        completionWarnings.push(`Outline needs review: ${reviewIssues.join("; ")}. Original paid sections preserved; no automatic AI repair was attempted.`);
+      const requiredStoryArcIssues = validateRequiredStoryArcFunctions(suggestions, body.arcTemplate);
+      const storyArcRepairAttempted = planningState.storyArcRepairAttempted === true;
+      if (requiredStoryArcIssues.length > 0 && !storyArcRepairAttempted) {
+        planningState = {
+          ...planningState,
+          phase: "story_arc_repair_pending",
+          nextAction: "story-arc-repair",
+          storyArcRepairIssues: requiredStoryArcIssues,
+        };
+        diagnostics = {
+          ...diagnostics,
+          stage: "story_arc_repair_pending",
+          storyArcRepairIssues: requiredStoryArcIssues,
+        };
+        await updateRun({ suggestions, planning_state: planningState, diagnostics });
+        throw new SuggestionWorkerYield();
+      }
+      const semanticCoverage = obligationCoverage([...(body.existingSections ?? []), ...suggestions], recipeObligations);
+      if (semanticCoverage.missingRequired.length > 0) {
+        planningState = { ...planningState, phase: "obligation_repair_pending", nextAction: "obligation-repair" };
+        diagnostics = {
+          ...diagnostics,
+          stage: "obligation_repair_pending",
+          recipeObligationCoverage: semanticCoverage.covered,
+          missingRequiredRecipeObligations: semanticCoverage.missingRequired.map((obligation) => obligation.id),
+        };
+        await updateRun({ suggestions, planning_state: planningState, diagnostics });
+        throw new SuggestionWorkerYield();
       }
       await postValidatedOutline(suggestions, completionWarnings);
     };
-    // A worker can be interrupted after persisting semantic-completion but
-    // before recording the completed outline. Resume from the paid draft;
-    // never repeat its outline or verifier provider calls.
-    if (planningState.nextAction === "semantic-completion" && persistedSemanticSuggestions.length > 0) {
-      const savedVerification = diagnostics.semanticVerification as SemanticVerificationResult | undefined;
-      const previousWarnings = Array.isArray(savedVerification?.unsatisfied) ? savedVerification.unsatisfied : [];
-      await continueAfterSemanticVerification(persistedSemanticSuggestions,
-        previousWarnings.length > 0
-          ? [`Outline needs review: semantic verification flagged ${previousWarnings.length} unmet requirements. Original paid sections preserved; no automatic AI repair was attempted.`]
-          : []);
-      return;
-    }
     if (planningState.nextAction === "semantic-verification") {
       let verification: SemanticVerificationResult | undefined;
       try {
@@ -6066,40 +6060,149 @@ export async function runSuggestionJob(
       } catch (error) {
         recordSemanticWarning(`Semantic verification was unavailable; continuing with the best structural outline: ${error instanceof Error ? error.message : String(error)}`);
         planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_verification_warning", firstPassQualityStatus: "needs_review" };
+        diagnostics = { ...diagnostics, stage: "semantic_verification_warning" };
         await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(persistedSemanticSuggestions, ["Outline needs review: semantic verification was unavailable. Original paid sections preserved."]);
+        await continueAfterSemanticVerification(persistedSemanticSuggestions);
         return;
       }
       diagnostics = { ...diagnostics, stage: "semantic_verified", semanticVerification: verification };
-      const semanticWarnings = verification.unsatisfied.length > 0
-        ? [`Outline needs review: semantic verification flagged ${verification.unsatisfied.length} unmet requirements. Original paid sections preserved; no automatic AI repair was attempted.`]
-        : [];
-      if (semanticWarnings.length) {
-        diagnostics = { ...diagnostics, firstPassQualityStatus: "needs_review", semanticUnmetRequirements: verification.unsatisfied };
+      if (verification.unsatisfied.length > 0) {
+        planningState = {
+          ...planningState,
+          phase: "semantic_repair_pending",
+          nextAction: "semantic-repair",
+          semanticRepairFailures: verification.unsatisfied,
+          semanticRepairOriginalSuggestions: persistedSemanticSuggestions,
+        };
+        diagnostics = { ...diagnostics, stage: "semantic_repair_pending", semanticRepairFailures: verification.unsatisfied };
+        await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
+        throw new SuggestionWorkerYield();
       }
-      planningState = { ...planningState, phase: "semantic_verified", nextAction: "semantic-completion" };
-      await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
-      await continueAfterSemanticVerification(persistedSemanticSuggestions, semanticWarnings);
+      await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: { ...planningState, phase: "semantic_verified", nextAction: "semantic-completion" }, diagnostics });
+      await continueAfterSemanticVerification(persistedSemanticSuggestions);
       return;
     }
-    // Compatibility for in-flight runs checkpointed before AI repair was disabled.
-    // Recover the earliest paid outline rather than invoking another writer or
-    // risking a terminal failure when a repair's target is no longer valid.
-    if (["semantic-repair", "semantic-reverification", "story-arc-repair", "story-arc-repair-completion", "obligation-repair"].includes(String(planningState.nextAction ?? ""))) {
-      const skippedAction = planningState.nextAction;
-      const original = Array.isArray(planningState.semanticRepairOriginalSuggestions)
+    if (planningState.nextAction === "semantic-repair") {
+      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
         ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
         : persistedSemanticSuggestions;
+      let repaired = persistedSemanticSuggestions;
+      try {
+        repaired = await repairStoryArcSemanticObligations(
+          persistedSemanticSuggestions,
+          body.arcTemplate,
+          Array.isArray(planningState.semanticRepairFailures) ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }> : [],
+          billableCall,
+          recipeObligations,
+          body.recipe,
+        );
+      } catch (error) {
+        recordSemanticWarning(`Semantic repair was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
+        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
+        diagnostics = { ...diagnostics, stage: "semantic_repair_warning" };
+        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(originalSemanticSuggestions);
+        return;
+      }
+      planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification", semanticRepairOriginalSuggestions: originalSemanticSuggestions };
+      const { semanticRepairProviderCheckpoint: _semanticRepairProviderCheckpoint, ...diagnosticsAfterRepair } = diagnostics;
+      diagnostics = { ...diagnosticsAfterRepair, stage: "semantic_reverification_pending" };
+      await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
+      throw new SuggestionWorkerYield();
+    }
+    if (planningState.nextAction === "semantic-reverification") {
+      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
+        ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
+        : persistedSemanticSuggestions;
+      const originalVerification = diagnostics.semanticVerification as SemanticVerificationResult | undefined;
+      let verification: SemanticVerificationResult | undefined;
+      try {
+        verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
+      } catch (error) {
+        recordSemanticWarning(`Semantic re-verification was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
+        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
+        diagnostics = { ...diagnostics, stage: "semantic_reverification_warning", semanticRepairFallback: "original_outline_provider_unavailable" };
+        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(originalSemanticSuggestions);
+        return;
+      }
+      const selectedSuggestions = chooseBestSemanticOutline(originalSemanticSuggestions, persistedSemanticSuggestions, originalVerification, verification);
+      const selectedRepaired = selectedSuggestions === persistedSemanticSuggestions;
+      const selectedVerification = selectedRepaired ? verification : originalVerification;
       diagnostics = {
         ...diagnostics,
-        stage: "legacy_repair_skipped",
-        firstPassQualityStatus: "needs_review",
-        legacyRepairSkipped: skippedAction,
+        stage: "semantic_reverified",
+        // The authoritative verification must describe the persisted outline.
+        semanticVerification: selectedVerification,
+        ...(selectedRepaired ? {} : {
+          semanticRepairFallback: "original_outline_preserved_no_objective_improvement",
+          semanticRepairOriginalVerification: originalVerification,
+          semanticRepairRejectedVerification: verification,
+          semanticRepairOriginalUnresolved: originalVerification?.unsatisfied.length ?? null,
+          semanticRepairCandidateUnresolved: verification.unsatisfied.length,
+        }),
       };
+      if (verification.unsatisfied.length > 0) {
+        recordSemanticWarning(
+          selectedRepaired
+            ? `Semantic obligations remained after bounded repair; continuing with the repaired outline (${verification.unsatisfied.length} unresolved).`
+            : `Semantic repair did not objectively improve the outline; preserving the original usable paid draft (${verification.unsatisfied.length} unresolved in the repair candidate).`,
+        );
+      }
       planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-      await updateRun({ suggestions: original, planning_state: planningState, diagnostics });
-      await continueAfterSemanticVerification(original, [`Outline needs review: pending ${skippedAction} AI repair was skipped; the earliest available paid outline checkpoint was preserved.`]);
+      await updateRun({ suggestions: selectedSuggestions, planning_state: planningState, diagnostics });
+      await continueAfterSemanticVerification(selectedSuggestions);
+      return;
+    }
+    if (planningState.nextAction === "story-arc-repair" || planningState.nextAction === "story-arc-repair-completion") {
+      let repairedSuggestions = persistedSemanticSuggestions;
+      if (planningState.nextAction === "story-arc-repair") {
+        const repair = await repairRequiredStoryArcFunctions(
+          persistedSemanticSuggestions,
+          body.arcTemplate,
+          billableCall,
+          recipeObligations,
+          { premise: body.recipe?.project?.summary, recipe: body.recipe },
+        );
+        repairedSuggestions = repair.suggestions;
+        const repairedQuality = collectAdvisoryOutlineQuality(
+          repairedSuggestions,
+          body.storyMaterialEnrichment,
+          requestedStoryMaterialFormat(body),
+          body.arcTemplate,
+          allocation,
+        );
+        planningState = {
+          ...planningState,
+          phase: "story_arc_repair_complete",
+          nextAction: "story-arc-repair-completion",
+          storyArcRepairAttempted: true,
+        };
+        diagnostics = {
+          ...diagnostics,
+          stage: "story_arc_repair_complete",
+          storyArcRepairIssues: Array.isArray(planningState.storyArcRepairIssues)
+            ? planningState.storyArcRepairIssues
+            : [],
+          semanticArcRepairedSections: repair.repaired,
+          semanticArcUnresolvedSections: repair.unresolved,
+          semanticArcIssues: repairedQuality.semanticArcIssues,
+        };
+        await updateRun({ suggestions: repairedSuggestions, planning_state: planningState, diagnostics });
+      }
+      await continueAfterSemanticVerification(repairedSuggestions);
+      return;
+    }
+    if (planningState.nextAction === "obligation-repair") {
+      diagnostics = { ...diagnostics, stage: "obligation_repair_generation" };
+      const repairAllocation = Array.isArray(planningState.allocationEntries)
+        ? new Map<string, Allocation>(planningState.allocationEntries as Array<[string, Allocation]>)
+        : undefined;
+      const repair = await repairRequiredRecipeObligations(Array.isArray(claimedRun.suggestions) ? claimedRun.suggestions as Suggestion[] : [], body, recipeObligations, billableCall, repairAllocation);
+      const missing = repair.missing.map((obligation) => obligation.id);
+      diagnostics = { ...diagnostics, stage: missing.length ? "obligation_repair_failed" : "obligation_repair_complete", recipeObligationCoverage: obligationCoverage([...(body.existingSections ?? []), ...repair.suggestions], recipeObligations).covered, missingRequiredRecipeObligations: missing };
+      if (missing.length) throw new RecipeObligationValidationError(`missing_recipe_obligations: ${missing.join(", ")}`);
+      await postValidatedOutline(repair.suggestions, []);
       return;
     }
     const resume = expansionResumeState(claimedRun);
