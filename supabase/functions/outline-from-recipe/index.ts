@@ -2900,6 +2900,9 @@ export function buildPrompt(
   storyMaterial?: StoryMaterialEnrichment,
 ): { system: string; user: string } {
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
+  // Allocation controls section quantity and container sizing, not plot choice.
+  // Keep its saved rationale for diagnostics, but never promote the allocator's
+  // proposed scenes, enemies, or ending mechanism into the outline prompt.
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
       const beat = req.arcTemplate.beats.find((b) => b.id === beatId);
@@ -2909,11 +2912,11 @@ export function buildPrompt(
       const typePlan = isNovel && info.containerCounts
         ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; ordered slots: ${plannedNovelContainerSlots(info.containerCounts).map((type, index) => `${plannedNovelSlotKey(index)}=${type}`).join(", ")}`
         : "";
-      return `- ${beat?.label ?? beatId}: ${sectionLabel}${typePlan} (${info.rationale})`;
+      return `- ${beat?.label ?? beatId}: ${sectionLabel}${typePlan}`;
     })
     .join("\n");
   const allocationDirective = isNovel
-    ? `## Complete first-pass allocation\n\nThe allocation above is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Match the planned section container and narrative scale for each ordered named slot. When typed slots are present, return a JSON object of sections per beat keyed by those slot names; every slot has exactly one allowed container type. The allocator already priced each planned section at its actual midpoint. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
+    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement; it does not prescribe events, antagonists, missions, locations, or an ending mechanism. Choose the narrative trajectory from the authored recipe and enrichment material while meeting the Story Arc's requirements. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Match the planned section container and narrative scale for each ordered named slot. When typed slots are present, return a JSON object of sections per beat keyed by those slot names; every slot has exactly one allowed container type. The allocator already priced each planned section at its actual midpoint. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
     : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
