@@ -1219,9 +1219,9 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation."), true);
   assertEquals(system.includes("Whenever practical, relationship and character-arc turns should cause or complicate plot events rather than occurring as isolated character-development scenes."), true);
   assertEquals(system.includes("## Premise outcome and ending causality"), true);
-  assertEquals(system.includes("The climax must change the central conflict and produce the promised consequential outcome"), true);
-  assertEquals(system.includes("resultingChange state what the climax achieved and terminalState establish the achieved condition"), true);
-  assertEquals(system.includes("The result may be ambiguous, tragic, grotesque, destructive, morally compromised"), true);
+  assertEquals(system.includes("the single decisive climax, its irreversible outcome"), true);
+  assertEquals(system.includes("never restart the same countdown"), true);
+  assertEquals(system.includes("The outcome may be ambiguous, tragic, grotesque, destructive"), true);
   assertEquals(system.includes("Favor specific, memorable events and evocative section titles over functional briefing, regrouping, mapping, or explanatory scenes."), true);
 });
 
@@ -5990,9 +5990,9 @@ Deno.test("legacy obligation-repair checkpoint resumes without another provider 
   assertEquals(db.row.diagnostics.firstPassQualityStatus, "needs_review");
 });
 
-Deno.test("novel first-pass quality warnings do not schedule obligation repair before expansion", async () => {
+Deno.test("first-pass quality scheduling cannot launch repair before semantic verification", async () => {
   const fullBody = await executableWorkerBody();
-  const body = { ...fullBody, requestedFormat: "novel" } as any;
+  const body = fullBody as any;
   const section = (beat: string) => ({ title: `First pass ${beat}`, summary: "Distinct dramatic material.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before", dramaticEvent: "Something specific happens.", resultingChange: "A material consequence occurs.", terminalState: "The next state persists.", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: [] });
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
   const actions: string[] = [];
@@ -6547,20 +6547,6 @@ Deno.test("provider output exhaustion reaches terminal run state for each produc
       row: checkpointedWorkerRow(fullBody),
       action: "outline-suggestions",
       failureStage: "outline_generation",
-    },
-    {
-      name: "obligation repair",
-      body: fullBody,
-      row: {
-        ...checkpointedWorkerRow(fullBody),
-        suggestions: [],
-        planning_state: { version: 2, phase: "obligation_repair_pending", nextAction: "obligation-repair", allocationEntries: [
-          ["beat-1", { minSections: 1, rationale: "fixture" }],
-          ["beat-2", { minSections: 1, rationale: "fixture" }],
-        ] },
-      },
-      action: "outline-obligation-repair",
-      failureStage: "obligation_repair_generation",
     },
   ];
 
