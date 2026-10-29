@@ -1225,6 +1225,21 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Favor specific, memorable events and evocative section titles over functional briefing, regrouping, mapping, or explanatory scenes."), true);
 });
 
+Deno.test("global buildPrompt favors character-driven dramatic selection without overriding recipe or continuity", () => {
+  const { system } = buildPrompt(sparseRequest as any, new Map());
+  assertStringIncludes(system, "## Character-Driven Dramatic Selection");
+  assertStringIncludes(system, "most entertaining, original, surprising, and dramatically compelling option");
+  assertStringIncludes(system, "distinctive personalities, desires, flaws, obsessions, relationships, and unpredictable decisions");
+  assertStringIncludes(system, "rather than serving as informants, exposition, transportation, or other functional devices");
+  assertStringIncludes(system, "outrageous encounters, reckless decisions, dark humor, grotesque absurdity");
+  assertStringIncludes(system, "Preserve intended adult intensity without sanitizing it");
+  assertStringIncludes(system, "climax emerge from the protagonists' distinctive choices and behavior");
+  assertStringIncludes(system, "Do not force randomness, spectacle, or artificial chaos into restrained stories");
+  assertStringIncludes(system, "Preserve causality, continuity, and authorial intent");
+  assertStringIncludes(system, "The recipe is the governing creative brief");
+  assertStringIncludes(system, "## Narrative-state continuity");
+});
+
 Deno.test("global buildPrompt requires continuity review while allowing valid offscreen transitions", () => {
   const { system } = buildPrompt(sparseRequest as any, new Map());
   assertStringIncludes(system, "evaluate the complete proposed sequence in canonical order");
