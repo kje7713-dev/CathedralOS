@@ -3147,6 +3147,25 @@ Deno.test("enrichment prompt preserves sparse recipe facts and separates planner
   assertEquals(prompt.user.includes("Douche"), true);
 });
 
+Deno.test("enrichment prompt favors audacity, adult intensity, and memorable experiences without flattening genre", () => {
+  const prompt = buildEnrichmentPrompt(sparseRequest as any).system;
+  assertStringIncludes(prompt, "## Entertainment, Audacity, and Creative Intensity");
+  assertStringIncludes(prompt, "most compelling, original, entertaining, and dramatically exciting");
+  assertStringIncludes(prompt, "wild, eccentric, larger-than-life supporting characters");
+  assertStringIncludes(prompt, "spectacular mistakes, escalating disasters, reckless decisions");
+  assertStringIncludes(prompt, "addictions, appetites, obsessions, moral corruption");
+  assertStringIncludes(prompt, "Do not automatically transform morally compromised protagonists into responsible heroes");
+  assertStringIncludes(prompt, "Do not impose redemption arcs, moral lessons, institutional reform");
+  assertStringIncludes(prompt, "Do not unnecessarily sanitize or dilute authored adult intensity");
+  assertStringIncludes(prompt, "subject to applicable content constraints");
+  assertStringIncludes(prompt, "## Prioritize experiences over explanations");
+  assertStringIncludes(prompt, "Invent events worth reading, not explanations worth filing");
+  assertStringIncludes(prompt, "quiet literary novel, restrained romance, cozy mystery, or procedural thriller");
+  assertStringIncludes(prompt, "Do not add arbitrary violence, sex, comedy, or spectacle");
+  assertEquals(prompt.includes("Do not default to rosters, manifests, inventories, ledgers"), true);
+  assertEquals(prompt.includes("There is no cast quota"), true);
+});
+
 Deno.test("enrichment prompt favors inventive situations over generic machinery", () => {
   const prompt = buildEnrichmentPrompt(sparseRequest as any);
   const payload = JSON.parse(prompt.user);
