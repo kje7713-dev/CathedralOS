@@ -3208,6 +3208,10 @@ Deno.test("character-first enrichment direction precedes situations, escalation,
   assertEquals(characters < engine, true);
   assertEquals(prompt.includes("independent desire"), true);
   assertEquals(prompt.includes("derail the protagonists' plans"), true);
+  assertStringIncludes(prompt, "Every invented character must be more than a job title or plot function");
+  assertStringIncludes(prompt, "If a character could be replaced by an anonymous role");
+  assertEquals(prompt.includes('role such as "handler"'), false);
+  assertEquals(prompt.includes('"contractor"'), false);
   assertEquals(prompt.includes("Do not automatically invent a central mission"), true);
 });
 
