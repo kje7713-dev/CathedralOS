@@ -6071,127 +6071,23 @@ export async function runSuggestionJob(
       await continueAfterSemanticVerification(persistedSemanticSuggestions, semanticWarnings);
       return;
     }
-    if (planningState.nextAction === "semantic-repair") {
-      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
+    // Compatibility for in-flight runs checkpointed before AI repair was disabled.
+    // Recover the earliest paid outline rather than invoking another writer or
+    // risking a terminal failure when a repair's target is no longer valid.
+    if (["semantic-repair", "semantic-reverification", "story-arc-repair", "story-arc-repair-completion", "obligation-repair"].includes(planningState.nextAction ?? "")) {
+      const skippedAction = planningState.nextAction;
+      const original = Array.isArray(planningState.semanticRepairOriginalSuggestions)
         ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
         : persistedSemanticSuggestions;
-      let repaired = persistedSemanticSuggestions;
-      try {
-        repaired = await repairStoryArcSemanticObligations(
-          persistedSemanticSuggestions,
-          body.arcTemplate,
-          Array.isArray(planningState.semanticRepairFailures) ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }> : [],
-          billableCall,
-          recipeObligations,
-          body.recipe,
-        );
-      } catch (error) {
-        recordSemanticWarning(`Semantic repair was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
-        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_repair_warning" };
-        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(originalSemanticSuggestions);
-        return;
-      }
-      planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification", semanticRepairOriginalSuggestions: originalSemanticSuggestions };
-      const { semanticRepairProviderCheckpoint: _semanticRepairProviderCheckpoint, ...diagnosticsAfterRepair } = diagnostics;
-      diagnostics = { ...diagnosticsAfterRepair, stage: "semantic_reverification_pending" };
-      await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
-      throw new SuggestionWorkerYield();
-    }
-    if (planningState.nextAction === "semantic-reverification") {
-      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
-        ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
-        : persistedSemanticSuggestions;
-      const originalVerification = diagnostics.semanticVerification as SemanticVerificationResult | undefined;
-      let verification: SemanticVerificationResult | undefined;
-      try {
-        verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
-      } catch (error) {
-        recordSemanticWarning(`Semantic re-verification was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
-        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_reverification_warning", semanticRepairFallback: "original_outline_provider_unavailable" };
-        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(originalSemanticSuggestions);
-        return;
-      }
-      const selectedSuggestions = chooseBestSemanticOutline(originalSemanticSuggestions, persistedSemanticSuggestions, originalVerification, verification);
-      const selectedRepaired = selectedSuggestions === persistedSemanticSuggestions;
-      const selectedVerification = selectedRepaired ? verification : originalVerification;
       diagnostics = {
         ...diagnostics,
-        stage: "semantic_reverified",
-        // The authoritative verification must describe the persisted outline.
-        semanticVerification: selectedVerification,
-        ...(selectedRepaired ? {} : {
-          semanticRepairFallback: "original_outline_preserved_no_objective_improvement",
-          semanticRepairOriginalVerification: originalVerification,
-          semanticRepairRejectedVerification: verification,
-          semanticRepairOriginalUnresolved: originalVerification?.unsatisfied.length ?? null,
-          semanticRepairCandidateUnresolved: verification.unsatisfied.length,
-        }),
+        stage: "legacy_repair_skipped",
+        firstPassQualityStatus: "needs_review",
+        legacyRepairSkipped: skippedAction,
       };
-      if (verification.unsatisfied.length > 0) {
-        recordSemanticWarning(
-          selectedRepaired
-            ? `Semantic obligations remained after bounded repair; continuing with the repaired outline (${verification.unsatisfied.length} unresolved).`
-            : `Semantic repair did not objectively improve the outline; preserving the original usable paid draft (${verification.unsatisfied.length} unresolved in the repair candidate).`,
-        );
-      }
       planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-      await updateRun({ suggestions: selectedSuggestions, planning_state: planningState, diagnostics });
-      await continueAfterSemanticVerification(selectedSuggestions);
-      return;
-    }
-    if (planningState.nextAction === "story-arc-repair" || planningState.nextAction === "story-arc-repair-completion") {
-      let repairedSuggestions = persistedSemanticSuggestions;
-      if (planningState.nextAction === "story-arc-repair") {
-        const repair = await repairRequiredStoryArcFunctions(
-          persistedSemanticSuggestions,
-          body.arcTemplate,
-          billableCall,
-          recipeObligations,
-          { premise: body.recipe?.project?.summary, recipe: body.recipe },
-        );
-        repairedSuggestions = repair.suggestions;
-        const repairedQuality = collectAdvisoryOutlineQuality(
-          repairedSuggestions,
-          body.storyMaterialEnrichment,
-          requestedStoryMaterialFormat(body),
-          body.arcTemplate,
-          allocation,
-        );
-        planningState = {
-          ...planningState,
-          phase: "story_arc_repair_complete",
-          nextAction: "story-arc-repair-completion",
-          storyArcRepairAttempted: true,
-        };
-        diagnostics = {
-          ...diagnostics,
-          stage: "story_arc_repair_complete",
-          storyArcRepairIssues: Array.isArray(planningState.storyArcRepairIssues)
-            ? planningState.storyArcRepairIssues
-            : [],
-          semanticArcRepairedSections: repair.repaired,
-          semanticArcUnresolvedSections: repair.unresolved,
-          semanticArcIssues: repairedQuality.semanticArcIssues,
-        };
-        await updateRun({ suggestions: repairedSuggestions, planning_state: planningState, diagnostics });
-      }
-      await continueAfterSemanticVerification(repairedSuggestions);
-      return;
-    }
-    if (planningState.nextAction === "obligation-repair") {
-      diagnostics = { ...diagnostics, stage: "obligation_repair_generation" };
-      const repairAllocation = Array.isArray(planningState.allocationEntries)
-        ? new Map<string, Allocation>(planningState.allocationEntries as Array<[string, Allocation]>)
-        : undefined;
-      const repair = await repairRequiredRecipeObligations(Array.isArray(claimedRun.suggestions) ? claimedRun.suggestions as Suggestion[] : [], body, recipeObligations, billableCall, repairAllocation);
-      const missing = repair.missing.map((obligation) => obligation.id);
-      diagnostics = { ...diagnostics, stage: missing.length ? "obligation_repair_failed" : "obligation_repair_complete", recipeObligationCoverage: obligationCoverage([...(body.existingSections ?? []), ...repair.suggestions], recipeObligations).covered, missingRequiredRecipeObligations: missing };
-      if (missing.length) throw new RecipeObligationValidationError(`missing_recipe_obligations: ${missing.join(", ")}`);
-      await postValidatedOutline(repair.suggestions, []);
+      await updateRun({ suggestions: original, planning_state: planningState, diagnostics });
+      await continueAfterSemanticVerification(original, [`Outline needs review: pending ${skippedAction} AI repair was skipped; the earliest available paid outline checkpoint was preserved.`]);
       return;
     }
     const resume = expansionResumeState(claimedRun);
