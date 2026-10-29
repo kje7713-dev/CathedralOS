@@ -3993,7 +3993,12 @@ export function validateGroundedArcEvidence(
   const out: Record<string, Array<{ field: "dramaticEvent" | "resultingChange" | "terminalState"; quote: string }>> = {};
   for (const [obligationID, entries] of Object.entries(raw as Record<string, unknown>)) {
     if (!allowedObligationIDs.has(obligationID)) return { error: `unknown obligation ${obligationID}` };
-    if (!Array.isArray(entries) || entries.length === 0) return { error: `obligation ${obligationID} needs grounded references` };
+    // Evidence is optional. A strict-schema provider may still emit an empty
+    // array for an obligation it could not ground; treat that as no evidence
+    // and let the independent semantic verifier decide whether repair is
+    // needed instead of failing the entire outline structurally.
+    if (!Array.isArray(entries)) return { error: `obligation ${obligationID} has malformed evidence` };
+    if (entries.length === 0) continue;
     out[obligationID] = [];
     for (const entry of entries) {
       if (!entry || typeof entry !== "object") return { error: `obligation ${obligationID} has malformed evidence` };
@@ -5487,6 +5492,10 @@ export async function runSuggestionJob(
   let latestValidSuggestions: Suggestion[] = Array.isArray(claimedRun.suggestions)
     ? claimedRun.suggestions as Suggestion[]
     : [];
+  // Keep the raw provider candidate durable before structural validation can
+  // reject one malformed reference. This preserves the expensive response for
+  // diagnostics/recovery without treating it as an accepted outline.
+  let latestProviderCandidate: Suggestion[] | null = null;
   try {
     const modelStore = dependencies.model ? null : new SupabaseGenerationModelStore(db);
     const selectedModelID = recoverablePlanningModelID(body);
@@ -6513,9 +6522,20 @@ export async function runSuggestionJob(
         OUTLINE_OUTPUT_TOKEN_BUDGET,
         responseFormat,
         "outline-suggestions",
-        (content, finishReason) => {
+        async (content, finishReason) => {
           const flattened = flattenSuggestionResponse(parseOutlineJSON(content, finishReason), body.arcTemplate.beats);
-          diagnostics = { ...diagnostics, stage: "outline_validating", firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions) };
+          latestProviderCandidate = flattened.suggestions as Suggestion[];
+          // Persist before validation: a recoverable structural defect must
+          // not discard a paid provider response or force completed stages to
+          // run again on the next recovery attempt.
+          diagnostics = {
+            ...diagnostics,
+            stage: "outline_candidate_persisted",
+            outlineCandidatePersistedBeforeValidation: true,
+            firstPassParsedCounts: countSuggestionsByBeat(flattened.suggestions),
+          };
+          await updateRun({ suggestions: latestProviderCandidate, diagnostics });
+          diagnostics = { ...diagnostics, stage: "outline_validating" };
           const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
           const deduped = removeDuplicateOutlineSections(validated.suggestions);
           validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
@@ -6687,7 +6707,7 @@ export async function runSuggestionJob(
     };
     await updateRun({
       status: "failed",
-      suggestions: latestValidSuggestions,
+      suggestions: latestProviderCandidate ?? latestValidSuggestions,
       planning_state: planningState,
       error_code: errorCode,
       error: publicError,

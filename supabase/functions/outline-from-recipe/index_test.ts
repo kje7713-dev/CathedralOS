@@ -5176,6 +5176,92 @@ Deno.test("allocation semantic failure checkpoints one retry without repeating t
   assertEquals(db.row.attempt_count, 0);
 });
 
+Deno.test("empty arc evidence is no claim and still reaches semantic verification", async () => {
+  const body = await executableWorkerBody();
+  const row: any = { ...checkpointedWorkerRow(body), request_json: body };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const section = (beat: string, title: string) => ({
+    title,
+    summary: `${title} summary`,
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends`,
+    storyArcBeatID: beat,
+    dramaticFunction: beat === "beat-1" ? "setup" : "resolution",
+    recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`),
+    entryState: "The prior state holds.",
+    dramaticEvent: `${title} happens.`,
+    resultingChange: `${title} changes the pressure.`,
+    terminalState: `${title} hands forward the next state.`,
+    arcObligationEvidence: { authored_beat_requirement: [] },
+  });
+  const billable = validatedWorkerBilling(actions, (action) => action === "outline-suggestions"
+    ? { beats: { "beat-1": [section("beat-1", "Opening")], "beat-2": [section("beat-2", "Cost")] } }
+    : { suggestions: [] });
+  const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any,
+    scheduleContinuation: async () => {},
+  });
+  await run();
+  assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(db.row.status, "pending");
+  assertEquals(db.patchHistory.some((patch: any) => patch.suggestions?.[0]?.arcObligationEvidence?.authored_beat_requirement?.length === 0), true);
+  assertEquals(db.row.suggestions[0].arcObligationEvidence, {});
+  await run();
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(db.row.status, "completed");
+});
+
+Deno.test("malformed arc evidence preserves the paid outline candidate without rerunning completed stages", async () => {
+  const body = await executableWorkerBody();
+  const row: any = { ...checkpointedWorkerRow(body), request_json: body };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  const malformed = (beat: string, title: string) => ({
+    title,
+    summary: `${title} summary`,
+    container: "scene",
+    pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends`,
+    storyArcBeatID: beat,
+    dramaticFunction: beat === "beat-1" ? "setup" : "resolution",
+    recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`),
+    entryState: "The prior state holds.",
+    dramaticEvent: `${title} happens.`,
+    resultingChange: `${title} changes the pressure.`,
+    terminalState: `${title} hands forward the next state.`,
+    arcObligationEvidence: { fabricated_obligation: [{ field: "resultingChange", quote: "invented proof" }] },
+  });
+  const billable = validatedWorkerBilling(actions, (action) => action === "outline-suggestions"
+    ? { beats: { "beat-1": [malformed("beat-1", "Opening")], "beat-2": [malformed("beat-2", "Cost")] } }
+    : { suggestions: [] });
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any,
+    scheduleContinuation: async () => {},
+  });
+  assertEquals(actions, ["outline-suggestions"]);
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.suggestions[0].title, "Opening");
+  assertEquals(db.row.diagnostics.outlineCandidatePersistedBeforeValidation, true);
+});
+
+Deno.test("missing authored beat evidence remains a beat-level semantic issue", () => {
+  const template: any = { name: "Custom", beats: [{ id: "beat", role: "setup", label: "Setup", description: "Establish the route." }] };
+  const sections: any[] = [{
+    storyArcBeatID: "beat",
+    title: "Opening",
+    summary: "Opening",
+    dramaticEvent: "The route opens.",
+    resultingChange: "The route is uncertain.",
+    terminalState: "The travelers continue.",
+    arcObligationEvidence: {},
+  }];
+  const issues = validateArcSemanticObligations(sections, template);
+  assertEquals(issues.length, 1);
+  assertStringIncludes(issues[0], "authored_beat_requirement");
+});
+
 Deno.test("optional enrichment expansion checkpoints a global round before the next dispatch", async () => {
   const fullBody = await executableWorkerBody();
   const recipe = fullBody.recipe;
@@ -6685,6 +6771,21 @@ Deno.test("Story Arc evidence must quote the actual Section Contract field", () 
   const grounded = validateGroundedArcEvidence({ authored_beat_requirement: [{ field: "resultingChange", quote: "The case becomes auditable." }] }, section, new Set(["authored_beat_requirement"]));
   assertEquals(grounded.error, undefined);
   assertEquals(grounded.value?.authored_beat_requirement?.length, 1);
+});
+
+Deno.test("empty optional Story Arc evidence does not fail outline validation", () => {
+  const section: any = {
+    dramaticEvent: "The lie gets them through the motel lobby.",
+    resultingChange: "The crowd now believes Ted is leading a movement.",
+    terminalState: "Their route is exposed and the next stop is no longer safe.",
+  };
+  const result = validateGroundedArcEvidence(
+    { authored_beat_requirement: [] },
+    section,
+    new Set(["authored_beat_requirement"]),
+  );
+  assertEquals(result.error, undefined);
+  assertEquals(result.value, {});
 });
 
 Deno.test("semantic evidence normalization accepts harmless wrappers but not paraphrases", () => {
