@@ -253,7 +253,7 @@ Deno.test("recipe authority governs enrichment, allocation, outline, and expansi
   }
   assertEquals(outline.includes("Planner-generated material may be rejected or replaced"), true);
   assertEquals(expansion.includes("Planner-generated enrichment is provisional"), true);
-  assertEquals(enrichment.includes("Do not default to conventional investigations"), true);
+  assertEquals(enrichment.includes("institutions and systems may drive the plot when the authored material actually requests that experience"), true);
   assertEquals(JSON.parse(buildExpansionPrompt(request, []).user).global.recipe.setting.worldRules[0].includes("dead"), true);
 });
 
@@ -3129,19 +3129,37 @@ Deno.test("story material enrichment validates provenance and remains inspectabl
 
 Deno.test("enrichment prompt preserves sparse recipe facts and separates planner invention", () => {
   const prompt = buildEnrichmentPrompt(sparseRequest as any);
-  assertEquals(prompt.system.includes("preserve, connect, and deepen supplied material"), true);
-  assertEquals(prompt.system.includes("support the approximately 115,000-word planning target"), true);
-  assertEquals(prompt.system.includes("conflict and opposition, escalation and reversals, character and relationship development"), true);
-  assertEquals(prompt.system.includes("Do not chase that target with filler, fixed item counts, or unrelated subplots"), true);
+  assertEquals(prompt.system.includes("Preserve supplied material and deepen it rather than replacing it"), true);
+  assertEquals(prompt.system.includes("support the approximately 115,000-word target"), true);
+  assertEquals(prompt.system.includes("connected conflicts, consequences, reversals, discoveries, relationships"), true);
+  assertEquals(prompt.system.includes("not a large inventory of disconnected concepts"), true);
   assertEquals(prompt.system.includes("source=recipe"), false);
   assertEquals(prompt.system.includes("source=planner"), true);
-  assertEquals(prompt.system.includes("character behavior, flaws, desires, contradictions, relationships"), true);
-  assertEquals(prompt.system.includes("central outcome promised by the premise"), true);
-  assertEquals(prompt.system.includes("distinctive traits, flaws, decisions, and characteristic actions"), true);
-  assertEquals(prompt.system.includes("prematurely solve the whole narrative"), true);
+  assertEquals(prompt.system.includes("Distinctive protagonists"), true);
+  assertEquals(prompt.system.includes("Original, concrete dramatic situations"), true);
+  assertEquals(prompt.system.includes("remove or consolidate candidates that repeat another item's dramatic function"), true);
+  assertEquals(prompt.system.includes("Do not fill every category because the schema permits it"), true);
   assertEquals(prompt.system.includes("replaceable development candidate"), true);
   assertEquals(prompt.user.includes("Monsters kill humans"), true);
   assertEquals(prompt.user.includes("Douche"), true);
+});
+
+Deno.test("enrichment prompt favors inventive situations over generic machinery", () => {
+  const prompt = buildEnrichmentPrompt(sparseRequest as any);
+  const payload = JSON.parse(prompt.user);
+  assertStringIncludes(prompt.system, "Invent what happens before inventing machinery that explains it");
+  assertStringIncludes(prompt.system, "Unexpected but causally earned");
+  assertStringIncludes(prompt.system, "Supporting antagonists, locations, institutions, and mechanisms only when they are necessary");
+  assertStringIncludes(prompt.system, "Story Arc template is structural guidance, not genre authority");
+  assertStringIncludes(prompt.system, "a quest need not be a conventional mission");
+  assertStringIncludes(prompt.system, "Do not fill every category because the schema permits it");
+  assertStringIncludes(prompt.system, "Do not return entries that merely restate a theme, profile, beat label, or generic plot function");
+  assertStringIncludes(prompt.system, "character-driven stories");
+  assertStringIncludes(prompt.system, "institutions and systems may drive the plot when the authored material actually requests that experience");
+  assertStringIncludes(prompt.system, "existing sufficiency requirements remain authoritative");
+  assertStringIncludes(prompt.system, "existing enrichment schema");
+  assertEquals(payload.arcTemplate, sparseRequest.arcTemplate);
+  assertEquals(payload.recipe, sparseRequest.recipe);
 });
 
 Deno.test("request validation accepts a previously persisted enrichment package", () => {
