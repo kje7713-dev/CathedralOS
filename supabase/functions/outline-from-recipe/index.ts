@@ -2988,14 +2988,14 @@ Every defining behavior, event, or conflict explicitly specified by the author m
 When multiple developments satisfy the recipe, Story Arc, continuity, and section contract, choose the most entertaining, original, surprising, and dramatically compelling option. Let authored and invented characters' distinctive personalities, desires, flaws, obsessions, relationships, and unpredictable decisions generate events: supporting characters should create complications, change relationships, trigger reversals, and produce lasting consequences rather than serving as informants, exposition, transportation, or other functional devices. When the authored genre and tone support it, favor outrageous encounters, reckless decisions, dark humor, grotesque absurdity, dangerous confrontations, unexpected reversals, and escalating chaos over conventional investigations, administrative discoveries, tactical missions, or procedural problem-solving. Preserve intended adult intensity without sanitizing it; make the climax emerge from the protagonists' distinctive choices and behavior and deliver the premise's consequential outcome rather than merely completing a generic tactical objective. Do not force randomness, spectacle, or artificial chaos into restrained stories. Preserve causality, continuity, and authorial intent.
 
 ## Premise outcome and ending causality
-Identify the central outcome the authored premise promises before distributing events. Make the protagonists' distinctive traits, flaws, decisions, and characteristic actions materially cause or complicate that outcome; do not let a generic technical, institutional, or tactical solution replace their authored agency. The climax must change the central conflict and produce the promised consequential outcome, not merely interrupt one incident or operation. In the final substantive sections, make resultingChange state what the climax achieved and terminalState establish the achieved condition handed forward. The result may be ambiguous, tragic, grotesque, destructive, morally compromised, or only partly understood by the characters; it need not solve every mystery or eliminate every antagonist, but the premise's consequential promise must actually occur.
+Before drafting ANY section, work out the entire cause-and-effect trajectory in order, including what changes the conflict, the single decisive climax, its irreversible outcome, and the aftermath that inherits that outcome. The final resolution must be caused by these characters' distinctive choices and experiences, not by an interchangeable institutional mechanism. Decide the story's end before assigning sections; then distribute distinct events across the required Story Arc functions. A crisis may fail or change the plan, but it must not resolve the same central conflict already resolved in the climax. Once an irreversible event occurs (the threat is stopped, a character dies, a bargain is rejected, an object is destroyed), all later sections must inherit it: never restart the same countdown, reopen the same closed confrontation, or deliver a second version of the victory without a new and explicitly caused change. Check the complete resultingChange and terminalState sequence before returning the first draft. Make the protagonists' traits, flaws, decisions, and characteristic actions materially cause or complicate the promised outcome; generic technical, institutional, or tactical solutions must not replace their agency. The outcome may be ambiguous, tragic, grotesque, destructive, or partly misunderstood; it need not explain every mystery, but the premise's consequential promise must actually occur.
 
 ## Recipe obligations
 The JSON planning context contains the authoritative obligations exactly once.
 
 ## STORY NON-NEGOTIABLE MUST-DOS (acceptance criteria)
 ${renderStoryNonNegotiableMustDos(obligations)}
-These are mandatory acceptance criteria, not descriptive tags. Reserve concrete sections/events for every must-do. If a must-do contains a number, treat that number as the minimum count of distinct realized events, not prose flavor. Only assign a must-do ID when the section's dramaticEvent, resultingChange, or terminalState materially realizes the stated requirement; never attach the ID to an unrelated section to make coverage appear complete. Before finalizing, audit every must-do against the actual section contracts. If one is not realized, leave it unsatisfied for the server's repair path rather than falsely labeling an unrelated section.
+These are mandatory acceptance criteria, not descriptive tags. Reserve concrete sections/events for every must-do. If a must-do contains a number, treat that number as the minimum count of distinct realized events, not prose flavor. Only assign a must-do ID when the section's dramaticEvent, resultingChange, or terminalState materially realizes the stated requirement; never attach the ID to an unrelated section to make coverage appear complete. Before finalizing, audit every must-do against the actual section contracts. If one is not realized, redesign the original first-pass outline to deliver it rather than falsely labeling an unrelated section. No downstream AI creative repair will rewrite the paid draft; any remaining shortfall is reported as a review warning.
 
 ## Compact planning context
 Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation. Use planner candidates only when they strengthen the authored narrative experience; adapt or discard them when they pull the story toward a different genre, conflict, or solution. Prefer a concrete recipe-backed or already-accepted detail over a generic phrase, but do not promote a planner proposal to canon merely because it is specific.
@@ -5840,7 +5840,11 @@ export async function runSuggestionJob(
         missingRequiredRecipeObligations: finalCoverage.missingRequired.map((obligation) => obligation.id),
       };
       if (finalCoverage.missingRequired.length > 0) {
-        throw new RecipeObligationValidationError(`missing_recipe_obligations: ${finalCoverage.missingRequired.map((obligation) => obligation.id).join(", ")}`);
+        // A quality shortfall must not turn a structurally valid, paid first pass
+        // into a failed run or trigger a second AI rewrite. Preserve the draft
+        // and surface explicit review warnings instead of marking it clean.
+        diagnostics = { ...diagnostics, firstPassQualityStatus: "needs_review" };
+        completionWarnings.push(`Outline needs review: required recipe obligations not established in section contracts (${finalCoverage.missingRequired.map((obligation) => obligation.id).join(", ")}). Original paid outline preserved; no automatic AI repair was attempted.`);
       }
       const finalScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
       const belowLengthTolerance = needsNovelExpansion(completedSuggestions, body.existingSections ?? []);
@@ -6022,34 +6026,24 @@ export async function runSuggestionJob(
       diagnostics = { ...diagnostics, semanticWarnings: [...previous, message] };
     };
     const continueAfterSemanticVerification = async (suggestions: Suggestion[], completionWarnings: string[] = []) => {
-      const requiredStoryArcIssues = validateRequiredStoryArcFunctions(suggestions, body.arcTemplate);
-      const storyArcRepairAttempted = planningState.storyArcRepairAttempted === true;
-      if (requiredStoryArcIssues.length > 0 && !storyArcRepairAttempted) {
-        planningState = {
-          ...planningState,
-          phase: "story_arc_repair_pending",
-          nextAction: "story-arc-repair",
-          storyArcRepairIssues: requiredStoryArcIssues,
-        };
-        diagnostics = {
-          ...diagnostics,
-          stage: "story_arc_repair_pending",
-          storyArcRepairIssues: requiredStoryArcIssues,
-        };
-        await updateRun({ suggestions, planning_state: planningState, diagnostics });
-        throw new SuggestionWorkerYield();
-      }
-      const semanticCoverage = obligationCoverage([...(body.existingSections ?? []), ...suggestions], recipeObligations);
-      if (semanticCoverage.missingRequired.length > 0) {
-        planningState = { ...planningState, phase: "obligation_repair_pending", nextAction: "obligation-repair" };
-        diagnostics = {
-          ...diagnostics,
-          stage: "obligation_repair_pending",
-          recipeObligationCoverage: semanticCoverage.covered,
-          missingRequiredRecipeObligations: semanticCoverage.missingRequired.map((obligation) => obligation.id),
-        };
-        await updateRun({ suggestions, planning_state: planningState, diagnostics });
-        throw new SuggestionWorkerYield();
+      // Creative/semantic warnings are advisory: do not rewrite paid sections,
+      // schedule a repair provider call, or introduce a new failure path.
+      const storyArcIssues = validateRequiredStoryArcFunctions(suggestions, body.arcTemplate);
+      const coverage = obligationCoverage([...(body.existingSections ?? []), ...suggestions], recipeObligations);
+      const reviewIssues = [
+        ...storyArcIssues.map((issue) => `Story Arc: ${issue}`),
+        ...coverage.missingRequired.map((item) => `Required recipe obligation not established: ${item.id}`),
+      ];
+      diagnostics = {
+        ...diagnostics,
+        firstPassQualityStatus: reviewIssues.length || diagnostics.firstPassQualityStatus === "needs_review" ? "needs_review" : "no_flagged_issues",
+        firstPassQualityIssues: reviewIssues,
+        storyArcRepairIssues: storyArcIssues,
+        recipeObligationCoverage: coverage.covered,
+        missingRequiredRecipeObligations: coverage.missingRequired.map((item) => item.id),
+      };
+      if (reviewIssues.length) {
+        completionWarnings.push(`Outline needs review: ${reviewIssues.join("; ")}. Original paid sections preserved; no automatic AI repair was attempted.`);
       }
       await postValidatedOutline(suggestions, completionWarnings);
     };
@@ -6066,20 +6060,15 @@ export async function runSuggestionJob(
         return;
       }
       diagnostics = { ...diagnostics, stage: "semantic_verified", semanticVerification: verification };
-      if (verification.unsatisfied.length > 0) {
-        planningState = {
-          ...planningState,
-          phase: "semantic_repair_pending",
-          nextAction: "semantic-repair",
-          semanticRepairFailures: verification.unsatisfied,
-          semanticRepairOriginalSuggestions: persistedSemanticSuggestions,
-        };
-        diagnostics = { ...diagnostics, stage: "semantic_repair_pending", semanticRepairFailures: verification.unsatisfied };
-        await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
-        throw new SuggestionWorkerYield();
+      const semanticWarnings = verification.unsatisfied.length > 0
+        ? [`Outline needs review: semantic verification flagged ${verification.unsatisfied.length} unmet requirements. Original paid sections preserved; no automatic AI repair was attempted.`]
+        : [];
+      if (semanticWarnings.length) {
+        diagnostics = { ...diagnostics, firstPassQualityStatus: "needs_review", semanticRepairFailures: verification.unsatisfied };
       }
-      await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: { ...planningState, phase: "semantic_verified", nextAction: "semantic-completion" }, diagnostics });
-      await continueAfterSemanticVerification(persistedSemanticSuggestions);
+      planningState = { ...planningState, phase: "semantic_verified", nextAction: "semantic-completion" };
+      await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
+      await continueAfterSemanticVerification(persistedSemanticSuggestions, semanticWarnings);
       return;
     }
     if (planningState.nextAction === "semantic-repair") {
