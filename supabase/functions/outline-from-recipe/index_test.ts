@@ -102,11 +102,14 @@ import {
   collectAdvisoryOutlineQuality,
   plannedWordRangeForContainer,
   findUnusedStoryMaterial,
+  analyzePlannerCharacterIntegration,
   validateStoryArcSemantics,
   validateArcSemanticObligations,
   validateGroundedArcEvidence,
   normalizeEvidenceText,
   findGroundedSemanticField,
+  resolveSemanticEvidenceCitation,
+  isSemanticEvidenceGroundingFailure,
   validatePostRepairBeatCoverage,
   validateRequiredStoryArcFunctions,
   repairStoryArcMacroStructure,
@@ -1285,6 +1288,72 @@ Deno.test("global buildPrompt favors character-driven dramatic selection without
   assertStringIncludes(system, "Preserve causality, continuity, and authorial intent");
   assertStringIncludes(system, "The recipe is the governing creative brief");
   assertStringIncludes(system, "## Narrative-state continuity");
+});
+
+
+Deno.test("outliner selects character-caused events before deciding its climax or slots", () => {
+  const material: any = {
+    ...enrichmentFixture(),
+    characters: [
+      { id: "vee", label: "Vee Sato, the attention broker", source: "planner", description: "Leaks the trio's location to manufacture a viral spectacle." },
+      { id: "pike", label: "Marlon Pike, the security consultant", source: "planner", description: "Provokes an unstable man to improve his contract." },
+      { id: "fred", label: "Fred", source: "recipe", description: "An authored protagonist." },
+    ],
+  };
+  const { system, user } = buildPrompt({ ...sparseRequest, storyMaterialEnrichment: material } as any, new Map(), [], material);
+  const payload = JSON.parse(user);
+  assertEquals(payload.planningContext.characterDecisionCandidates.map((candidate: any) => candidate.id), ["vee", "pike"]);
+  assertStringIncludes(payload.planningContext.characterDecisionCandidates[0].description, "Leaks the trio");
+  assertEquals(payload.planningContext.recipe, sparseRequest.recipe);
+  assertEquals(payload.planningContext.materialIndex.some((item: any) => item.id === "pike"), true);
+  assertStringIncludes(system, "## Character-caused story selection before plot construction");
+  assertStringIncludes(system, "First choose the story's causal drivers, BEFORE deciding");
+  assertStringIncludes(system, "what they want, the distinctive choice they make, whose plan it derails");
+  assertStringIncludes(system, "Do not force every generated character into the outline");
+  assertStringIncludes(system, "do not replace a distinctive, consequential candidate with a nameless official");
+  assertStringIncludes(system, "if substituting an interchangeable job title would leave the important events unchanged");
+  assertEquals(system.indexOf("## Character-caused story selection before plot construction") < system.indexOf("## Premise outcome and ending causality"), true);
+  assertStringIncludes(system, "preserve it, but still let authored character agency");
+  assertStringIncludes(system, "Preserve the author's tone, adult intensity, ambiguity, restrained genres");
+  assertStringIncludes(system, "Before drafting sections, determine the whole story's cause-and-effect trajectory");
+  assertStringIncludes(system, "## Narrative-state continuity");
+});
+
+Deno.test("character integration diagnostic rejects generic label words and distinguishes cameos from causal anchors", () => {
+  const material: any = {
+    ...enrichmentFixture(),
+    characters: [
+      { id: "briggs", label: "Garnet Briggs, the deputy who hates being a meme", source: "planner" },
+      { id: "vee", label: "Vee Sato, the attention broker", source: "planner" },
+      { id: "pike", label: "Marlon Pike, the celebrated security consultant", source: "planner" },
+      { id: "inez", label: "Inez Bell, the motel night auditor", source: "planner" },
+      { id: "rusk", label: "Dale Rusk, the roadside livestream preacher", source: "planner" },
+      { id: "nash", label: "Merritt Nash, Millie's handler", source: "planner" },
+      { id: "recipe-character", label: "Fred", source: "recipe" },
+    ],
+  };
+  const suggestions: any[] = [
+    {
+      title: "Being watched", summary: "The public's attention forces a security response. Inez counts the motel receipts.",
+      dramaticEvent: "Rusk edits a livestream to exploit the attack.", resultingChange: "Ted gains a following.",
+      entryState: "The crowd is tense.", terminalState: "The crowd leaves.",
+    },
+    {
+      title: "Handler's lie", summary: "The hybrid operation loses control.",
+      dramaticEvent: "Nash lies to Millie about an extraction.", resultingChange: "Millie breaks with Nash.",
+      entryState: "They are hidden.", terminalState: "Millie leaves him.",
+    },
+  ];
+  const integration = analyzePlannerCharacterIntegration(suggestions, material);
+  assertEquals(integration, {
+    absent: ["briggs", "vee", "pike"],
+    mentionedWithoutCausalAnchor: ["inez"],
+    withCausalAnchor: ["rusk", "nash"],
+  });
+  assertEquals(analyzePlannerCharacterIntegration(suggestions, undefined), {
+    absent: [], mentionedWithoutCausalAnchor: [], withCausalAnchor: [],
+  });
+  assertEquals(collectAdvisoryOutlineQuality(suggestions, material).plannerCharacterIntegration, integration);
 });
 
 Deno.test("global buildPrompt requires continuity review while allowing valid offscreen transitions", () => {
@@ -5853,6 +5922,7 @@ Deno.test("global outline completion preserves advisory quality and obligation a
   assertEquals(Array.isArray(diagnostics.semanticArcIssues), true);
   assertEquals(Array.isArray(diagnostics.causalScaleIssues), true);
   assertEquals(typeof diagnostics.unusedStoryMaterialItems, "number");
+  assertEquals(typeof diagnostics.plannerCharacterIntegration, "object");
   assertEquals("advisoryValidationError" in diagnostics, false);
   assertEquals(typeof diagnostics.recipeObligationCoverage, "object");
   assertEquals(diagnostics.missingRequiredRecipeObligations, []);
@@ -6854,6 +6924,149 @@ Deno.test("semantic evidence normalization accepts harmless wrappers but not par
   assertEquals(findGroundedSemanticField(section, "“The case becomes auditable.”", ["resultingChange"]), "resultingChange");
   assertEquals(findGroundedSemanticField(section, "The case is now verifiable.", ["resultingChange"]), undefined);
   assertEquals(findGroundedSemanticField(section, "The court has no evidence.", ["terminalState"]), undefined);
+});
+
+
+Deno.test("PR #798 semantic evidence correction recovers only uniquely grounded permitted quotes", async () => {
+  const a: any = {
+    storyArcBeatID: "setup", dramaticEvent: "The trio are stopped by a broken television.",
+    resultingChange: "Their ordinary routine is established, including drug use and repeated explicit sex.",
+    terminalState: "The trio remain together.",
+  };
+  const b: any = {
+    storyArcBeatID: "isolation", dramaticEvent: "The shelter closes and leaves the trio stranded.",
+    resultingChange: "The attention that once offered cover now destroys credibility and access to safety; Millie's organization and the public are both unavailable to them.",
+    terminalState: "The group leaves the shelter.",
+  };
+  const c: any = {
+    storyArcBeatID: "confrontation", dramaticEvent: "The trio halt the relay.",
+    resultingChange: "Humanity and the hidden hybrids have gained a chance to survive, not a repaired system or a clear victory.",
+    terminalState: "They flee the facility.",
+  };
+  const d: any = {
+    storyArcBeatID: "final", dramaticEvent: "The trio survive the catastrophe.",
+    resultingChange: "Ted refuses to pretend the damage is repaired.",
+    terminalState: "They keep driving into an uncertain future.",
+  };
+  const sections = [a, b, c, d];
+  const all = [0, 1, 2, 3];
+  const misplaced = resolveSemanticEvidenceCitation(
+    sections, 1, "Their ordinary routine is established, including drug use and repeated explicit sex",
+    ["dramaticEvent", "resultingChange", "terminalState"], all,
+  );
+  assertEquals(misplaced, {
+    sectionIndex: 0, field: "resultingChange",
+    quote: "Their ordinary routine is established, including drug use and repeated explicit sex",
+  });
+  const caseOnly = resolveSemanticEvidenceCitation(
+    sections, 1, "the attention that once offered cover now destroys credibility and access to safety",
+    ["resultingChange"], [1],
+  );
+  assertEquals(caseOnly?.sectionIndex, 1);
+  assertEquals(caseOnly?.field, "resultingChange");
+  assertEquals(caseOnly?.quote.startsWith("The attention"), true);
+  // Verbatim evidence in a DIFFERENT beat is not evidence for Final Image.
+  assertEquals(resolveSemanticEvidenceCitation(
+    sections, 2, c.resultingChange, ["resultingChange", "terminalState"], [3],
+  ), undefined);
+  assertEquals(resolveSemanticEvidenceCitation(
+    sections, 0, "The system was perfectly repaired.", ["dramaticEvent", "resultingChange", "terminalState"], all,
+  ), undefined);
+  assertEquals(resolveSemanticEvidenceCitation(sections, 0, "", ["dramaticEvent"], all), undefined);
+  assertEquals(resolveSemanticEvidenceCitation(
+    [a, { ...a }], 9, "Their ordinary routine is established", ["resultingChange"], [0, 1],
+  ), undefined, "multiple candidates cannot silently redirect a citation");
+  assertEquals(isSemanticEvidenceGroundingFailure("provider evidence quote was not grounded in any allowed Section Contract field; semantic repair required"), true);
+  assertEquals(isSemanticEvidenceGroundingFailure("creative-fidelity evidence quote was not grounded in a Section Contract field; creative-fidelity review required"), true);
+  assertEquals(isSemanticEvidenceGroundingFailure("The climax does not resolve the central threat."), false);
+});
+
+Deno.test("PR #798 verifier corrects quote metadata without accepting wrong-beat resolution evidence", async () => {
+  const template: any = {
+    name: "Save the Cat!",
+    beats: [
+      { id: "setup", role: "setup", label: "Setup", description: "" },
+      { id: "isolation", role: "isolation", label: "Isolation", description: "The protagonists lose access to safe help." },
+      { id: "confrontation", role: "climax", label: "Confrontation", description: "" },
+      { id: "final", role: "final_image", label: "Final", description: "Show survival." },
+    ],
+  };
+  const sections: any[] = [
+    { storyArcBeatID: "setup", dramaticEvent: "The trio celebrate.", resultingChange: "Their ordinary routine is established, including drug use and repeated explicit sex.", terminalState: "They continue traveling." },
+    { storyArcBeatID: "isolation", dramaticEvent: "The public shelter closes.", resultingChange: "The attention that once offered cover now destroys credibility and access to safety.", terminalState: "They lose access to safe help." },
+    { storyArcBeatID: "confrontation", dramaticEvent: "Fred stops the regional broadcast.", resultingChange: "Humanity and the hidden hybrids have gained a chance to survive.", terminalState: "The regional threat is disrupted." },
+    { storyArcBeatID: "final", dramaticEvent: "They drive west.", resultingChange: "The trio survive while the cause remains unknown.", terminalState: "They continue driving." },
+  ];
+  const recipe: any = { project: {}, storyNonNegotiables: ["The trio have repeated explicit sex."] };
+  const result = await verifyStoryArcSemantics(sections, template, async () => ({
+    content: JSON.stringify({
+      arcWideObligations: [{
+        obligationID: "story_non_negotiable_0", satisfied: true, sectionIndex: 1,
+        field: "dramaticEvent", quote: "Their ordinary routine is established, including drug use and repeated explicit sex",
+        reason: "The routine is explicit.",
+      }],
+      beats: [
+        { beatID: "isolation", obligations: [{
+          obligationID: "authored_beat_requirement", satisfied: true, sectionIndex: 1,
+          field: "dramaticEvent", quote: "the attention that once offered cover now destroys credibility and access to safety",
+          reason: "They lose social support.",
+        }] },
+        { beatID: "final", obligations: [
+          { obligationID: "authored_beat_requirement", satisfied: true, sectionIndex: 3, field: "terminalState", quote: sections[3].terminalState, reason: "They survive." },
+          { obligationID: REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id, satisfied: true, sectionIndex: 2, field: "resultingChange", quote: sections[2].resultingChange, reason: "Quote from the wrong beat." },
+        ] },
+      ],
+    }),
+  }) as any, recipe);
+  assertEquals(result.arcWideObligations[0].satisfied, true);
+  assertEquals(result.arcWideObligations[0].sectionIndex, 0);
+  const isolation = result.beats.find((beat) => beat.beatID === "isolation")!;
+  assertEquals(isolation.obligations[0].satisfied, true);
+  assertEquals(isolation.obligations[0].field, "resultingChange");
+  assertEquals(isolation.obligations[0].quote.startsWith("The attention"), true);
+  const final = result.beats.find((beat) => beat.beatID === "final")!;
+  assertEquals(final.obligations.find((o) => o.obligationID === REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id)?.satisfied, false);
+  assertEquals(result.unsatisfied.length, 1);
+  assertEquals(result.unsatisfied[0].obligationID, REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id);
+});
+
+Deno.test("PR #798 evidence-only semantic checkpoint uses one verifier call, no prose rewrite", async () => {
+  const body = await executableWorkerBody();
+  const ids = Array.from({ length: 63 }, (_, i) => `R${i + 1}`);
+  const original: any[] = [
+    { title: "One", summary: "The opening happens.", container: "scene", pov: "thirdPersonLimited",
+      terminalBeat: "The plan changes.", entryState: "Nothing has happened.", dramaticEvent: "The trio try to escape.",
+      resultingChange: "The system becomes harder to trust.", terminalState: "The trio are on the road.",
+      storyArcBeatID: "beat-1", dramaticFunction: "setup", recipeRequirementIDs: ids },
+    { title: "Two", summary: "The survivors drive away.", container: "scene", pov: "thirdPersonLimited",
+      terminalBeat: "They leave.", entryState: "The attempt has happened.", dramaticEvent: "The trio face the cost of escaping.",
+      resultingChange: "The dangerous cycle ends at a cost.", terminalState: "Their survival is real but compromised.",
+      storyArcBeatID: "beat-2", dramaticFunction: "resolution", recipeRequirementIDs: ids },
+  ];
+  const failures = [{ beatID: "beat-2", obligationID: "authored_beat_requirement",
+    reason: "provider evidence quote was not grounded in any allowed Section Contract field; semantic repair required" }];
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    suggestions: structuredClone(original),
+    planning_state: {
+      version: 2, phase: "semantic_repair_pending", nextAction: "semantic-repair",
+      semanticRepairFailures: failures, semanticRepairOriginalSuggestions: original,
+    },
+    diagnostics: { semanticVerification: { arcWideObligations: [], beats: [], unsatisfied: failures } },
+  });
+  const actions: string[] = [];
+  const billable = validatedWorkerBilling(actions, (_action) => JSON.stringify(semanticVerifierFixture({
+    messages: [{ role: "user", content: JSON.stringify(semanticVerificationInput(original, body.arcTemplate, body.recipe)) }],
+  })));
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(actions, ["outline-semantic-repair-batch"]);
+  assertEquals(db.row.status, "completed", JSON.stringify({error: db.row.error, diagnostics: db.row.diagnostics}));
+  assertEquals(db.row.suggestions, original);
+  assertEquals(db.row.diagnostics.semanticEvidenceReverification.attempted, true);
+  assertEquals(db.row.diagnostics.semanticEvidenceReverification.unresolvedCount, 0);
 });
 
 Deno.test("semantic verifier preserves a provider false judgment even with grounded evidence", async () => {

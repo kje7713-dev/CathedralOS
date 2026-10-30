@@ -2985,6 +2985,11 @@ Every defining behavior, event, or conflict explicitly specified by the author m
 ## Character-Driven Dramatic Selection
 When multiple developments satisfy the recipe, Story Arc, continuity, and section contract, choose the most entertaining, original, surprising, and dramatically compelling option. Let authored and invented characters' distinctive personalities, desires, flaws, obsessions, relationships, and unpredictable decisions generate events: supporting characters should create complications, change relationships, trigger reversals, and produce lasting consequences rather than serving as informants, exposition, transportation, or other functional devices. When the authored genre and tone support it, favor outrageous encounters, reckless decisions, dark humor, grotesque absurdity, dangerous confrontations, unexpected reversals, and escalating chaos over conventional investigations, administrative discoveries, tactical missions, or procedural problem-solving. Preserve intended adult intensity without sanitizing it; make the climax emerge from the protagonists' distinctive choices and behavior and deliver the premise's consequential outcome rather than merely completing a generic tactical objective. Do not force randomness, spectacle, or artificial chaos into restrained stories. Preserve causality, continuity, and authorial intent.
 
+## Character-caused story selection before plot construction
+First choose the story's causal drivers, BEFORE deciding on its central apparatus, tactical objective, climax method, or beat-by-beat plot. Read the authored protagonists' motives and relationships and the planningContext.characterDecisionCandidates. Identify the distinct desires and compromised choices that could make this story happen specifically to THESE people. Select the strongest optional supporting characters for their independent decisions, conflicting agendas, betrayals, selfish gambles, outrageous mistakes, and effects on the protagonists. For each selected character, work out privately what they want, the distinctive choice they make, whose plan it derails, and a later consequence that would not happen without that choice. Their choices and the protagonists' reactions must supply the causal spine; a preselected institutional mission, pursuit, technical device, or generic threat must not be the spine with characters added afterward. If the recipe calls for a system-driven procedural story, preserve it, but still let authored character agency determine its crucial turns.
+
+Do not force every generated character into the outline. A candidate whose choices cannot earn a consequence may be dropped; do not add cameos, exposition couriers, or filler scenes to satisfy an invented cast quota. Equally, do not replace a distinctive, consequential candidate with a nameless official, contact, or contractor merely because a functional role makes the plot easier. Before finalizing the sequence, test each retained supporting character: if substituting an interchangeable job title would leave the important events unchanged, give that character a genuinely consequential personal decision or omit them. Keep the Story Arc as the ordered dramatic progression AFTER selecting the story, not the source of a generic sequence of missions. Preserve the author's tone, adult intensity, ambiguity, restrained genres, and all continuity and output contracts.
+
 ## Premise outcome and ending causality
 Before drafting sections, determine the whole story's cause-and-effect trajectory, including the decisive climax, the irreversible change it causes, and an ending that inherits that change. Plan the final outcome before distributing distinct events across Story Arc beats. The protagonists' specific traits, choices, and relationships must materially cause or complicate that outcome; an interchangeable tactical or institutional solution must not replace their agency. Across the entire sequence, preserve irreversible events: a threat stopped in one section stays stopped unless a new and expressly caused event changes that state; deaths, departures, promises, discoveries, and destroyed objects persist. Do not let a subsequent section restart the same countdown, restage a resolved confrontation, or resolve the central conflict a second time. Check the complete resultingChange and terminalState sequence before returning the first-pass outline. The ending can be ambiguous, tragic, grotesque, destructive, morally compromised, or only partly understood; it need not answer every question, but must deliver the premise's consequential promise.
 
@@ -3038,6 +3043,16 @@ Respond with structured JSON matching the schema. This is the only provider call
     storyMaterial,
   );
   planningView.materialIndex = compactMaterialForOutline(storyMaterial);
+  // Put decision-capable supporting people in front of the outliner as an
+  // explicit selection pool, rather than burying them among plot machinery.
+  // This is not a cast quota or an additional canon/validation contract.
+  planningView.characterDecisionCandidates = (storyMaterial?.characters ?? [])
+    .filter((item) => item.source === "planner")
+    .map((item) => ({
+      id: item.id,
+      label: item.label,
+      description: item.description,
+    }));
   const user = JSON.stringify({
     planningContext: planningView,
     // Only quantitative constraints cross into the creative generation call.
@@ -3896,12 +3911,20 @@ export function validateSuggestions(
 }
 
 
+export interface PlannerCharacterIntegration {
+  // Advisory evidence only. Name/contract anchoring does not prove agency.
+  absent: string[];
+  mentionedWithoutCausalAnchor: string[];
+  withCausalAnchor: string[];
+}
+
 export interface OutlineQualityDiagnostic {
   distinctnessIssues: string[];
   causalScaleIssues: string[];
   semanticArcIssues: string[];
   supportingEntities: string[];
   unusedStoryMaterialItems: number;
+  plannerCharacterIntegration: PlannerCharacterIntegration;
   advisoryValidationError?: string;
 }
 
@@ -3912,6 +3935,49 @@ function contractText(suggestion: Suggestion): string {
     suggestion.resultingChange ?? suggestion.terminalBeat,
     suggestion.terminalState ?? suggestion.terminalBeat,
   ].join(" ").toLowerCase();
+}
+
+// Character integration is an advisory, deliberately conservative name test.
+// Unlike unused-material heuristics, it never credits generic label words such
+// as "attention" or "security" as evidence that a character was selected.
+function characterIsNamed(text: string, label: string): boolean {
+  const fullName = label.split(",")[0].trim().replace(/^(?:Dr|Mr|Mrs|Ms)\.?\s+/i, "");
+  if (!fullName) return false;
+  const escaped = (value: string) => value.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`\\b${escaped(fullName)}\\b`, "i").test(text)) return true;
+  const parts = fullName.split(/\s+/);
+  // Proper first names or surnames may be used alone in section contracts.
+  // Case-sensitive matching avoids counting ordinary lowercase label words
+  // such as "being", "attention", or "security" as character references.
+  return [parts[0], parts[parts.length - 1]]
+    .filter((name) => name.length >= 3 && /^[A-Z]/.test(name))
+    .some((name) => new RegExp(`\\b${escaped(name)}\\b`).test(text));
+}
+
+export function analyzePlannerCharacterIntegration(
+  suggestions: Suggestion[],
+  storyMaterial?: StoryMaterialEnrichment,
+): PlannerCharacterIntegration {
+  const result: PlannerCharacterIntegration = {
+    absent: [],
+    mentionedWithoutCausalAnchor: [],
+    withCausalAnchor: [],
+  };
+  for (const item of storyMaterial?.characters ?? []) {
+    if (item.source !== "planner") continue;
+    const mentioned = suggestions.some((section) =>
+      characterIsNamed([section.title, section.summary, section.entryState, section.dramaticEvent, section.resultingChange, section.terminalState].join(" "), item.label)
+    );
+    if (!mentioned) {
+      result.absent.push(item.id);
+      continue;
+    }
+    const causal = suggestions.some((section) =>
+      characterIsNamed([section.dramaticEvent, section.resultingChange].join(" "), item.label)
+    );
+    (causal ? result.withCausalAnchor : result.mentionedWithoutCausalAnchor).push(item.id);
+  }
+  return result;
 }
 
 function contentTokens(value: string): Set<string> {
@@ -4002,8 +4068,50 @@ export function findGroundedSemanticField(
   const normalizedQuote = normalizeEvidenceText(quote);
   if (!section || !normalizedQuote) return undefined;
   return allowedFields.find((candidate) =>
-    normalizeEvidenceText(String((section as any)[candidate] ?? "")).includes(normalizedQuote)
+    normalizeEvidenceText(String((section as any)[candidate] ?? "")).toLocaleLowerCase().includes(normalizedQuote.toLocaleLowerCase())
   );
+}
+
+/**
+ * Ground an independent verifier's claimed quote against the actual Section
+ * Contracts. Correct case and a mistaken section index only when the source
+ * text appears in one permitted section. Never search another Story Arc beat
+ * for a beat-scoped obligation, and never infer semantic satisfaction.
+ */
+export function resolveSemanticEvidenceCitation(
+  suggestions: Suggestion[],
+  claimedIndex: number,
+  quote: string,
+  allowedFields: ArcSemanticField[],
+  permittedIndexes: number[],
+): { sectionIndex: number; field: ArcSemanticField; quote: string } | undefined {
+  const needle = normalizeEvidenceText(quote);
+  if (!needle) return undefined;
+  const permitted = new Set(permittedIndexes);
+  const locate = (sectionIndex: number) => {
+    if (!permitted.has(sectionIndex)) return undefined;
+    const section = suggestions[sectionIndex];
+    if (!section) return undefined;
+    for (const field of allowedFields) {
+      const actual = normalizeEvidenceText(String(section[field] ?? ""));
+      const offset = actual.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
+      if (offset >= 0) {
+        return { sectionIndex, field, quote: actual.slice(offset, offset + needle.length) };
+      }
+    }
+    return undefined;
+  };
+  // The claimed index wins if its quotation is grounded in an allowed field.
+  const atClaimed = locate(claimedIndex);
+  if (atClaimed) return atClaimed;
+  const matches = permittedIndexes.map(locate).filter((hit) => hit !== undefined);
+  // Duplicate text across two sections is ambiguous, not permission to guess.
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+export function isSemanticEvidenceGroundingFailure(reason: string): boolean {
+  return reason.startsWith("provider evidence quote was not grounded") ||
+    reason.startsWith("creative-fidelity evidence quote was not grounded");
 }
 
 export function validateGroundedArcEvidence(
@@ -4226,6 +4334,7 @@ export async function verifyStoryArcSemantics(
   template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
   billableCall: SuggestionLLMCall,
   recipe?: CanonicalRecipeEnvelope,
+  action = "outline-semantic-verification",
 ): Promise<SemanticVerificationResult> {
   const input = semanticVerificationInput(suggestions, template, recipe);
   const raw = await billableCall(
@@ -4233,7 +4342,7 @@ export async function verifyStoryArcSemantics(
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
-    "outline-semantic-verification",
+    action,
   );
   const expectedObligationIDs = [
     ...(hasCreativeFidelityDirectives(recipe) ? ["arc-wide:" + CREATIVE_FIDELITY_OBLIGATION] : []),
@@ -4267,25 +4376,30 @@ export async function verifyStoryArcSemantics(
   const seen = new Set<string>();
   const beats: SemanticVerificationResult["beats"] = [];
   const unsatisfied: SemanticVerificationResult["unsatisfied"] = [];
+  const allSectionIndexes = suggestions.map((_, index) => index);
   if (hasCreativeFidelityDirectives(recipe)) {
     const creativeRaw = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === CREATIVE_FIDELITY_OBLIGATION);
     const creativeSectionIndex = Number(creativeRaw?.sectionIndex);
     const creativeSection = suggestions[creativeSectionIndex];
     const creativeQuote = normalizeEvidenceText(String(creativeRaw?.quote ?? ""));
-    const creativeGroundedField = findGroundedSemanticField(creativeSection, creativeQuote, ["dramaticEvent", "resultingChange", "terminalState"]);
+    const creativeGrounding = resolveSemanticEvidenceCitation(
+      suggestions, creativeSectionIndex, creativeQuote,
+      ["dramaticEvent", "resultingChange", "terminalState"], allSectionIndexes,
+    );
+    const creativeGroundedField = creativeGrounding?.field;
     const creativeVerified = {
       obligationID: CREATIVE_FIDELITY_OBLIGATION,
       satisfied: Boolean(creativeRaw?.satisfied) && Boolean(creativeGroundedField),
-      sectionIndex: Number.isInteger(creativeSectionIndex) ? creativeSectionIndex : -1,
+      sectionIndex: creativeGrounding?.sectionIndex ?? (Number.isInteger(creativeSectionIndex) ? creativeSectionIndex : -1),
       field: creativeGroundedField ?? "dramaticEvent",
-      quote: creativeQuote,
+      quote: creativeGrounding?.quote ?? creativeQuote,
       reason: Boolean(creativeRaw?.satisfied) && !creativeGroundedField
         ? "creative-fidelity evidence quote was not grounded in a Section Contract field; creative-fidelity review required"
         : String(creativeRaw?.reason ?? "missing whole-outline creative-fidelity assessment"),
     } as SemanticVerificationObligation;
     arcWideObligations.push(creativeVerified);
     if (!creativeVerified.satisfied) {
-      const repairSection = creativeSection ?? suggestions[0];
+      const repairSection = suggestions[creativeGrounding?.sectionIndex ?? creativeSectionIndex] ?? suggestions[0];
       unsatisfied.push({
         beatID: repairSection?.storyArcBeatID ?? "__story_arc__",
         obligationID: CREATIVE_FIDELITY_OBLIGATION,
@@ -4303,20 +4417,24 @@ export async function verifyStoryArcSemantics(
     const sectionIndex = Number(rawObligation?.sectionIndex);
     const section = suggestions[sectionIndex];
     const quote = normalizeEvidenceText(String(rawObligation?.quote ?? ""));
-    const groundedField = findGroundedSemanticField(section, quote, ["dramaticEvent", "resultingChange", "terminalState"]);
+    const grounding = resolveSemanticEvidenceCitation(
+      suggestions, sectionIndex, quote,
+      ["dramaticEvent", "resultingChange", "terminalState"], allSectionIndexes,
+    );
+    const groundedField = grounding?.field;
     const providerClaimedSatisfied = Boolean(rawObligation?.satisfied);
     const verified = {
       obligationID: required.obligationID,
       satisfied: providerClaimedSatisfied && Boolean(groundedField),
-      sectionIndex,
+      sectionIndex: grounding?.sectionIndex ?? sectionIndex,
       field: groundedField ?? "dramaticEvent",
-      quote,
+      quote: grounding?.quote ?? quote,
       reason: providerClaimedSatisfied && !groundedField
         ? "provider evidence quote was not grounded in a Section Contract field; story non-negotiable review required"
         : String(rawObligation?.reason ?? `section does not unmistakably satisfy: ${required.instruction}`),
     } as SemanticVerificationObligation;
     arcWideObligations.push(verified);
-    if (!verified.satisfied) unsatisfied.push({ beatID: section?.storyArcBeatID ?? "__story_arc__", obligationID: required.obligationID, reason: verified.reason });
+    if (!verified.satisfied) unsatisfied.push({ beatID: suggestions[grounding?.sectionIndex ?? sectionIndex]?.storyArcBeatID ?? "__story_arc__", obligationID: required.obligationID, reason: verified.reason });
   }
   if (requirement) {
     const rawObligation = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === SELECTED_INTIMACY_LEVEL_OBLIGATION);
@@ -4332,19 +4450,20 @@ export async function verifyStoryArcSemantics(
     // server still requires an exact quote, but canonicalizes the field to the
     // Section Contract field that actually contains it instead of creating a
     // false semantic failure.
-    const groundedField = findGroundedSemanticField(
-      section,
-      quote,
+    const grounding = resolveSemanticEvidenceCitation(
+      suggestions, sectionIndex, quote,
       ["dramaticEvent", "resultingChange", "terminalState"],
+      eligibleSections.map((candidate) => candidate.sectionIndex),
     );
+    const groundedField = grounding?.field;
     const quoteGrounded = Boolean(groundedField);
     const providerClaimedSatisfied = Boolean(rawObligation?.satisfied);
     const verified = {
       obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION,
       satisfied: providerClaimedSatisfied && quoteGrounded,
-      sectionIndex: Number.isInteger(sectionIndex) ? sectionIndex : -1,
+      sectionIndex: grounding?.sectionIndex ?? (Number.isInteger(sectionIndex) ? sectionIndex : -1),
       field: groundedField ?? ("dramaticEvent" as const),
-      quote,
+      quote: grounding?.quote ?? quote,
       reason: providerClaimedSatisfied && !quoteGrounded
         ? "provider evidence quote was not grounded in any Section Contract field; semantic repair required"
         : String(rawObligation?.reason ?? "missing whole-arc intimacy milestone"),
@@ -4397,19 +4516,20 @@ export async function verifyStoryArcSemantics(
       // Require an exact quote from one of the fields allowed by the
       // obligation. Correct a provider's mislabeled field rather than turning
       // an otherwise grounded obligation into a false terminal failure.
-      const groundedField = findGroundedSemanticField(
-        section,
-        quote,
+      const grounding = resolveSemanticEvidenceCitation(
+        suggestions, sectionIndex, quote,
         obligation.requiredFields,
+        sections.map((candidate) => candidate.sectionIndex),
       );
+      const groundedField = grounding?.field;
       const quoteGrounded = Boolean(groundedField);
       const providerClaimedSatisfied = Boolean(rawObligation.satisfied);
       const verified = {
         obligationID,
         satisfied: providerClaimedSatisfied && quoteGrounded,
-        sectionIndex,
+        sectionIndex: grounding?.sectionIndex ?? sectionIndex,
         field: groundedField ?? obligation.requiredFields[0] ?? "dramaticEvent",
-        quote,
+        quote: grounding?.quote ?? quote,
         reason: providerClaimedSatisfied && !quoteGrounded
           ? "provider evidence quote was not grounded in any allowed Section Contract field; semantic repair required"
           : String(rawObligation.reason ?? ""),
@@ -4772,6 +4892,7 @@ export function validateOutlinePlanningQuality(
     semanticArcIssues,
     supportingEntities,
     unusedStoryMaterialItems: supportingEntities.length,
+    plannerCharacterIntegration: analyzePlannerCharacterIntegration(suggestions, storyMaterial),
   };
 }
 
@@ -4797,6 +4918,7 @@ export function collectAdvisoryOutlineQuality(
       semanticArcIssues: [],
       supportingEntities: [],
       unusedStoryMaterialItems: 0,
+      plannerCharacterIntegration: { absent: [], mentionedWithoutCausalAnchor: [], withCausalAnchor: [] },
       advisoryValidationError: error instanceof Error ? error.message : String(error),
     };
   }
@@ -5982,12 +6104,54 @@ export async function runSuggestionJob(
       const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
         ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
         : persistedSemanticSuggestions;
+      const semanticFailures = Array.isArray(planningState.semanticRepairFailures)
+        ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }>
+        : [];
+      // Evidence-only failures must not spend a narrative repair call rewriting
+      // a sound outline. Reuse the already budgeted repair dispatch to reverify
+      // the identical paid sections, then preserve them even if evidence remains
+      // ungrounded. The retry cannot silently claim those obligations passed.
+      if (semanticFailures.length > 0 && semanticFailures.every((failure) => isSemanticEvidenceGroundingFailure(failure.reason))) {
+        let verification: SemanticVerificationResult | undefined;
+        try {
+          verification = await verifyStoryArcSemantics(
+            originalSemanticSuggestions, body.arcTemplate, billableCall, body.recipe,
+            "outline-semantic-repair-batch",
+          );
+          diagnostics = {
+            ...diagnostics,
+            semanticVerification: verification,
+            semanticEvidenceReverification: {
+              attempted: true,
+              originalFailureCount: semanticFailures.length,
+              unresolvedCount: verification.unsatisfied.length,
+              originalOutlinePreserved: true,
+            },
+          };
+          if (verification.unsatisfied.length > 0) {
+            recordSemanticWarning(
+              `Semantic evidence remained unresolved after verification of the unchanged outline (${verification.unsatisfied.length} obligation(s)); original story preserved without narrative repair.`,
+            );
+          }
+        } catch (error) {
+          recordSemanticWarning(`Semantic evidence re-verification was unavailable; original story preserved without narrative repair: ${error instanceof Error ? error.message : String(error)}`);
+          diagnostics = {
+            ...diagnostics,
+            semanticEvidenceReverification: { attempted: true, unavailable: true, originalOutlinePreserved: true },
+          };
+        }
+        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
+        diagnostics = { ...diagnostics, stage: "semantic_verified" };
+        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(originalSemanticSuggestions);
+        return;
+      }
       let repaired = persistedSemanticSuggestions;
       try {
         repaired = await repairStoryArcSemanticObligations(
           persistedSemanticSuggestions,
           body.arcTemplate,
-          Array.isArray(planningState.semanticRepairFailures) ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }> : [],
+          semanticFailures.filter((failure) => !isSemanticEvidenceGroundingFailure(failure.reason)),
           billableCall,
           recipeObligations,
           body.recipe,
@@ -6470,6 +6634,7 @@ export async function runSuggestionJob(
       semanticArcIssues: initialQuality.semanticArcIssues,
       causalScaleIssues: initialQuality.causalScaleIssues,
       unusedStoryMaterialItems: initialQuality.unusedStoryMaterialItems,
+      plannerCharacterIntegration: initialQuality.plannerCharacterIntegration,
       ...(initialQuality.advisoryValidationError
         ? { advisoryValidationError: initialQuality.advisoryValidationError }
         : {}),
