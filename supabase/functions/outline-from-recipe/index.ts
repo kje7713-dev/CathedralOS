@@ -4068,8 +4068,50 @@ export function findGroundedSemanticField(
   const normalizedQuote = normalizeEvidenceText(quote);
   if (!section || !normalizedQuote) return undefined;
   return allowedFields.find((candidate) =>
-    normalizeEvidenceText(String((section as any)[candidate] ?? "")).includes(normalizedQuote)
+    normalizeEvidenceText(String((section as any)[candidate] ?? "")).toLocaleLowerCase().includes(normalizedQuote.toLocaleLowerCase())
   );
+}
+
+/**
+ * Ground an independent verifier's claimed quote against the actual Section
+ * Contracts. Correct case and a mistaken section index only when the source
+ * text appears in one permitted section. Never search another Story Arc beat
+ * for a beat-scoped obligation, and never infer semantic satisfaction.
+ */
+export function resolveSemanticEvidenceCitation(
+  suggestions: Suggestion[],
+  claimedIndex: number,
+  quote: string,
+  allowedFields: ArcSemanticField[],
+  permittedIndexes: number[],
+): { sectionIndex: number; field: ArcSemanticField; quote: string } | undefined {
+  const needle = normalizeEvidenceText(quote);
+  if (!needle) return undefined;
+  const permitted = new Set(permittedIndexes);
+  const locate = (sectionIndex: number) => {
+    if (!permitted.has(sectionIndex)) return undefined;
+    const section = suggestions[sectionIndex];
+    if (!section) return undefined;
+    for (const field of allowedFields) {
+      const actual = normalizeEvidenceText(String(section[field] ?? ""));
+      const offset = actual.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase());
+      if (offset >= 0) {
+        return { sectionIndex, field, quote: actual.slice(offset, offset + needle.length) };
+      }
+    }
+    return undefined;
+  };
+  // The claimed index wins if its quotation is grounded in an allowed field.
+  const atClaimed = locate(claimedIndex);
+  if (atClaimed) return atClaimed;
+  const matches = permittedIndexes.map(locate).filter((hit) => hit !== undefined);
+  // Duplicate text across two sections is ambiguous, not permission to guess.
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+export function isSemanticEvidenceGroundingFailure(reason: string): boolean {
+  return reason.startsWith("provider evidence quote was not grounded") ||
+    reason.startsWith("creative-fidelity evidence quote was not grounded");
 }
 
 export function validateGroundedArcEvidence(
@@ -4292,6 +4334,7 @@ export async function verifyStoryArcSemantics(
   template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
   billableCall: SuggestionLLMCall,
   recipe?: CanonicalRecipeEnvelope,
+  action = "outline-semantic-verification",
 ): Promise<SemanticVerificationResult> {
   const input = semanticVerificationInput(suggestions, template, recipe);
   const raw = await billableCall(
@@ -4299,7 +4342,7 @@ export async function verifyStoryArcSemantics(
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
-    "outline-semantic-verification",
+    action,
   );
   const expectedObligationIDs = [
     ...(hasCreativeFidelityDirectives(recipe) ? ["arc-wide:" + CREATIVE_FIDELITY_OBLIGATION] : []),
@@ -4333,18 +4376,23 @@ export async function verifyStoryArcSemantics(
   const seen = new Set<string>();
   const beats: SemanticVerificationResult["beats"] = [];
   const unsatisfied: SemanticVerificationResult["unsatisfied"] = [];
+  const allSectionIndexes = suggestions.map((_, index) => index);
   if (hasCreativeFidelityDirectives(recipe)) {
     const creativeRaw = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === CREATIVE_FIDELITY_OBLIGATION);
     const creativeSectionIndex = Number(creativeRaw?.sectionIndex);
     const creativeSection = suggestions[creativeSectionIndex];
     const creativeQuote = normalizeEvidenceText(String(creativeRaw?.quote ?? ""));
-    const creativeGroundedField = findGroundedSemanticField(creativeSection, creativeQuote, ["dramaticEvent", "resultingChange", "terminalState"]);
+    const creativeGrounding = resolveSemanticEvidenceCitation(
+      suggestions, creativeSectionIndex, creativeQuote,
+      ["dramaticEvent", "resultingChange", "terminalState"], allSectionIndexes,
+    );
+    const creativeGroundedField = creativeGrounding?.field;
     const creativeVerified = {
       obligationID: CREATIVE_FIDELITY_OBLIGATION,
       satisfied: Boolean(creativeRaw?.satisfied) && Boolean(creativeGroundedField),
-      sectionIndex: Number.isInteger(creativeSectionIndex) ? creativeSectionIndex : -1,
+      sectionIndex: creativeGrounding?.sectionIndex ?? (Number.isInteger(creativeSectionIndex) ? creativeSectionIndex : -1),
       field: creativeGroundedField ?? "dramaticEvent",
-      quote: creativeQuote,
+      quote: creativeGrounding?.quote ?? creativeQuote,
       reason: Boolean(creativeRaw?.satisfied) && !creativeGroundedField
         ? "creative-fidelity evidence quote was not grounded in a Section Contract field; creative-fidelity review required"
         : String(creativeRaw?.reason ?? "missing whole-outline creative-fidelity assessment"),
@@ -4369,14 +4417,18 @@ export async function verifyStoryArcSemantics(
     const sectionIndex = Number(rawObligation?.sectionIndex);
     const section = suggestions[sectionIndex];
     const quote = normalizeEvidenceText(String(rawObligation?.quote ?? ""));
-    const groundedField = findGroundedSemanticField(section, quote, ["dramaticEvent", "resultingChange", "terminalState"]);
+    const grounding = resolveSemanticEvidenceCitation(
+      suggestions, sectionIndex, quote,
+      ["dramaticEvent", "resultingChange", "terminalState"], allSectionIndexes,
+    );
+    const groundedField = grounding?.field;
     const providerClaimedSatisfied = Boolean(rawObligation?.satisfied);
     const verified = {
       obligationID: required.obligationID,
       satisfied: providerClaimedSatisfied && Boolean(groundedField),
-      sectionIndex,
+      sectionIndex: grounding?.sectionIndex ?? sectionIndex,
       field: groundedField ?? "dramaticEvent",
-      quote,
+      quote: grounding?.quote ?? quote,
       reason: providerClaimedSatisfied && !groundedField
         ? "provider evidence quote was not grounded in a Section Contract field; story non-negotiable review required"
         : String(rawObligation?.reason ?? `section does not unmistakably satisfy: ${required.instruction}`),
@@ -4398,19 +4450,20 @@ export async function verifyStoryArcSemantics(
     // server still requires an exact quote, but canonicalizes the field to the
     // Section Contract field that actually contains it instead of creating a
     // false semantic failure.
-    const groundedField = findGroundedSemanticField(
-      section,
-      quote,
+    const grounding = resolveSemanticEvidenceCitation(
+      suggestions, sectionIndex, quote,
       ["dramaticEvent", "resultingChange", "terminalState"],
+      eligibleSections.map((candidate) => candidate.sectionIndex),
     );
+    const groundedField = grounding?.field;
     const quoteGrounded = Boolean(groundedField);
     const providerClaimedSatisfied = Boolean(rawObligation?.satisfied);
     const verified = {
       obligationID: SELECTED_INTIMACY_LEVEL_OBLIGATION,
       satisfied: providerClaimedSatisfied && quoteGrounded,
-      sectionIndex: Number.isInteger(sectionIndex) ? sectionIndex : -1,
+      sectionIndex: grounding?.sectionIndex ?? (Number.isInteger(sectionIndex) ? sectionIndex : -1),
       field: groundedField ?? ("dramaticEvent" as const),
-      quote,
+      quote: grounding?.quote ?? quote,
       reason: providerClaimedSatisfied && !quoteGrounded
         ? "provider evidence quote was not grounded in any Section Contract field; semantic repair required"
         : String(rawObligation?.reason ?? "missing whole-arc intimacy milestone"),
@@ -4463,19 +4516,20 @@ export async function verifyStoryArcSemantics(
       // Require an exact quote from one of the fields allowed by the
       // obligation. Correct a provider's mislabeled field rather than turning
       // an otherwise grounded obligation into a false terminal failure.
-      const groundedField = findGroundedSemanticField(
-        section,
-        quote,
+      const grounding = resolveSemanticEvidenceCitation(
+        suggestions, sectionIndex, quote,
         obligation.requiredFields,
+        sections.map((candidate) => candidate.sectionIndex),
       );
+      const groundedField = grounding?.field;
       const quoteGrounded = Boolean(groundedField);
       const providerClaimedSatisfied = Boolean(rawObligation.satisfied);
       const verified = {
         obligationID,
         satisfied: providerClaimedSatisfied && quoteGrounded,
-        sectionIndex,
+        sectionIndex: grounding?.sectionIndex ?? sectionIndex,
         field: groundedField ?? obligation.requiredFields[0] ?? "dramaticEvent",
-        quote,
+        quote: grounding?.quote ?? quote,
         reason: providerClaimedSatisfied && !quoteGrounded
           ? "provider evidence quote was not grounded in any allowed Section Contract field; semantic repair required"
           : String(rawObligation.reason ?? ""),
@@ -6050,12 +6104,54 @@ export async function runSuggestionJob(
       const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
         ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
         : persistedSemanticSuggestions;
+      const semanticFailures = Array.isArray(planningState.semanticRepairFailures)
+        ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }>
+        : [];
+      // Evidence-only failures must not spend a narrative repair call rewriting
+      // a sound outline. Reuse the already budgeted repair dispatch to reverify
+      // the identical paid sections, then preserve them even if evidence remains
+      // ungrounded. The retry cannot silently claim those obligations passed.
+      if (semanticFailures.length > 0 && semanticFailures.every((failure) => isSemanticEvidenceGroundingFailure(failure.reason))) {
+        let verification: SemanticVerificationResult | undefined;
+        try {
+          verification = await verifyStoryArcSemantics(
+            originalSemanticSuggestions, body.arcTemplate, billableCall, body.recipe,
+            "outline-semantic-repair-batch",
+          );
+          diagnostics = {
+            ...diagnostics,
+            semanticVerification: verification,
+            semanticEvidenceReverification: {
+              attempted: true,
+              originalFailureCount: semanticFailures.length,
+              unresolvedCount: verification.unsatisfied.length,
+              originalOutlinePreserved: true,
+            },
+          };
+          if (verification.unsatisfied.length > 0) {
+            recordSemanticWarning(
+              `Semantic evidence remained unresolved after verification of the unchanged outline (${verification.unsatisfied.length} obligation(s)); original story preserved without narrative repair.`,
+            );
+          }
+        } catch (error) {
+          recordSemanticWarning(`Semantic evidence re-verification was unavailable; original story preserved without narrative repair: ${error instanceof Error ? error.message : String(error)}`);
+          diagnostics = {
+            ...diagnostics,
+            semanticEvidenceReverification: { attempted: true, unavailable: true, originalOutlinePreserved: true },
+          };
+        }
+        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
+        diagnostics = { ...diagnostics, stage: "semantic_evidence_review_complete" };
+        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
+        await continueAfterSemanticVerification(originalSemanticSuggestions);
+        return;
+      }
       let repaired = persistedSemanticSuggestions;
       try {
         repaired = await repairStoryArcSemanticObligations(
           persistedSemanticSuggestions,
           body.arcTemplate,
-          Array.isArray(planningState.semanticRepairFailures) ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }> : [],
+          semanticFailures.filter((failure) => !isSemanticEvidenceGroundingFailure(failure.reason)),
           billableCall,
           recipeObligations,
           body.recipe,
