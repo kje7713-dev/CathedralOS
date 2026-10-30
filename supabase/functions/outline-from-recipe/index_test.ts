@@ -92,6 +92,7 @@ import {
   normalizeProviderStoryMaterialItemIDs,
   downgradeUnverifiedProviderRecipeReferences,
   validateStoryMaterialEnrichment,
+  validatePremiseComponents,
   storyMaterialSufficiency,
   recipeProvenance,
   attachRecipeProvenance,
@@ -5335,6 +5336,78 @@ Deno.test("first-pass prompts own whole-book obligations and active worker has n
   for (const action of ['nextAction: "semantic-repair"', 'nextAction: "semantic-reverification"', 'nextAction: "obligation-repair"']) {
     assertEquals(source.includes(action), false, action);
   }
+});
+
+Deno.test("authored premise is decomposed into independent source-backed obligations without renumbering old IDs", () => {
+  const summary = "Two damaged drifters cross the country. One violent act turns them into public symbols. Their fame exposes a national conspiracy, and their disastrous choices become essential to preventing humanity's destruction.";
+  const components = [
+    { sourceQuote: "Two damaged drifters cross the country", requirement: "The drifters are damaged and cross the country." },
+    { sourceQuote: "One violent act turns them into public symbols", requirement: "A violent event produces an unintended public mythology." },
+    { sourceQuote: "Their fame exposes a national conspiracy", requirement: "Notoriety exposes the national conspiracy." },
+    { sourceQuote: "their disastrous choices become essential to preventing humanity's destruction", requirement: "Their flawed actions materially advance humanity's survival." },
+  ];
+  assertEquals(validatePremiseComponents(components, summary), components);
+  const recipe: any = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, summary } };
+  const baseline = deriveRecipeObligations(recipe);
+  const decomposed = deriveRecipeObligations(recipe, components);
+  assertEquals(decomposed.slice(0, baseline.length), baseline);
+  assertEquals(decomposed.length, baseline.length + 4);
+  assertEquals(decomposed.slice(-4).map((item) => item.source), [
+    "project.summary.component.1", "project.summary.component.2",
+    "project.summary.component.3", "project.summary.component.4",
+  ]);
+  assertEquals(decomposed.slice(-4).every((item) => item.required), true);
+  assertStringIncludes(decomposed.at(-1)!.statement, "humanity");
+  const material: any = { premiseComponents: components };
+  const request: any = { ...sparseRequest, recipe, storyMaterialEnrichment: material };
+  const planning = buildCompactPlanningView(request, decomposed, material);
+  assertEquals((planning.premiseComponents as any[]).length, 4);
+  assertEquals((planning.materialIndex as any[]).some((item) => item.category === "premiseComponents"), false);
+  assertStringIncludes(buildEnrichmentPrompt(request).system, "Decompose the AUTHOR'S project summary");
+  assertStringIncludes(buildAllocationPrompt(request, decomposed).user, "preventing humanity");
+  assertStringIncludes(buildPrompt(request, new Map(), decomposed, material).user, "preventing humanity");
+});
+
+Deno.test("premise extraction rejects invented source claims and omitted large promises", () => {
+  const summary = "The friends become notorious. Their unintended influence shakes the entire country. Their unpredictable choices will one day determine whether humanity survives.";
+  assertThrows(() => validatePremiseComponents([
+    { sourceQuote: "They overthrow the national government", requirement: "The government is overthrown." },
+  ], summary), Error, "invented source quote");
+  assertThrows(() => validatePremiseComponents([
+    { sourceQuote: "The friends become notorious", requirement: "Their notoriety grows." },
+    { sourceQuote: "Their unintended influence shakes the entire country", requirement: "The country is destabilized." },
+  ], summary), Error, "failed to cover");
+  assertThrows(() => validatePremiseComponents(undefined, summary), Error, "premiseComponents must contain");
+});
+
+Deno.test("independent verifier does not pass a humanity-scale premise component because a local victory happened", async () => {
+  const summary = "One violent event creates new public symbols. The national institutions begin to break down. The protagonists' mistakes become essential to humanity surviving a hidden threat.";
+  const components = [
+    { sourceQuote: "One violent event creates new public symbols", requirement: "Fame arises from a violent event." },
+    { sourceQuote: "The national institutions begin to break down", requirement: "The country begins a consequential transformation." },
+    { sourceQuote: "The protagonists' mistakes become essential to humanity surviving a hidden threat", requirement: "Their mistakes must be causally important to humanity's survival." },
+  ];
+  const recipe: any = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, summary } };
+  const template: any = { name: "Custom", beats: [{ id: "b1", label: "Beginning", role: "setup", description: "" }] };
+  const sections: any[] = [{
+    title: "A raid is stopped", storyArcBeatID: "b1",
+    dramaticEvent: "A viral clip makes the pair notorious and they stop a local raid.",
+    resultingChange: "Several detainees survive the confrontation.",
+    terminalState: "Their popularity is national, but the systemic threat and any causal link to humanity's fate remain unexplained.",
+  }];
+  const input = semanticVerificationInput(sections, template, recipe, components) as any;
+  assertEquals(input.arcWideObligations.filter((o: any) => o.obligationID.startsWith("premise_component_")).length, 3);
+  const response: any = semanticVerifierFixture({ messages: [{ role: "user", content: JSON.stringify(input) }] });
+  const humanity = response.arcWideObligations.find((o: any) => o.obligationID === "premise_component_2");
+  humanity.satisfied = false;
+  humanity.reason = "The local rescue does not establish the protagonists' causal importance to humanity's survival.";
+  const result = await verifyStoryArcSemantics(
+    sections, template, async () => ({ content: JSON.stringify(response) }) as any,
+    recipe, "outline-semantic-verification", components,
+  );
+  assertEquals(result.unsatisfied.some((failure) => failure.obligationID === "premise_component_2"), true);
+  assertEquals(result.arcWideObligations.filter((o) => o.obligationID.startsWith("premise_component_")).length, 3);
+  assertEquals(result.arcWideObligations.find((o) => o.obligationID === "premise_component_0")?.satisfied, true);
 });
 
 Deno.test("retired Story Arc rewrite resumes old paid checkpoints without AI calls or changing their plot", async () => {
