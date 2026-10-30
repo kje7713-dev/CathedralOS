@@ -5234,6 +5234,109 @@ function outputExhaustedBilling(actions: string[]) {
   };
 }
 
+Deno.test("new semantic verification reports unmet obligations without launching a rewrite or re-verification", async () => {
+  const body = await executableWorkerBody();
+  const ids = Array.from({ length: 63 }, (_, index) => `R${index + 1}`);
+  const section = (beat: string, title: string) => ({
+    title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends`, storyArcBeatID: beat,
+    dramaticFunction: beat === "beat-1" ? "setup" : "resolution",
+    recipeRequirementIDs: ids, entryState: "Continuity holds.",
+    dramaticEvent: beat === "beat-1" ? "The journey begins." : "The conflict ends.",
+    resultingChange: beat === "beat-1" ? "New pressure begins." : "The conflict resolves.",
+    terminalState: beat === "beat-1" ? "The crisis remains." : "The new normal persists.",
+  });
+  const original = [section("beat-1", "First"), section("beat-2", "Last")];
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    suggestions: original,
+    planning_state: {
+      version: 2, phase: "semantic_verification_pending", nextAction: "semantic-verification",
+      allocationEntries: [
+        ["beat-1", { minSections: 1, rationale: "start" }],
+        ["beat-2", { minSections: 1, rationale: "end" }],
+      ],
+    },
+  });
+  const calls: string[] = [];
+  const billable = validatedWorkerBilling(calls, () => ({ suggestions: [] }), (request) => {
+    const response: any = semanticVerifierFixture(request);
+    if (response.beats[0]?.obligations[0]) {
+      response.beats[0].obligations[0].satisfied = false;
+      response.beats[0].obligations[0].reason = "The authored beat obligation was not achieved.";
+    }
+    return response;
+  });
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(calls, ["outline-semantic-verification"]);
+  assertEquals(db.row.status, "completed", db.row.error ?? "no error");
+  assertEquals(db.row.suggestions, original);
+  assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
+  assertEquals(db.row.diagnostics.semanticAssessment, "needs_review");
+  assertEquals(db.row.diagnostics.semanticUnresolvedCount, 1);
+  assertStringIncludes((db.row.warnings ?? []).join(" "), "no automatic narrative rewrite");
+  assertEquals(db.row.planning_state.nextAction, "completed");
+});
+
+Deno.test("old semantic and obligation repair checkpoints preserve paid story without dispatching new repair calls", async () => {
+  const body = await executableWorkerBody();
+  const ids = Array.from({ length: 63 }, (_, index) => `R${index + 1}`);
+  const section = (beat: string, title: string) => ({
+    title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends`, storyArcBeatID: beat,
+    dramaticFunction: beat === "beat-1" ? "setup" : "resolution",
+    recipeRequirementIDs: ids, entryState: "Continuity holds.",
+    dramaticEvent: beat === "beat-1" ? "The journey begins." : "The conflict ends.",
+    resultingChange: beat === "beat-1" ? "New pressure begins." : "The conflict resolves.",
+    terminalState: beat === "beat-1" ? "The crisis remains." : "The new normal persists.",
+  });
+  const original = [section("beat-1", "First"), section("beat-2", "Last")];
+  const candidate = [section("beat-1", "Unwanted replacement"), original[1]];
+  for (const nextAction of ["semantic-repair", "semantic-reverification", "obligation-repair"]) {
+    const db = new ExecutableRunDb({
+      ...checkpointedWorkerRow(body),
+      suggestions: nextAction === "obligation-repair" ? original : candidate,
+      diagnostics: {
+        semanticVerification: {
+          arcWideObligations: [], beats: [],
+          unsatisfied: [{ beatID: "beat-1", obligationID: "authored_beat_requirement", reason: "fixture gap" }],
+        },
+      },
+      planning_state: {
+        version: 2, phase: nextAction, nextAction,
+        semanticRepairOriginalSuggestions: original,
+        allocationEntries: [
+          ["beat-1", { minSections: 1, rationale: "start" }],
+          ["beat-2", { minSections: 1, rationale: "end" }],
+        ],
+      },
+    });
+    const actions: string[] = [];
+    await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+      db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+      billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
+    });
+    assertEquals(actions, [], nextAction);
+    assertEquals(db.row.status, "completed", JSON.stringify({ nextAction, error: db.row.error }));
+    assertEquals(db.row.suggestions, original, nextAction);
+    assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
+  }
+});
+
+Deno.test("first-pass prompts own whole-book obligations and active worker has no narrative repair dispatch", async () => {
+  const request: any = await executableWorkerBody();
+  assertStringIncludes(buildPrompt(request, new Map()).system, "## First-pass whole-book obligations (no narrative repair later)");
+  assertStringIncludes(buildPrompt(request, new Map()).system, "required functions=");
+  assertStringIncludes(buildAllocationPrompt(request).system, "Do not pack all story-wide obligations into the first beat");
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  for (const action of ['nextAction: "semantic-repair"', 'nextAction: "semantic-reverification"', 'nextAction: "obligation-repair"']) {
+    assertEquals(source.includes(action), false, action);
+  }
+});
+
 Deno.test("retired Story Arc rewrite resumes old paid checkpoints without AI calls or changing their plot", async () => {
   const fullBody = await executableWorkerBody();
   const body: any = {
@@ -5659,6 +5762,8 @@ Deno.test("fresh novel worker sequence is enrichment then allocation then one gl
   await run();
   await run();
   assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(db.row.diagnostics.generatedOrReused, "generated", "a continuation must not rewrite a fresh run as prior-run enrichment reuse");
+  assertEquals(db.row.diagnostics.enrichmentLoadedFromCheckpoint, true);
   assertEquals(db.row.attempt_count, 0);
   assertEquals(actions.some((action) => action.startsWith("outline-route-")), false);
   assertEquals(actions.some((action) => action.startsWith("outline-suggestions-beat-")), false);
