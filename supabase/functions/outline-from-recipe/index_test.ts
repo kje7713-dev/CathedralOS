@@ -6261,7 +6261,7 @@ Deno.test("missing recipe ID coverage never schedules an obligation repair check
   assertEquals(db.row.planning_state.nextAction !== "obligation-repair", true);
 });
 
-Deno.test("first-pass recipe coverage reaches novel length expansion without a narrative repair", async () => {
+Deno.test("first-pass recipe coverage enters novel length controls without a narrative repair", async () => {
   const fullBody = await executableWorkerBody();
   const novelMaterial = attachRecipeProvenance({
     ...repairStoryMaterialFromRecipe(fullBody.recipe as any, {
@@ -6301,10 +6301,11 @@ Deno.test("first-pass recipe coverage reaches novel length expansion without a n
   await run();
   await run();
   await run();
-  assertEquals(db.row.status, "pending", JSON.stringify({ actions, error: db.row.error, diagnostics: db.row.diagnostics, planningState: db.row.planning_state }));
-  assertEquals(db.row.planning_state.phase, "expansion");
-  assertEquals(db.row.status === "completed", false);
+  assertEquals(db.row.status, "completed", db.row.error ?? "no error");
+  assertEquals(db.row.planning_state.phase, "completed");
   assertEquals(actions.slice(0, 3), ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global"]);
+  assertEquals(actions.some((action) => action.includes("repair")), false);
+  assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
 });
 
 Deno.test("provider billing unavailable during allocation bypasses retry and fails safely", async () => {
