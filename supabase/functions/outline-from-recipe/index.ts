@@ -32,6 +32,7 @@ import {
 } from "./_prompt_context.ts";
 import {
   type RecipeObligation,
+  type PremiseComponent,
   deriveRecipeObligations,
   obligationCoverage,
   renderRecipeObligations,
@@ -936,6 +937,8 @@ export interface StoryMaterialEnrichment {
   sourcePromptPackID: string;
   sourcePromptPackName: string;
   rationale: string;
+  /** Independent, exact-quote-backed commitments extracted from the author's summary. */
+  premiseComponents?: PremiseComponent[]; // absent in already-paid legacy checkpoints
   characters: StoryMaterialItem[];
   antagonisticForces: StoryMaterialItem[];
   locations: StoryMaterialItem[];
@@ -969,6 +972,16 @@ const STORY_MATERIAL_ITEM_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+const PREMISE_COMPONENT_SCHEMA = {
+  type: "object",
+  properties: {
+    sourceQuote: { type: "string", minLength: 3, maxLength: 550 },
+    requirement: { type: "string", minLength: 5, maxLength: 650 },
+  },
+  required: ["sourceQuote", "requirement"],
+  additionalProperties: false,
+} as const;
+
 export const STORY_MATERIAL_ENRICHMENT_SCHEMA = {
   type: "object",
   properties: {
@@ -979,9 +992,10 @@ export const STORY_MATERIAL_ENRICHMENT_SCHEMA = {
     // intentionally absent from this strict provider schema; OpenAI requires
     // every declared property to appear in `required`.
     rationale: { type: "string", minLength: 1, maxLength: 2000 },
+    premiseComponents: { type: "array", maxItems: 16, items: PREMISE_COMPONENT_SCHEMA },
     ...Object.fromEntries(STORY_MATERIAL_CATEGORIES.map((category) => [category, { type: "array", maxItems: 50, items: STORY_MATERIAL_ITEM_SCHEMA }])),
   },
-  required: ["schema", "version", "format", "rationale", ...STORY_MATERIAL_CATEGORIES],
+  required: ["schema", "version", "format", "rationale", "premiseComponents", ...STORY_MATERIAL_CATEGORIES],
   additionalProperties: false,
 } as const;
 
@@ -1092,6 +1106,40 @@ export function normalizeProviderStoryMaterialItemIDs(value: unknown): unknown {
   return normalized;
 }
 
+/** Enforce source-literal premise extraction rather than hallucinated requirements. */
+export function validatePremiseComponents(raw: unknown, projectSummary: string): PremiseComponent[] {
+  if (!Array.isArray(raw) || raw.length > 16) throw new Error("premiseComponents must contain at most 16 items");
+  const summary = projectSummary.trim();
+  if (!summary && raw.length > 0) throw new Error("premiseComponents cannot invent a premise without an authored summary");
+  if (summary && raw.length === 0) throw new Error("premiseComponents omitted the authored summary");
+  const occupied = new Set<string>();
+  const covered = new Uint8Array(summary.length);
+  const components: PremiseComponent[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("invalid premise component");
+    const row = item as Record<string, unknown>;
+    const sourceQuote = typeof row.sourceQuote === "string" ? row.sourceQuote.trim() : "";
+    const requirement = typeof row.requirement === "string" ? row.requirement.trim() : "";
+    if (sourceQuote.length < 3 || sourceQuote.length > 550 || requirement.length < 5 || requirement.length > 650 ||
+        !summary.includes(sourceQuote) || occupied.has(sourceQuote)) {
+      throw new Error("premise component has a duplicate, missing, or invented source quote or invalid requirement");
+    }
+    occupied.add(sourceQuote);
+    const offset = summary.indexOf(sourceQuote);
+    for (let i = offset; i < offset + sourceQuote.length; i++) covered[i] = 1;
+    components.push({ sourceQuote, requirement });
+  }
+  if (summary.length >= 180 && components.length < 2) {
+    throw new Error("multi-part project summary cannot be represented by one premise obligation");
+  }
+  // Prevent a partial extraction from quietly erasing a major promise.
+  // Ignore whitespace/punctuation between contiguous authored phrases.
+  const materialChars = [...summary].map((letter, i) => /[\p{L}\p{N}]/u.test(letter) ? i : -1).filter((i) => i >= 0);
+  const coverage = materialChars.length ? materialChars.filter((i) => covered[i]).length / materialChars.length : 1;
+  if (coverage < 0.7) throw new Error("premiseComponents failed to cover the authored project summary");
+  return components;
+}
+
 export function validateStoryMaterialEnrichment(value: unknown, options: { allowMissingProvenance?: boolean; recipe?: CanonicalRecipeEnvelope } = {}): StoryMaterialEnrichment {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("story material enrichment must be an object");
   const candidate = value as Record<string, unknown>;
@@ -1100,6 +1148,14 @@ export function validateStoryMaterialEnrichment(value: unknown, options: { allow
   if (typeof candidate.rationale !== "string" || candidate.rationale.trim() === "") throw new Error("story material enrichment requires a rationale");
   const provenanceFields = ["sourceRecipeHash", "sourceRecipeVersion", "sourcePromptPackID", "sourcePromptPackName"];
   if (!options.allowMissingProvenance && provenanceFields.some((field) => typeof candidate[field] !== "string" && field !== "sourceRecipeVersion" || field === "sourceRecipeVersion" && !Number.isInteger(candidate[field]))) throw new Error("story material enrichment is missing server-owned recipe provenance");
+  // A missing field belongs to a pre-change checkpoint: keep its paid IDs.
+  if (candidate.premiseComponents !== undefined) {
+    if (options.recipe) validatePremiseComponents(candidate.premiseComponents, String(options.recipe.project?.summary ?? ""));
+    else if (!Array.isArray(candidate.premiseComponents) || candidate.premiseComponents.some((item: any) =>
+      !item || typeof item.sourceQuote !== "string" || typeof item.requirement !== "string")) {
+      throw new Error("premiseComponents is malformed");
+    }
+  }
   const handles = options.recipe ? recipeMaterialHandles(options.recipe) : null;
   const ids = new Set<string>();
   for (const category of STORY_MATERIAL_CATEGORIES) {
@@ -1175,6 +1231,9 @@ Do not unnecessarily sanitize or dilute authored adult intensity. If the recipe 
 
 ## Invent distinctive experiences
 Give the reader the on-page encounters, actions, emotional consequences, absurdities, and discoveries promised by the author's recipe. Events should follow from choices and relationships, not from the convenience of a plot device. Let information matter through what it makes people do. Quiet, intricate, realistic, or investigative experiences remain entirely valid when the author actually wants them; intensity and originality come from the recipe, not a universal genre preference.
+
+## Decompose the AUTHOR'S project summary before inventing
+The premiseComponents array is not speculative enrichment: extract every independent factual setup, causal event, character transformation, and consequential promise from recipe.project.summary. Use the author's exact contiguous words as sourceQuote (a substring of the original summary) and a concise, faithful requirement statement for each component. Split compound sentences into independent commitments; do not collapse a national/social or humanity-scale consequence into one generic "danger" or "survival" obligation. Cover the substantive meaning of the ENTIRE summary, including its last clause, rather than just its first incident. Do not add invented claims, force an unrequested ending, or elevate a prompt-pack title into an authored event. A multi-book-scale promise must be materially advanced in the current book, not necessarily fully resolved: that choice belongs to architecture and book planning. Keep authored components separate from optional source=planner categories. Return [] when there is no authored summary.
 
 ## Build a Distinctive Narrative Engine
 Before inventing supporting developments, identify the particular experiences, tensions, surprises, and unresolved questions promised by the author's recipe. Build from characters' desires, contradictions, relationships, decisions, and interactions with the world. Escalation means their choices produce increasingly consequential and distinctive experiences, not merely a larger version of the same obstacle. Support a full ${format}-scale story with substantially different dramatic developments, rather than expanding one incident into a chain of logistical steps.
@@ -5920,7 +5979,7 @@ export async function runSuggestionJob(
     };
 
     const provenance = await recipeProvenance(body.recipe);
-    const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
+    let recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
 
     const completeValidatedOutline = async (
       completedSuggestions: Suggestion[],
@@ -6108,6 +6167,10 @@ export async function runSuggestionJob(
         ) as StoryMaterialEnrichment,
       };
     }
+    // Resume from this run's persisted authored premise decomposition.
+    if (body.storyMaterialEnrichment?.premiseComponents) {
+      recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>, body.storyMaterialEnrichment.premiseComponents);
+    }
     const persistedSemanticSuggestions = Array.isArray(claimedRun.suggestions)
       ? claimedRun.suggestions as Suggestion[]
       : [];
@@ -6277,7 +6340,7 @@ export async function runSuggestionJob(
         story_material: resumedMaterial,
         diagnostics,
       });
-      const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
+      const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>, resumedMaterial.premiseComponents ?? []);
       let completedSuggestions = resume.suggestions;
       let completionWarnings: string[] = [];
       try {
@@ -6442,6 +6505,8 @@ export async function runSuggestionJob(
       await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics });
     }
     if (!storyMaterial) throw new Error("story material enrichment was not produced");
+    recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>, storyMaterial.premiseComponents ?? []);
+    diagnostics = { ...diagnostics, premiseComponents: storyMaterial.premiseComponents ?? [], premiseComponentCount: storyMaterial.premiseComponents?.length ?? 0 };
     // Loading already persisted enrichment is rehydration, not progress.
     diagnostics = { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" };
     await updateRun({
