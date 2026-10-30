@@ -109,7 +109,6 @@ import {
   findGroundedSemanticField,
   validatePostRepairBeatCoverage,
   validateRequiredStoryArcFunctions,
-  repairRequiredStoryArcFunctions,
   repairStoryArcMacroStructure,
   arcRoleContract,
   buildExpansionResponseSchema,
@@ -253,7 +252,7 @@ Deno.test("recipe authority governs enrichment, allocation, outline, and expansi
   }
   assertEquals(outline.includes("Planner-generated material may be rejected or replaced"), true);
   assertEquals(expansion.includes("Planner-generated enrichment is provisional"), true);
-  assertEquals(enrichment.includes("when the author's recipe calls for that experience"), true);
+  assertStringIncludes(enrichment, "A planner-invented mechanism is an optional candidate");
   assertEquals(JSON.parse(buildExpansionPrompt(request, []).user).global.recipe.setting.worldRules[0].includes("dead"), true);
 });
 
@@ -3219,11 +3218,11 @@ Deno.test("enrichment prompt favors audacity, adult intensity, and memorable exp
   assertStringIncludes(prompt, "Do not impose redemption arcs, moral lessons, institutional reform");
   assertStringIncludes(prompt, "Do not unnecessarily sanitize or dilute authored adult intensity");
   assertStringIncludes(prompt, "subject to applicable content constraints");
-  assertStringIncludes(prompt, "## Prioritize experiences over explanations");
-  assertStringIncludes(prompt, "Invent events worth reading, not explanations worth filing");
-  assertStringIncludes(prompt, "quiet literary novel, restrained romance, cozy mystery, or procedural thriller");
+  assertStringIncludes(prompt, "## Invent distinctive experiences");
+  assertStringIncludes(prompt, "Let information matter through what it makes people do");
+  assertStringIncludes(prompt, "Quiet, intricate, realistic, or investigative experiences remain entirely valid");
   assertStringIncludes(prompt, "Do not add arbitrary violence, sex, comedy, or spectacle");
-  assertStringIncludes(prompt, "Do not automatically invent a central mission, investigation, pursuit");
+  assertStringIncludes(prompt, "## Keep enrichment genuinely exploratory");
   assertEquals(prompt.includes("There is no cast quota"), true);
 });
 
@@ -3234,10 +3233,10 @@ Deno.test("enrichment prompt favors inventive situations over generic machinery"
   assertStringIncludes(prompt.system, "Build a Distinctive Narrative Engine");
   assertStringIncludes(prompt.system, "specific storytelling experience promised by the author's recipe");
   assertStringIncludes(prompt.system, "Escalation means the story becomes more interesting");
-  assertStringIncludes(prompt.system, "could appear virtually unchanged in an unrelated novel");
-  assertStringIncludes(prompt.system, "Make the story's experiences determine its structure");
-  assertStringIncludes(prompt.system, "Do not automatically invent a central mission, investigation, pursuit");
-  assertStringIncludes(prompt.system, "when the author's recipe calls for that experience");
+  assertStringIncludes(prompt.system, "independent characters, conflicting agendas, accidental encounters");
+  assertStringIncludes(prompt.system, "not a directive to construct one complete and coordinated plot apparatus");
+  assertStringIncludes(prompt.system, "do not all need to describe the same invented opposition or operation");
+  assertStringIncludes(prompt.system, "A planner-invented mechanism is an optional candidate");
   assertEquals(prompt.system.includes("Do not default to rosters, manifests, inventories, ledgers"), false);
   assertEquals(prompt.system.includes("A document is not a dramatic event"), false);
   assertStringIncludes(prompt.system, "Sparse input still carries a larger invention burden");
@@ -3260,7 +3259,30 @@ Deno.test("character-first enrichment direction precedes situations, escalation,
   assertStringIncludes(prompt, "If a character could be replaced by an anonymous role");
   assertEquals(prompt.includes('role such as "handler"'), false);
   assertEquals(prompt.includes('"contractor"'), false);
-  assertEquals(prompt.includes("Do not automatically invent a central mission"), true);
+  assertEquals(prompt.includes("Do not automatically invent a central mission"), false);
+});
+
+Deno.test("enrichment categories do not preselect one operational plot and preserve authored possibilities", () => {
+  const richRequest: any = {
+    ...sparseRequest,
+    recipe: {
+      ...sparseRequest.recipe,
+      project: { ...sparseRequest.recipe.project, summary: "A peculiar ensemble of companions misreads catastrophe as celebrity." },
+      setting: { ...sparseRequest.recipe.setting, included: true, worldRules: ["An invented institution should not be required as the central plot."] },
+    },
+  };
+  const prompt = buildEnrichmentPrompt(richRequest);
+  assertEquals(JSON.parse(prompt.user).recipe, richRequest.recipe);
+  assertStringIncludes(prompt.system, "The enrichment categories are ways to describe possible material");
+  assertStringIncludes(prompt.system, "do not all need to describe the same invented opposition or operation");
+  assertStringIncludes(prompt.system, "Some ideas may connect; others can be alternatives");
+  assertStringIncludes(prompt.system, "The eventual outline chooses events directly from the recipe");
+  assertEquals(prompt.system.includes("Do not automatically invent a central mission, investigation, pursuit"), false);
+  assertEquals(prompt.system.includes("Do not globally prohibit procedural storytelling"), false);
+  const outline = buildPrompt(richRequest, new Map());
+  assertStringIncludes(outline.system, "Planner categories are possible story ingredients, not an already chosen plot");
+  assertStringIncludes(outline.system, "frequency across categories does not make it canon");
+  assertEquals(JSON.parse(outline.user).planningContext.recipe, richRequest.recipe);
 });
 
 Deno.test("request validation accepts a previously persisted enrichment package", () => {
@@ -3741,104 +3763,6 @@ Deno.test("authored Story Arc beat requirements survive context compaction for e
   assertEquals(prompt.user.includes(authoredRequirement), true);
 });
 
-Deno.test("PR3 Final Image aftermath-only content is repaired into an actual resolution", async () => {
-  const template = {
-    name: "Save the Cat!",
-    beats: [{ id: "final", role: "final_image", label: "Final Image" }],
-  };
-  const aftermathOnly: any = semanticSection(
-    "final",
-    "The Aftermath",
-    "The survivors mourn and remember what was lost.",
-    "aftermath",
-  );
-  aftermathOnly.resultingChange = "The aftermath continues.";
-  aftermathOnly.terminalState = "The aftermath remains unresolved.";
-  const before = validateStoryArcSemantics([aftermathOnly], template as any);
-  assertEquals(before.some((issue) => issue.includes("missing required dramatic function resolution")), true);
-  const mislabeledAftermath = { ...aftermathOnly, dramaticFunction: "resolution" };
-  assertEquals(validateStoryArcSemantics([mislabeledAftermath], template as any).some((issue) => issue.includes("does not materially resolve")), false);
-
-  const repaired = await repairRequiredStoryArcFunctions(
-    [aftermathOnly],
-    template as any,
-    async (
-      _system: string,
-      _user: string,
-      _maxOutputTokens: number,
-      _responseFormat: unknown,
-      _action: string,
-      validateResponse?: (content: string) => unknown | Promise<unknown>,
-    ) => {
-      const content = JSON.stringify({ section: {
-        ...aftermathOnly,
-        title: "The Conflict Is Settled",
-        summary: "The central conflict is finally settled and the survivors choose what comes next.",
-        dramaticEvent: "The survivors answer the central question by confronting the final consequence and making the binding choice that ends the conflict.",
-        resultingChange: "The central conflict is resolved; the survivors accept the settled cost and choose a new shared direction.",
-        terminalState: "The question is answered and the new normal holds without the former conflict continuing.",
-        dramaticFunction: "resolution",
-      } });
-      if (validateResponse) await validateResponse(content);
-      return { content, creditCostCharged: 0, remainingCredits: 10 };
-    },
-  );
-
-  assertEquals(repaired.unresolved, []);
-  assertEquals(repaired.repaired, ["The Aftermath: resolution"]);
-  assertEquals(validateStoryArcSemantics(repaired.suggestions, template as any), []);
-  assertEquals(repaired.suggestions[0].dramaticFunction, "resolution");
-  assertEquals(repaired.suggestions[0].terminalState?.includes("question is answered"), true);
-});
-
-Deno.test("targeted Story Arc repair skips healthy resolutions and preserves failed repairs", async () => {
-  const template = {
-    name: "Save the Cat!",
-    beats: [{ id: "final", role: "final_image", label: "Final Image" }],
-  };
-  const healthy: any = semanticSection(
-    "final",
-    "The Settled Question",
-    "The survivors resolve the central conflict and choose the new normal.",
-    "resolution",
-  );
-  healthy.resultingChange = "The central conflict is resolved and its cost is accepted.";
-  healthy.terminalState = "The new normal holds without the former conflict continuing.";
-  const healthyActions: string[] = [];
-  const healthyResult = await repairRequiredStoryArcFunctions(
-    [healthy],
-    template as any,
-    async (...args: any[]) => {
-      healthyActions.push(args[4]);
-      throw new Error("healthy outline should not call repair");
-    },
-  );
-  assertEquals(healthyActions, []);
-  assertEquals(healthyResult.repaired, []);
-  assertEquals(healthyResult.unresolved, []);
-
-  const aftermathOnly: any = semanticSection(
-    "final",
-    "The Aftermath",
-    "The survivors mourn and remember what was lost.",
-    "resolution",
-  );
-  aftermathOnly.resultingChange = "The aftermath continues.";
-  aftermathOnly.terminalState = "The aftermath remains unresolved.";
-  const failed = await repairRequiredStoryArcFunctions(
-    [aftermathOnly],
-    template as any,
-    async (_system: string, _user: string, _max: number, _format: unknown, _action: string, validate?: (content: string) => unknown) => {
-      const content = JSON.stringify({ section: aftermathOnly });
-      validate?.(content);
-      return { content, creditCostCharged: 1, remainingCredits: 9 };
-    },
-  );
-  assertEquals(failed.repaired, []);
-  assertEquals(failed.unresolved, []);
-  assertEquals(failed.suggestions, [aftermathOnly]);
-});
-
 Deno.test("resolution function validation is structural, not literary", () => {
   const template: any = { name: "Save the Cat!", beats: [{ id: "final", role: "final_image", label: "Final Image" }] };
   const declaredButUnresolved: any = {
@@ -3851,78 +3775,6 @@ Deno.test("resolution function validation is structural, not literary", () => {
   assertEquals(validateRequiredStoryArcFunctions([declaredButUnresolved], template), []);
   const missingDeclaration = { ...declaredButUnresolved, dramaticFunction: "aftermath" };
   assertEquals(validateRequiredStoryArcFunctions([missingDeclaration], template).some((issue) => issue.includes("missing required dramatic function resolution")), true);
-});
-
-Deno.test("Story Arc repair prompt includes premise and preceding climax context", async () => {
-  const template = {
-    name: "Save the Cat!",
-    beats: [
-      { id: "climax", role: "climax", label: "Climax" },
-      { id: "final", role: "final_image", label: "Final Image" },
-    ],
-  };
-  const climax: any = semanticSection("climax", "The Raccoon Confrontation", "The raccoon confronts the poachers and breaks their trap network.", "climax");
-  const weak: any = semanticSection("final", "The Cleanup", "The survivors clean up after the confrontation.", "aftermath");
-  let capturedContext: any;
-  const repaired = await repairRequiredStoryArcFunctions(
-    [climax, weak],
-    template as any,
-    async (_system, user, _max, _format, _action, validate) => {
-      const content = JSON.stringify({
-        section: {
-          ...weak,
-          summary: "The raccoon is safe and the poachers' threat is over.",
-          dramaticEvent: "The survivors resolve the central conflict by stopping the poachers and freeing the raccoon.",
-          resultingChange: "The central conflict is resolved and the raccoon can return home.",
-          terminalState: "The raccoon is safe; the former threat no longer continues.",
-          dramaticFunction: "resolution",
-        },
-      });
-      capturedContext = JSON.parse(user).context;
-      validate?.(content);
-      return { content, creditCostCharged: 1, remainingCredits: 9 };
-    },
-    [],
-    {
-      premise: "A raccoon protects its den from a widening poaching operation.",
-      recipe: {
-        project: { id: "raccoon", summary: "A morally compromised defense with no redemption arc." },
-        setting: { included: true, worldRules: ["The den remembers every trespass."], hiddenTruths: ["The poachers are protecting a worse secret."] },
-        selectedCharacters: [{ id: "raccoon", instructionBias: "Do not make the raccoon heroic.", speechStyle: "Silent and physical." }],
-        selectedAftertaste: { endingTexture: "Ambiguous and damaged." },
-      },
-    },
-  );
-  assertEquals(capturedContext.premise, "A raccoon protects its den from a widening poaching operation.");
-  assertEquals(capturedContext.recipe.setting.worldRules[0], "The den remembers every trespass.");
-  assertEquals(capturedContext.recipe.selectedCharacters[0].instructionBias, "Do not make the raccoon heroic.");
-  assertEquals(capturedContext.precedingClimax.title, "The Raccoon Confrontation");
-  assertEquals(repaired.unresolved, []);
-  assertEquals(repaired.repaired, ["The Cleanup: resolution"]);
-});
-
-Deno.test("semantic repair preserves provider output exhaustion", async () => {
-  const template = {
-    name: "Save the Cat!",
-    beats: [{ id: "final", role: "final_image", label: "Final Image" }],
-  };
-  const aftermathOnly: any = semanticSection(
-    "final",
-    "The Aftermath",
-    "The survivors mourn and remember what was lost.",
-    "aftermath",
-  );
-  await assertRejects(
-    () => repairRequiredStoryArcFunctions(
-      [aftermathOnly],
-      template as any,
-      async (...args: any[]) => {
-        await args[5]?.('{"section":', "length");
-        throw new Error("output exhaustion callback unexpectedly returned");
-      },
-    ),
-    OutlineOutputExhaustedError,
-  );
 });
 
 Deno.test("PR3 expansion schema and parser enforce beat-local structural functions without conflict rejection", () => {
