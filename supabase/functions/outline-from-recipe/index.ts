@@ -4322,6 +4322,7 @@ export type SemanticVerificationResult = {
 function semanticFailureIdentity(failure: { beatID: string; obligationID: string }): string {
   const { obligationID } = failure;
   const isStoryWide = obligationID === CREATIVE_FIDELITY_OBLIGATION ||
+    obligationID.startsWith("premise_component_") ||
     obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION ||
     obligationID.startsWith("story_non_negotiable_");
   return isStoryWide ? `story:${obligationID}` : `beat:${failure.beatID}:${obligationID}`;
@@ -4398,6 +4399,7 @@ export function semanticVerificationInput(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
   recipe?: CanonicalRecipeEnvelope,
+  premiseComponents: PremiseComponent[] = [],
 ): Record<string, unknown> {
   const requirement = intimacyRequirement({ arcTemplate: template as ArcTemplateBlob, recipe: recipe as CanonicalRecipeEnvelope });
   const eligible = new Set((template.intimacyMilestoneRoles ?? []));
@@ -4418,7 +4420,16 @@ export function semanticVerificationInput(
         terminalState: section.terminalState ?? "",
       })),
     })),
-    arcWideObligations: [...(hasCreativeFidelityDirectives(recipe) ? [{
+    arcWideObligations: [...premiseComponents.map((component, index) => ({
+      obligationID: `premise_component_${index}`,
+      instruction: `Independently assess the authored promise "${component.sourceQuote}". Required current-book realization: ${component.requirement}. The outline must materially ESTABLISH or ADVANCE this distinct premise commitment through concrete causally consequential dramatic events, not just name it. A genuine series-level payoff need not be fully resolved this volume, but a small local win is insufficient if no credible causal connection to the larger promised transformation is established. Do not infer that a mere rescue already saves humanity or transforms society. Do not require an unrequested final-series ending.`,
+      sections: suggestions.map((section, sectionIndex) => ({
+        sectionIndex, beatID: section.storyArcBeatID,
+        dramaticEvent: section.dramaticEvent ?? "",
+        resultingChange: section.resultingChange ?? "",
+        terminalState: section.terminalState ?? "",
+      })),
+    })), ...(hasCreativeFidelityDirectives(recipe) ? [{
       obligationID: CREATIVE_FIDELITY_OBLIGATION,
       instruction: "Assess the whole outline's creative fidelity to the canonical recipe. Decide whether the sequence of actual dramatic events delivers the author's specified premise, character behavior, relationships, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience, rather than merely mentioning those ingredients. Treat planner-generated enrichment as provisional: reject only when it materially redirects the story into a different narrative experience, and accept unusual, destructive, morally compromised, or mixed-genre events when they remain faithful to the recipe. If rejecting, identify a concrete section and quote the field that demonstrates the drift.",
       sections: suggestions.map((section, sectionIndex) => ({
@@ -4461,16 +4472,18 @@ export async function verifyStoryArcSemantics(
   billableCall: SuggestionLLMCall,
   recipe?: CanonicalRecipeEnvelope,
   action = "outline-semantic-verification",
+  premiseComponents: PremiseComponent[] = [],
 ): Promise<SemanticVerificationResult> {
-  const input = semanticVerificationInput(suggestions, template, recipe);
+  const input = semanticVerificationInput(suggestions, template, recipe, premiseComponents);
   const raw = await billableCall(
-    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and the required whole-outline creative_fidelity assessment, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. For creative_fidelity, evaluate the sequence of dramatic events against the complete canonical recipe's premise, populated character and relationship directives, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience; do not pass merely because names or keywords appear. This is a material-drift review, not a perfection or style score: a coherent, usable outline with minor weaknesses, uneven emphasis, legitimate mixed-genre scenes, or editorial opportunities is satisfied. Planner-generated candidates are provisional and may be discarded. Accept procedural or institutional material when the recipe makes it central, and reject it only when it fundamentally redirects the authored story or omits essential creative commitments needed for a usable outline. If rejecting, provide a grounded quote from the section that demonstrates the material drift. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
+    "You are an independent semantic verifier. First assess EVERY independently extracted authored premise component across the full outline. A single generic local success must not mask the loss of a larger causal promise (such as changed institutions or humanity-scale consequences). For a multi-book promise, accept concrete irreversible advancement this volume without requiring final-series resolution. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and the required whole-outline creative_fidelity assessment, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. For creative_fidelity, evaluate the sequence of dramatic events against the complete canonical recipe's premise, populated character and relationship directives, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience; do not pass merely because names or keywords appear. This is a material-drift review, not a perfection or style score: a coherent, usable outline with minor weaknesses, uneven emphasis, legitimate mixed-genre scenes, or editorial opportunities is satisfied. Planner-generated candidates are provisional and may be discarded. Accept procedural or institutional material when the recipe makes it central, and reject it only when it fundamentally redirects the authored story or omits essential creative commitments needed for a usable outline. If rejecting, provide a grounded quote from the section that demonstrates the material drift. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
     action,
   );
   const expectedObligationIDs = [
+    ...premiseComponents.map((_, i) => `arc-wide:premise_component_${i}`),
     ...(hasCreativeFidelityDirectives(recipe) ? ["arc-wide:" + CREATIVE_FIDELITY_OBLIGATION] : []),
     ...template.beats.flatMap((beat) =>
     verificationObligationsForBeat(beat, template.name).map((obligation) => `${beat.id}:${obligation.id}`))];
@@ -4503,6 +4516,32 @@ export async function verifyStoryArcSemantics(
   const beats: SemanticVerificationResult["beats"] = [];
   const unsatisfied: SemanticVerificationResult["unsatisfied"] = [];
   const allSectionIndexes = suggestions.map((_, index) => index);
+  for (const [index, component] of premiseComponents.entries()) {
+    const obligationID = `premise_component_${index}`;
+    const candidate = rawArcWide.find((entry: any) => String(entry?.obligationID ?? "") === obligationID);
+    const sectionIndex = Number(candidate?.sectionIndex);
+    const quote = normalizeEvidenceText(String(candidate?.quote ?? ""));
+    const grounding = resolveSemanticEvidenceCitation(
+      suggestions, sectionIndex, quote,
+      ["dramaticEvent", "resultingChange", "terminalState"], allSectionIndexes,
+    );
+    const grounded = Boolean(grounding?.field);
+    const satisfied = Boolean(candidate?.satisfied) && grounded;
+    const reason = candidate?.satisfied && !grounded
+      ? "provider premise-component evidence quote was not grounded in a Section Contract field"
+      : String(candidate?.reason ?? `premise component was not independently verified: ${component.requirement}`);
+    arcWideObligations.push({
+      obligationID, satisfied,
+      sectionIndex: grounding?.sectionIndex ?? (Number.isInteger(sectionIndex) ? sectionIndex : -1),
+      field: grounding?.field ?? "dramaticEvent", quote: grounding?.quote ?? quote, reason,
+    });
+    if (!satisfied) {
+      unsatisfied.push({
+        beatID: suggestions[grounding?.sectionIndex ?? sectionIndex]?.storyArcBeatID ?? "__story_arc__",
+        obligationID, reason,
+      });
+    }
+  }
   if (hasCreativeFidelityDirectives(recipe)) {
     const creativeRaw = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === CREATIVE_FIDELITY_OBLIGATION);
     const creativeSectionIndex = Number(creativeRaw?.sectionIndex);
@@ -6209,7 +6248,10 @@ export async function runSuggestionJob(
     if (planningState.nextAction === "semantic-verification") {
       let verification: SemanticVerificationResult | undefined;
       try {
-        verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
+        verification = await verifyStoryArcSemantics(
+          persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe,
+          "outline-semantic-verification", body.storyMaterialEnrichment?.premiseComponents ?? [],
+        );
       } catch (error) {
         recordSemanticWarning(`Semantic verification was unavailable; continuing with the best structural outline: ${error instanceof Error ? error.message : String(error)}`);
         planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
@@ -6227,6 +6269,10 @@ export async function runSuggestionJob(
         ...diagnostics,
         semanticAssessment: unresolved > 0 ? "needs_review" : "passed",
         semanticUnresolvedCount: unresolved,
+        premiseComponentVerification: {
+          total: body.storyMaterialEnrichment?.premiseComponents?.length ?? 0,
+          unresolved: verification.unsatisfied.filter((issue) => issue.obligationID.startsWith("premise_component_")).map((issue) => issue.obligationID),
+        },
         automaticNarrativeRepair: "disabled",
       };
       planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
