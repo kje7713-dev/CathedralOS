@@ -701,53 +701,101 @@ Deno.test("allocation rejects malformed architecture instead of passing it to pr
   assertStringIncludes(buildPrompt(sparseRequest as any, parsed).system, "Legacy checkpoint");
 });
 
-Deno.test("horror conspiracy architecture chooses reader dread and a book-level outcome, not an obligatory mission", () => {
-  const summary = "Three ruined drifters encounter an unknowable conspiracy whose ultimate danger to humanity may take several books to unfold.";
-  const request: any = {
-    ...sparseRequest,
-    requestedFormat: "novel",
-    recipe: {
-      ...sparseRequest.recipe,
-      project: { ...sparseRequest.recipe.project, summary, audienceNotes: "Grotesque psychological horror and surreal dread" },
+Deno.test("reader-experience-first architecture applies equally across genres without a hardcoded genre solution", () => {
+  const recipes = [
+    {
+      name: "Horror / Escalating Dread",
+      summary: "Three ruined drifters encounter an unknowable conspiracy whose ultimate danger may unfold over several books.",
+      audienceNotes: "Grotesque psychological dread and surreal uncertainty.",
     },
-    arcTemplate: { ...sparseRequest.arcTemplate, name: "Horror / Escalating Dread" },
-  };
-  const architecturePrompt = buildAllocationPrompt(request);
-  assertStringIncludes(architecturePrompt.system, "Genre experience BEFORE central threat and climax");
-  assertStringIncludes(architecturePrompt.system, "For horror, prioritize accumulating dread");
-  assertStringIncludes(architecturePrompt.system, 'A recipe saying "a conspiracy exists" does NOT mean the protagonists must investigate, understand, or stop that conspiracy.');
-  assertStringIncludes(architecturePrompt.system, "An external campaign may remain dangerous, unexplained, and undefeated");
-  assertStringIncludes(architecturePrompt.system, "Choose the reader experience and book-level question BEFORE the decisive outcome.");
-  assertEquals(JSON.parse(architecturePrompt.user).planningContext.recipe.project.summary, summary);
-
-  const savedArchitecture = {
-    centralQuestion: "Can Millie survive choosing the men over her handlers?",
-    characterCausality: "Their destructive dependence exposes Millie to something she cannot understand.",
-    decisiveClimax: "She chooses the men and loses her only route home, while the source of the horror remains active.",
-    endingConsequence: "The trio survives but their relationship and sense of reality are irreversibly damaged.",
-    deliberatelyOpenThreads: "The conspiracy and its purpose remain unknown and undefeated.",
-  };
-  const outlinePrompt = buildPrompt(request, new Map(), [], undefined, savedArchitecture);
-  assertStringIncludes(outlinePrompt.system, "identify the intended genre-specific reader experience");
-  assertStringIncludes(outlinePrompt.system, "do not convert mounting terror into an evidence-gathering mission or technical sabotage");
-  assertStringIncludes(outlinePrompt.system, "not necessarily end an external conspiracy");
-  assertStringIncludes(outlinePrompt.system, savedArchitecture.decisiveClimax);
-  assertStringIncludes(outlinePrompt.system, savedArchitecture.deliberatelyOpenThreads);
+    {
+      name: "Comedy / Escalating Chaos",
+      summary: "A vain grifter makes ridiculous promises that turn his failing town against him.",
+      audienceNotes: "Absurd comedy driven by humiliation and escalating mistakes.",
+    },
+    {
+      name: "Romance",
+      summary: "Two estranged friends must choose whether to risk their friendship to become lovers.",
+      audienceNotes: "Intimate, tender romantic tension and an earned emotional choice.",
+    },
+    {
+      name: "Thriller",
+      summary: "A whistleblower must expose the conspiracy and stop its planned raid before the book ends.",
+      audienceNotes: "A high-stakes investigation that culminates in stopping the raid.",
+    },
+    {
+      name: "Literary Drama",
+      summary: "Siblings struggle after their mother's death, and one finally admits the truth without earning forgiveness.",
+      audienceNotes: "Quiet moral ambiguity and painful family relationships.",
+    },
+  ];
+  let genreNeutralSystem: string | undefined;
+  for (const genre of recipes) {
+    const request: any = {
+      ...sparseRequest,
+      requestedFormat: "novel",
+      recipe: {
+        ...sparseRequest.recipe,
+        project: { ...sparseRequest.recipe.project, summary: genre.summary, audienceNotes: genre.audienceNotes },
+      },
+      arcTemplate: { ...sparseRequest.arcTemplate, name: genre.name },
+    };
+    const architecturePrompt = buildAllocationPrompt(request);
+    const outlinePrompt = buildPrompt(request, new Map());
+    assertStringIncludes(architecturePrompt.system, "Author-promised reader experience BEFORE plot machinery");
+    assertStringIncludes(architecturePrompt.system, "The Story Arc governs dramatic progression, not a default set of plot devices");
+    assertStringIncludes(architecturePrompt.system, "A premise fact does not itself create an objective");
+    assertStringIncludes(architecturePrompt.system, "This rule applies to ALL genres");
+    assertStringIncludes(architecturePrompt.system, "if the author explicitly requires a particular resolution in this volume, honor it");
+    assertStringIncludes(outlinePrompt.system, "identify the intended reader experience from this recipe's specific genre, tone");
+    assertStringIncludes(outlinePrompt.system, "Do not convert the authored reader experience into a generic mission");
+    assertStringIncludes(outlinePrompt.system, "relationship milestone is authored and dramatically appropriate");
+    assertEquals(JSON.parse(architecturePrompt.user).planningContext.recipe.project.summary, genre.summary);
+    assertEquals(JSON.parse(architecturePrompt.user).planningContext.arc.name, genre.name);
+    // The rule itself is shared: no code-level special treatment for the example horror recipe.
+    if (genreNeutralSystem === undefined) genreNeutralSystem = architecturePrompt.system;
+    else assertEquals(architecturePrompt.system, genreNeutralSystem);
+  }
 });
 
-Deno.test("genre-led story selection still honors an authored procedural investigation and external victory", () => {
+Deno.test("selected book-level climax persists into outline without forcing the wider threat to be defeated", () => {
   const request: any = {
     ...sparseRequest,
     recipe: {
       ...sparseRequest.recipe,
-      project: { ...sparseRequest.recipe.project, summary: "An investigator must expose the named conspiracy and stop its planned raid before the book ends." },
+      project: { ...sparseRequest.recipe.project, summary: "Their accidental notoriety exposes a mystery whose stakes may reach other books." },
     },
   };
-  const architecturePrompt = buildAllocationPrompt(request).system;
-  const outlinePrompt = buildPrompt(request, new Map()).system;
-  assertStringIncludes(architecturePrompt, "For an AUTHOR-AUTHORED procedural or mission story");
-  assertStringIncludes(architecturePrompt, "if the author explicitly requires defeat of a threat in this volume, honor it");
-  assertStringIncludes(outlinePrompt, "For an explicitly authored investigative/procedural story or required victory");
+  const savedArchitecture = {
+    centralQuestion: "Will Mara betray the people she promised to protect?",
+    characterCausality: "Her lies and her friend's reckless choices force a costly decision.",
+    decisiveClimax: "She chooses her friends and permanently loses the only safe home she knows.",
+    endingConsequence: "The group survives, but their relationships cannot return to what they were.",
+    deliberatelyOpenThreads: "The larger organization remains hidden and active.",
+  };
+  const outlinePrompt = buildPrompt(request, new Map(), [], undefined, savedArchitecture);
+  assertStringIncludes(outlinePrompt.system, savedArchitecture.centralQuestion);
+  assertStringIncludes(outlinePrompt.system, savedArchitecture.decisiveClimax);
+  assertStringIncludes(outlinePrompt.system, savedArchitecture.deliberatelyOpenThreads);
+  assertStringIncludes(outlinePrompt.system, "not necessarily resolve every external threat");
+  assertStringIncludes(outlinePrompt.system, "the decisive BOOK-level outcome must be achieved in the climax role");
+});
+
+Deno.test("explicitly authored external victory and relationship resolution remain permitted in all genres", () => {
+  for (const summary of [
+    "An investigator must expose the named conspiracy and stop its planned raid before the book ends.",
+    "Two lovers must reunite and confess their feelings before the end of this book.",
+  ]) {
+    const request: any = {
+      ...sparseRequest,
+      recipe: { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, summary } },
+    };
+    const architecturePrompt = buildAllocationPrompt(request);
+    const outlinePrompt = buildPrompt(request, new Map());
+    assertStringIncludes(architecturePrompt.system, "if the author explicitly requires a particular resolution in this volume, honor it");
+    assertStringIncludes(outlinePrompt.system, "if a procedural solution, external victory, or relationship milestone is authored and dramatically appropriate, deliver it");
+    assertEquals(JSON.parse(architecturePrompt.user).planningContext.recipe.project.summary, summary);
+  }
 });
 
 Deno.test("allocation prompt selects causal outcome before sizing chapters without canonizing contractors", () => {
