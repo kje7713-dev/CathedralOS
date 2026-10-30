@@ -701,6 +701,55 @@ Deno.test("allocation rejects malformed architecture instead of passing it to pr
   assertStringIncludes(buildPrompt(sparseRequest as any, parsed).system, "Legacy checkpoint");
 });
 
+Deno.test("horror conspiracy architecture chooses reader dread and a book-level outcome, not an obligatory mission", () => {
+  const summary = "Three ruined drifters encounter an unknowable conspiracy whose ultimate danger to humanity may take several books to unfold.";
+  const request: any = {
+    ...sparseRequest,
+    requestedFormat: "novel",
+    recipe: {
+      ...sparseRequest.recipe,
+      project: { ...sparseRequest.recipe.project, summary, audienceNotes: "Grotesque psychological horror and surreal dread" },
+    },
+    arcTemplate: { ...sparseRequest.arcTemplate, name: "Horror / Escalating Dread" },
+  };
+  const architecturePrompt = buildAllocationPrompt(request);
+  assertStringIncludes(architecturePrompt.system, "Genre experience BEFORE central threat and climax");
+  assertStringIncludes(architecturePrompt.system, "For horror, prioritize accumulating dread");
+  assertStringIncludes(architecturePrompt.system, 'A recipe saying "a conspiracy exists" does NOT mean the protagonists must investigate, understand, or stop that conspiracy.');
+  assertStringIncludes(architecturePrompt.system, "An external campaign may remain dangerous, unexplained, and undefeated");
+  assertStringIncludes(architecturePrompt.system, "Choose the reader experience and book-level question BEFORE the decisive outcome.");
+  assertEquals(JSON.parse(architecturePrompt.user).planningContext.recipe.project.summary, summary);
+
+  const savedArchitecture = {
+    centralQuestion: "Can Millie survive choosing the men over her handlers?",
+    characterCausality: "Their destructive dependence exposes Millie to something she cannot understand.",
+    decisiveClimax: "She chooses the men and loses her only route home, while the source of the horror remains active.",
+    endingConsequence: "The trio survives but their relationship and sense of reality are irreversibly damaged.",
+    deliberatelyOpenThreads: "The conspiracy and its purpose remain unknown and undefeated.",
+  };
+  const outlinePrompt = buildPrompt(request, new Map(), [], undefined, savedArchitecture);
+  assertStringIncludes(outlinePrompt.system, "identify the intended genre-specific reader experience");
+  assertStringIncludes(outlinePrompt.system, "do not convert mounting terror into an evidence-gathering mission or technical sabotage");
+  assertStringIncludes(outlinePrompt.system, "not necessarily end an external conspiracy");
+  assertStringIncludes(outlinePrompt.system, savedArchitecture.decisiveClimax);
+  assertStringIncludes(outlinePrompt.system, savedArchitecture.deliberatelyOpenThreads);
+});
+
+Deno.test("genre-led story selection still honors an authored procedural investigation and external victory", () => {
+  const request: any = {
+    ...sparseRequest,
+    recipe: {
+      ...sparseRequest.recipe,
+      project: { ...sparseRequest.recipe.project, summary: "An investigator must expose the named conspiracy and stop its planned raid before the book ends." },
+    },
+  };
+  const architecturePrompt = buildAllocationPrompt(request).system;
+  const outlinePrompt = buildPrompt(request, new Map()).system;
+  assertStringIncludes(architecturePrompt, "For an AUTHOR-AUTHORED procedural or mission story");
+  assertStringIncludes(architecturePrompt, "if the author explicitly requires defeat of a threat in this volume, honor it");
+  assertStringIncludes(outlinePrompt, "For an explicitly authored investigative/procedural story or required victory");
+});
+
 Deno.test("allocation prompt selects causal outcome before sizing chapters without canonizing contractors", () => {
   const material: any = {
     characters: [{ id: "p1", label: "Inez", source: "planner", sourceReference: null, description: "Sells out a friend to gain control." }],
