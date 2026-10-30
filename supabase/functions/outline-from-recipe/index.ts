@@ -3941,11 +3941,11 @@ function contractText(suggestion: Suggestion): string {
 // Unlike unused-material heuristics, it never credits generic label words such
 // as "attention" or "security" as evidence that a character was selected.
 function characterIsNamed(text: string, label: string): boolean {
-  const fullName = label.split(",")[0].trim().replace(/^(?:Dr|Mr|Mrs|Ms)\\.?\\s+/i, "");
+  const fullName = label.split(",")[0].trim().replace(/^(?:Dr|Mr|Mrs|Ms)\.?\s+/i, "");
   if (!fullName) return false;
   const escaped = (value: string) => value.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\$&");
   if (new RegExp(`\\b${escaped(fullName)}\\b`, "i").test(text)) return true;
-  const parts = fullName.split(/\\s+/);
+  const parts = fullName.split(/\s+/);
   // Standalone proper names must be distinct; case-sensitive matching avoids
   // counting ordinary words (e.g., "bell", "being") as character references.
   const lastName = parts.length > 1 ? parts[parts.length - 1] : fullName;
