@@ -6129,15 +6129,17 @@ export async function runSuggestionJob(
       }
       const semanticCoverage = obligationCoverage([...(body.existingSections ?? []), ...suggestions], recipeObligations);
       if (semanticCoverage.missingRequired.length > 0) {
-        planningState = { ...planningState, phase: "obligation_repair_pending", nextAction: "obligation-repair" };
+        // A missing deterministic recipe obligation is a first-pass defect,
+        // never permission to invent a new chapter after the story was fixed.
+        // The completion gate reports the typed failure and preserves the paid
+        // first-pass suggestions for inspection; no narrative call is queued.
         diagnostics = {
           ...diagnostics,
-          stage: "obligation_repair_pending",
           recipeObligationCoverage: semanticCoverage.covered,
           missingRequiredRecipeObligations: semanticCoverage.missingRequired.map((obligation) => obligation.id),
+          automaticNarrativeRepair: "disabled",
         };
-        await updateRun({ suggestions, planning_state: planningState, diagnostics });
-        throw new SuggestionWorkerYield();
+        await updateRun({ suggestions, diagnostics });
       }
       await postValidatedOutline(suggestions, completionWarnings);
     };
@@ -6154,134 +6156,55 @@ export async function runSuggestionJob(
         return;
       }
       diagnostics = { ...diagnostics, stage: "semantic_verified", semanticVerification: verification };
-      if (verification.unsatisfied.length > 0) {
-        planningState = {
-          ...planningState,
-          phase: "semantic_repair_pending",
-          nextAction: "semantic-repair",
-          semanticRepairFailures: verification.unsatisfied,
-          semanticRepairOriginalSuggestions: persistedSemanticSuggestions,
-        };
-        diagnostics = { ...diagnostics, stage: "semantic_repair_pending", semanticRepairFailures: verification.unsatisfied };
-        await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
-        throw new SuggestionWorkerYield();
-      }
-      await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: { ...planningState, phase: "semantic_verified", nextAction: "semantic-completion" }, diagnostics });
+      const unresolved = verification.unsatisfied.length;
+      const notice = unresolved > 0
+        ? `Independent semantic review found ${unresolved} unresolved requirement(s); no automatic narrative rewrite was made.`
+        : undefined;
+      diagnostics = {
+        ...diagnostics,
+        semanticAssessment: unresolved > 0 ? "needs_review" : "passed",
+        semanticUnresolvedCount: unresolved,
+        automaticNarrativeRepair: "disabled",
+      };
+      planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
+      if (notice) recordSemanticWarning(notice);
+      await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
+      await continueAfterSemanticVerification(persistedSemanticSuggestions, notice ? [notice] : []);
+      return;
       await continueAfterSemanticVerification(persistedSemanticSuggestions);
       return;
     }
-    if (planningState.nextAction === "semantic-repair") {
-      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
+    // Compatibility only: an old paid run may already be checkpointed in
+    // semantic-repair or semantic-reverification. Retire both dispatches:
+    // restore its saved original narrative and its original verification,
+    // rather than calling another model to rewrite or rejudge the story.
+    if (planningState.nextAction === "semantic-repair" ||
+        planningState.nextAction === "semantic-reverification") {
+      const original = Array.isArray(planningState.semanticRepairOriginalSuggestions)
         ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
         : persistedSemanticSuggestions;
-      const semanticFailures = Array.isArray(planningState.semanticRepairFailures)
-        ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }>
-        : [];
-      // Evidence-only failures must not spend a narrative repair call rewriting
-      // a sound outline. Reuse the already budgeted repair dispatch to reverify
-      // the identical paid sections, then preserve them even if evidence remains
-      // ungrounded. The retry cannot silently claim those obligations passed.
-      if (semanticFailures.length > 0 && semanticFailures.every((failure) => isSemanticEvidenceGroundingFailure(failure.reason))) {
-        let verification: SemanticVerificationResult | undefined;
-        try {
-          verification = await verifyStoryArcSemantics(
-            originalSemanticSuggestions, body.arcTemplate, billableCall, body.recipe,
-            "outline-semantic-repair-batch",
-          );
-          diagnostics = {
-            ...diagnostics,
-            semanticVerification: verification,
-            semanticEvidenceReverification: {
-              attempted: true,
-              originalFailureCount: semanticFailures.length,
-              unresolvedCount: verification.unsatisfied.length,
-              originalOutlinePreserved: true,
-            },
-          };
-          if (verification.unsatisfied.length > 0) {
-            recordSemanticWarning(
-              `Semantic evidence remained unresolved after verification of the unchanged outline (${verification.unsatisfied.length} obligation(s)); original story preserved without narrative repair.`,
-            );
-          }
-        } catch (error) {
-          recordSemanticWarning(`Semantic evidence re-verification was unavailable; original story preserved without narrative repair: ${error instanceof Error ? error.message : String(error)}`);
-          diagnostics = {
-            ...diagnostics,
-            semanticEvidenceReverification: { attempted: true, unavailable: true, originalOutlinePreserved: true },
-          };
-        }
-        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_verified" };
-        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(originalSemanticSuggestions);
-        return;
-      }
-      let repaired = persistedSemanticSuggestions;
-      try {
-        repaired = await repairStoryArcSemanticObligations(
-          persistedSemanticSuggestions,
-          body.arcTemplate,
-          semanticFailures.filter((failure) => !isSemanticEvidenceGroundingFailure(failure.reason)),
-          billableCall,
-          recipeObligations,
-          body.recipe,
-        );
-      } catch (error) {
-        recordSemanticWarning(`Semantic repair was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
-        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_repair_warning" };
-        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(originalSemanticSuggestions);
-        return;
-      }
-      planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification", semanticRepairOriginalSuggestions: originalSemanticSuggestions };
-      const { semanticRepairProviderCheckpoint: _semanticRepairProviderCheckpoint, ...diagnosticsAfterRepair } = diagnostics;
-      diagnostics = { ...diagnosticsAfterRepair, stage: "semantic_reverification_pending" };
-      await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
-      throw new SuggestionWorkerYield();
-    }
-    if (planningState.nextAction === "semantic-reverification") {
-      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
-        ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
-        : persistedSemanticSuggestions;
-      const originalVerification = diagnostics.semanticVerification as SemanticVerificationResult | undefined;
-      let verification: SemanticVerificationResult | undefined;
-      try {
-        verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
-      } catch (error) {
-        recordSemanticWarning(`Semantic re-verification was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
-        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_reverification_warning", semanticRepairFallback: "original_outline_provider_unavailable" };
-        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(originalSemanticSuggestions);
-        return;
-      }
-      const selectedSuggestions = chooseBestSemanticOutline(originalSemanticSuggestions, persistedSemanticSuggestions, originalVerification, verification);
-      const selectedRepaired = selectedSuggestions === persistedSemanticSuggestions;
-      const selectedVerification = selectedRepaired ? verification : originalVerification;
+      const previousVerification = diagnostics.semanticRepairOriginalVerification ??
+        diagnostics.semanticVerification;
+      const unsatisfied = previousVerification &&
+        typeof previousVerification === "object" &&
+        Array.isArray((previousVerification as SemanticVerificationResult).unsatisfied)
+        ? (previousVerification as SemanticVerificationResult).unsatisfied.length
+        : null;
+      const notice = unsatisfied === null
+        ? "Retired semantic-repair checkpoint resumed with the original paid outline; existing verification was unavailable."
+        : `Retired semantic-repair checkpoint resumed with the original paid outline (${unsatisfied} semantic finding(s)); no further narrative rewrite.`;
+      planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
       diagnostics = {
         ...diagnostics,
-        stage: "semantic_reverified",
-        // The authoritative verification must describe the persisted outline.
-        semanticVerification: selectedVerification,
-        ...(selectedRepaired ? {} : {
-          semanticRepairFallback: "original_outline_preserved_no_objective_improvement",
-          semanticRepairOriginalVerification: originalVerification,
-          semanticRepairRejectedVerification: verification,
-          semanticRepairOriginalUnresolved: originalVerification?.unsatisfied.length ?? null,
-          semanticRepairCandidateUnresolved: verification.unsatisfied.length,
-        }),
+        ...(previousVerification ? { semanticVerification: previousVerification } : {}),
+        automaticNarrativeRepair: "disabled",
+        semanticAssessment: unsatisfied === null ? "unavailable" : unsatisfied > 0 ? "needs_review" : "passed",
+        semanticUnresolvedCount: unsatisfied,
+        legacySemanticRepairCheckpointRecovered: true,
       };
-      if (verification.unsatisfied.length > 0) {
-        recordSemanticWarning(
-          selectedRepaired
-            ? `Semantic obligations remained after bounded repair; continuing with the repaired outline (${verification.unsatisfied.length} unresolved).`
-            : `Semantic repair did not objectively improve the outline; preserving the original usable paid draft (${verification.unsatisfied.length} unresolved in the repair candidate).`,
-        );
-      }
-      planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-      await updateRun({ suggestions: selectedSuggestions, planning_state: planningState, diagnostics });
-      await continueAfterSemanticVerification(selectedSuggestions);
+      recordSemanticWarning(notice);
+      await updateRun({ suggestions: original, planning_state: planningState, diagnostics });
+      await continueAfterSemanticVerification(original, [notice]);
       return;
     }
     // Runs checkpointed by the old worker must remain recoverable without
@@ -6294,15 +6217,16 @@ export async function runSuggestionJob(
       return;
     }
     if (planningState.nextAction === "obligation-repair") {
-      diagnostics = { ...diagnostics, stage: "obligation_repair_generation" };
-      const repairAllocation = Array.isArray(planningState.allocationEntries)
-        ? new Map<string, Allocation>(planningState.allocationEntries as Array<[string, Allocation]>)
-        : undefined;
-      const repair = await repairRequiredRecipeObligations(Array.isArray(claimedRun.suggestions) ? claimedRun.suggestions as Suggestion[] : [], body, recipeObligations, billableCall, repairAllocation);
-      const missing = repair.missing.map((obligation) => obligation.id);
-      diagnostics = { ...diagnostics, stage: missing.length ? "obligation_repair_failed" : "obligation_repair_complete", recipeObligationCoverage: obligationCoverage([...(body.existingSections ?? []), ...repair.suggestions], recipeObligations).covered, missingRequiredRecipeObligations: missing };
-      if (missing.length) throw new RecipeObligationValidationError(`missing_recipe_obligations: ${missing.join(", ")}`);
-      await postValidatedOutline(repair.suggestions, []);
+      // Old checkpoints still resume their already-paid first-pass outline,
+      // but no longer trigger an additional creative rewrite. The existing
+      // deterministic completion gate will report any missing recipe IDs.
+      diagnostics = {
+        ...diagnostics,
+        automaticNarrativeRepair: "disabled",
+        legacyObligationRepairCheckpointRecovered: true,
+      };
+      await updateRun({ suggestions: persistedSemanticSuggestions, diagnostics });
+      await continueAfterSemanticVerification(persistedSemanticSuggestions);
       return;
     }
     const resume = expansionResumeState(claimedRun);
