@@ -6283,32 +6283,79 @@ Deno.test("required-obligation repair is one billable stage and rechecks coverag
   assertEquals(result.missing, []);
 });
 
-Deno.test("global architecture does not inherit optional preassembled institutional plot machinery", () => {
+Deno.test("authored recipe and character candidates survive but procedural enrichment never re-enters planning, outline, or expansion", () => {
   const apparatus = { id: "invented-raid", source: "planner", label: "Government detainment", description: "Contractor transport and containment mission." };
-  const reversal = { id: "personal-betrayal", source: "planner", label: "The friend betrays the protagonist", description: "A choice with individual consequences." };
+  const alternateApparatus = { id: "procedural-reversal", source: "planner", label: "Rescue requires a screening raid", description: "The heroes disable an official tracking program." };
+  const character = { id: "eccentric-character", source: "planner", label: "Feral road grifter", description: "An impulsive friend lies, steals, and wrecks relationships." };
+  const relationship = { id: "poisonous-pact", source: "planner", label: "Toxic friendship", description: "Mutual dependency drives escalating catastrophe." };
   const authored = { id: "recipe-person", source: "recipe", label: "Authored antagonist", description: "A character the author requires." };
-  const request: any = {
-    ...sparseRequest,
-    storyMaterialEnrichment: {
-      antagonisticForces: [apparatus, authored],
-      escalationLadder: [apparatus],
-      locations: [apparatus],
-      institutionsAndGroups: [apparatus],
-      conflictSources: [apparatus],
-      discoveries: [apparatus],
-      reversals: [reversal],
-    },
+  const categories = [
+    "characters", "antagonisticForces", "locations", "institutionsAndGroups",
+    "conflictSources", "escalationLadder", "reversals", "consequences",
+    "relationships", "discoveries", "unresolvedQuestions", "thematicPressures",
+  ];
+  const material = {
+    ...Object.fromEntries(categories.map((category) => [category, []])),
+    characters: [character],
+    relationships: [relationship],
+    antagonisticForces: [apparatus, authored],
+    escalationLadder: [apparatus],
+    locations: [apparatus],
+    institutionsAndGroups: [apparatus],
+    conflictSources: [apparatus],
+    discoveries: [apparatus],
+    reversals: [alternateApparatus],
+    consequences: [apparatus],
+    unresolvedQuestions: [apparatus],
   };
-  const planning = buildArchitecturePlanningView(request, [], request.storyMaterialEnrichment);
+  const request: any = { ...sparseRequest, storyMaterialEnrichment: material };
+  const planning = buildArchitecturePlanningView(request, [], material);
   const index = planning.materialIndex as any[];
   assertEquals(index.some((item) => item.id === "invented-raid"), false);
+  assertEquals(index.some((item) => item.id === "procedural-reversal"), false);
   assertEquals(index.some((item) => item.id === "recipe-person"), true);
-  assertEquals(index.some((item) => item.id === "personal-betrayal"), true);
-  assertEquals((buildCompactPlanningView(request).materialIndex as any[]).some((item) => item.id === "invented-raid"), true, "downstream material is preserved");
+  assertEquals(index.some((item) => item.id === "eccentric-character"), true);
+  assertEquals(index.some((item) => item.id === "poisonous-pact"), true);
   assertEquals((planning.recipe as any).project.summary, request.recipe.project.summary);
-  assertStringIncludes(buildAllocationPrompt(request).user, "personal-betrayal");
-  assertEquals(buildAllocationPrompt(request).user.includes("invented-raid"), false);
+  assertEquals((buildCompactPlanningView(request).materialIndex as any[]).some((item) => item.id === "invented-raid"), true, "full material stays available for QA and provenance");
+
+  const allocationPrompt = buildAllocationPrompt(request);
+  const outlinePrompt = buildPrompt(request, new Map(), [], material as any);
+  const expansionPrompt = buildExpansionPrompt(request, [], undefined, []);
+  for (const [stage, prompt] of [
+    ["architecture", allocationPrompt],
+    ["initial outline", outlinePrompt],
+    ["length expansion", expansionPrompt],
+  ] as const) {
+    assertEquals(prompt.user.includes("invented-raid"), false, stage);
+    assertEquals(prompt.user.includes("procedural-reversal"), false, stage);
+    assertEquals(prompt.user.includes("Contractor transport and containment mission"), false, stage);
+    assertEquals(prompt.user.includes("eccentric-character"), true, stage);
+    assertEquals(prompt.user.includes("recipe-person"), true, stage);
+  }
+  assertStringIncludes(outlinePrompt.user, "poisonous-pact");
+  assertStringIncludes(outlinePrompt.system, "Selected causal architecture");
 });
+
+Deno.test("series-scale authored premise components are preserved without forced book-one world-saving operations", () => {
+  const summary = "Their notoriety destabilizes America's institutions, and their chaotic actions someday become essential to humanity's survival.";
+  const premiseComponents = [
+    { sourceQuote: "Their notoriety destabilizes America's institutions", requirement: "Their notoriety eventually destabilizes institutions." },
+    { sourceQuote: "their chaotic actions someday become essential to humanity's survival", requirement: "Their decisions eventually matter to humanity's survival." },
+  ];
+  const recipe: any = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, summary } };
+  const obligations = deriveRecipeObligations(recipe, premiseComponents);
+  const statements = obligations.filter((obligation) => obligation.source.startsWith("project.summary.component."));
+  assertEquals(statements.length, 2);
+  assertEquals(statements.every((obligation) => obligation.required), true);
+  assertStringIncludes(statements[1].statement, "foreshadow");
+  assertStringIncludes(statements[1].statement, "multi-book");
+  assertEquals(statements[1].statement.includes("concrete, causally meaningful contribution"), false);
+  const request: any = { ...sparseRequest, recipe, storyMaterialEnrichment: { premiseComponents } };
+  assertStringIncludes(buildAllocationPrompt(request, obligations).system, "Series-level consequences can be seeded");
+  assertStringIncludes(buildPrompt(request, new Map(), obligations, request.storyMaterialEnrichment as any).system, "may be seeded");
+});
+
 
 Deno.test("missing recipe IDs remain internal QA and never discard a paid outline", async () => {
   const body = await executableWorkerBody();
