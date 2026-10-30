@@ -1180,7 +1180,7 @@ Give the reader the on-page encounters, actions, emotional consequences, absurdi
 Before inventing supporting developments, identify the particular experiences, tensions, surprises, and unresolved questions promised by the author's recipe. Build from characters' desires, contradictions, relationships, decisions, and interactions with the world. Escalation means their choices produce increasingly consequential and distinctive experiences, not merely a larger version of the same obstacle. Support a full ${format}-scale story with substantially different dramatic developments, rather than expanding one incident into a chain of logistical steps.
 
 ## Keep enrichment genuinely exploratory
-The enrichment categories are ways to describe possible material, not a directive to construct one complete and coordinated plot apparatus. Antagonistic forces, institutions, locations, discoveries, reversals, and the escalation ladder do not all need to describe the same invented opposition or operation. Create room for independent characters, conflicting agendas, accidental encounters, intimate betrayals, self-inflicted catastrophes, and different kinds of consequences as warranted by the recipe. Some ideas may connect; others can be alternatives that the outliner will choose between. Do not prematurely make one invented device responsible for every danger, revelation, and climax. A planner-invented mechanism is an optional candidate, not a required plot path.
+The enrichment categories are ways to describe possible material, not a directive to construct one complete and coordinated plot apparatus. Antagonistic forces, institutions, locations, discoveries, reversals, and the escalation ladder do not all need to describe the same invented opposition or operation. Create room for independent characters, conflicting agendas, accidental encounters, intimate betrayals, self-inflicted catastrophes, and different kinds of consequences as warranted by the recipe. Some ideas may connect; others can be alternatives that the outliner will choose between. Do not prematurely make one invented device responsible for every danger, revelation, and climax. A planner-invented mechanism is an optional candidate, not a required plot path. Specifically, avoid defaulting to a government contractor, audit, custody transfer, compliance program, or surveillance apparatus merely as a convenient engine for a conspiracy or climax. Those mechanisms are valid when the author requests them or distinctive character decisions genuinely make them the strongest story choice; otherwise explore threats arising from character ambition, relationships, accidents, and independent agendas instead of a single procedural operation.
 
 Treat Story Arc templates as structural progression, not a source of genre conventions or an instruction to select a familiar causal storyline. Preserve the author's specific narrative experience, including when the author actually wants a meticulous investigation, institutional drama, or other specialized form. Causality and continuity matter; a mechanically complete operation is not a substitute for dramatic development.
 
@@ -2893,6 +2893,7 @@ export function buildPrompt(
   allocation: Map<string, Allocation>,
   obligations: RecipeObligation[] = [],
   storyMaterial?: StoryMaterialEnrichment,
+  storyArchitecture?: StoryArchitecture,
 ): { system: string; user: string } {
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
   // Allocation controls section quantity and container sizing, not plot choice.
@@ -2907,7 +2908,10 @@ export function buildPrompt(
       const typePlan = isNovel && info.containerCounts
         ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; ordered slots: ${plannedNovelContainerSlots(info.containerCounts).map((type, index) => `${plannedNovelSlotKey(index)}=${type}`).join(", ")}`
         : "";
-      return `- ${beat?.label ?? beatId}: ${sectionLabel}${typePlan}`;
+      const narrativeCommitment = storyArchitecture && info.rationale
+        ? `; planned dramatic movement: ${compactArcNarrativeText(info.rationale)}`
+        : "";
+      return `- ${beat?.label ?? beatId}: ${sectionLabel}${typePlan}${narrativeCommitment}`;
     })
     .join("\n");
   const allocationDirective = isNovel
@@ -2993,6 +2997,10 @@ Do not force every generated character into the outline. A candidate whose choic
 ## Premise outcome and ending causality
 Before drafting sections, determine the whole story's cause-and-effect trajectory, including the decisive climax, the irreversible change it causes, and an ending that inherits that change. Plan the final outcome before distributing distinct events across Story Arc beats. The protagonists' specific traits, choices, and relationships must materially cause or complicate that outcome; an interchangeable tactical or institutional solution must not replace their agency. Across the entire sequence, preserve irreversible events: a threat stopped in one section stays stopped unless a new and expressly caused event changes that state; deaths, departures, promises, discoveries, and destroyed objects persist. Do not let a subsequent section restart the same countdown, restage a resolved confrontation, or resolve the central conflict a second time. Check the complete resultingChange and terminalState sequence before returning the first-pass outline. The ending can be ambiguous, tragic, grotesque, destructive, morally compromised, or only partly understood; it need not answer every question, but must deliver the premise's consequential promise.
 
+## Selected causal architecture from the allocation call
+${storyArchitecture ? JSON.stringify(storyArchitecture) : "Legacy checkpoint: no prior story architecture was persisted. Choose a recipe-faithful causal story and definitive outcome before creating sections."}
+When present, carry forward these selected causal decisions, NOT merely the chapter counts. The climaxOutcome is the decisive completed event, not another attempt, approach, or unresolved cliffhanger; the endingConsequence must inherit its irreversible state. In a template with separate climax and resolution roles, the decisive outcome must be achieved in the climax role, and the resolution may only dramatize its consequences. Do not use later final-image chapters to start another primary rescue, re-open the central threat, or invent a new ending. Keep the intentionally unresolved mysteries open without leaving the CENTRAL dramatic question unanswered. This architecture is provisional ONLY relative to the authoritative recipe and already accepted story: it may not override authored facts, tone, relationships, world rules, or required Story Arc obligations. The per-beat planned dramatic movements below are causal commitments rather than detachable ideas or new authored mandates.
+
 ## Recipe obligations
 The JSON planning context contains the authoritative obligations exactly once.
 
@@ -3055,9 +3063,9 @@ Respond with structured JSON matching the schema. This is the only provider call
     }));
   const user = JSON.stringify({
     planningContext: planningView,
-    // Only quantitative constraints cross into the creative generation call.
-    // The saved allocation retains rationale for diagnostics; the model does
-    // not receive speculative plot direction from that earlier stage.
+    // A selected recipe-grounded architecture and each beat's planned dramatic
+    // movement now cross into generation. Pure allocation quantities still
+    // constrain chapter slots, and older checkpoints can omit architecture.
     allocation: Array.from(allocation.entries(), ([beatId, info]) => [beatId, {
       minSections: info.minSections,
       ...(info.coverageMinimum !== undefined ? { coverageMinimum: info.coverageMinimum } : {}),
@@ -3494,9 +3502,16 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
+## Choose the story BEFORE allocating its chapters (same model call)
+First derive the causal story architecture from the AUTHOR'S RECIPE, including its actual protagonist motives, genre, tone, relationships, world rules, and ending promise. The recipe is authoritative. Treat enrichment as optional candidate characters, reversals, antagonists, and locations; use only ideas that make the authored premise more specific and compelling. An invented institutional operation, government contractor, screening campaign, investigation, or technical gadget is NOT an implicit canon fact. Never allow repetition of a planner-invented apparatus across categories to make it the automatic plot engine; such mechanisms remain valid when the recipe calls for them or when character-caused events make them compelling.
+
+Return a compact storyArchitecture: centralQuestion (the premise's concrete dramatic question), characterCausality (the specific protagonist/supporting-person decisions driving distinct reversals), decisiveClimax (what irreversibly HAPPENS to settle the central threat), endingConsequence (the definite changed world/relationships AFTER that completed confrontation), and deliberatelyOpenThreads (mysteries left open without withholding the central outcome). Choose the decisive outcome first. For a Story Arc with a required climax beat, commit the actual resolution of the central confrontation to that beat; final-image/aftermath beats must inherit the achieved outcome, not start another rescue, larger confrontation, or cliffhanger. Tragedy, ambiguity, partial victories, and morally compromised endings are welcome when the CENTRAL outcome is definite. If there are accepted existing sections, honor their established events and do not rewrite their history.
+
+THEN choose the beat-by-beat causal movements, using each allocation rationale as a short, specific commitment explaining the contribution to that selected story, not simply the reason for a chapter count. Ensure the climax and ending rationale correspond to the chosen architecture. THEN budget and assign containerCounts and minSections; the quantities serve the story, not the reverse. All decisions belong in this ONE outline-plan response, not another planning stage.
+
 This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 115,000 projected words while staying below the 125,000-word maximum. Use each known container's midpoint as the authoritative estimate; when the container mix is unknown, use the named 3,500-token mixed-section planning estimate rather than treating every section as a chapter. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat, and the projected contribution of existing sections. Distribute distinct, substantial chapter-scale units according to the narrative material each movement requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. ${containerBudgetInstructions}
 
-Allocate sections according to distinct dramatic developments, not the number of steps, conversations, or locations involved in one development. Consecutive preparations for the same confrontation, repeated consideration of the same decision, and multiple observations of one outcome generally belong within a larger section unless each independently changes the narrative state. Prefer appropriately substantial containers over fragmenting a single causal unit to meet the projected length target.
+Allocate sections according to distinct dramatic developments already selected in storyArchitecture and each beat's narrative commitment, not the number of steps, conversations, or locations involved in one development. Consecutive preparations for the same confrontation, repeated consideration of the same decision, and multiple observations of one outcome generally belong within a larger section unless each independently changes the narrative state. Prefer appropriately substantial containers over fragmenting a single causal unit to meet the projected length target.
 
 ${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
 
@@ -3506,7 +3521,7 @@ Treat the supplied recipe as the governing creative brief. Required obligations 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
 
-Output exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Do not output any other root key. ${isNovel ? "Provide all five containerCounts keys for every beat, including zeros." : "Do not return novel-only containerCounts."}
+Output a single storyArchitecture FIRST (all five short text fields), THEN exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs in allocations. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Each allocation rationale records the selected beat's causal movement, especially the decisive clash and its later consequences. Do not output any other root key. ${isNovel ? "Provide all five containerCounts keys for every beat, including zeros." : "Do not return novel-only containerCounts."}
 
 Output JSON only. No commentary, no prose.`;
 
@@ -5771,6 +5786,9 @@ export async function runSuggestionJob(
     };
 
     let allocation: Map<string, Allocation> | undefined;
+    // Stored alongside the existing allocationEntries for durable worker
+    // resume; an older checkpoint can still complete without a blueprint.
+    let storyArchitecture = planningState.storyArchitecture as StoryArchitecture | undefined;
     const sectionAllocationDeficits = (suggestions: Suggestion[]) => {
       const effectiveAllocation = allocation ?? new Map<string, Allocation>(
         Array.isArray(planningState.allocationEntries) ? planningState.allocationEntries as Array<[string, Allocation]> : [],
@@ -6558,7 +6576,7 @@ export async function runSuggestionJob(
           openaiKey,
           billableCall,
           recipeObligations,
-          { retryOnly, deferRetry: !retryOnly },
+          { retryOnly, deferRetry: !retryOnly, onArchitecture: (chosen) => { storyArchitecture = chosen; } },
         );
       } catch (error) {
         if (error instanceof AllocationRetryRequired) {
@@ -6578,6 +6596,7 @@ export async function runSuggestionJob(
         phase: "allocation_complete",
         nextAction: "outline-suggestions",
         allocationEntries: Array.from(allocation.entries()),
+        storyArchitecture,
         allocationRetryReason: undefined,
       };
       diagnostics = markCompletedStage(
@@ -6601,8 +6620,9 @@ export async function runSuggestionJob(
       plannerContainerCountsByBeat: Object.fromEntries(Array.from(allocation.entries())
         .map(([beatID, plan]) => [beatID, plan.containerCounts ?? null])),
       recipeObligations,
+      ...(storyArchitecture ? { storyArchitecture } : {}),
     };
-    const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial);
+    const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial, storyArchitecture);
     const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations, body.arcTemplate.name, requestedStoryMaterialFormat(body));
     const responseFormat = {
       type: "json_schema",
