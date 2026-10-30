@@ -9,6 +9,12 @@ export type RecipeObligationClass =
   | "ending_intent"
   | "story_non_negotiable";
 
+/** An authored premise clause extracted by the existing enrichment call. */
+export interface PremiseComponent {
+  sourceQuote: string;
+  requirement: string;
+}
+
 export interface RecipeObligation {
   id: string;
   classification: RecipeObligationClass;
@@ -31,7 +37,7 @@ function meaningful(value: unknown): boolean {
   return compact(value).trim().length > 0 && compact(value).trim() !== "[]" && compact(value).trim() !== "{}";
 }
 
-export function deriveRecipeObligations(recipe: Record<string, unknown>): RecipeObligation[] {
+export function deriveRecipeObligations(recipe: Record<string, unknown>, premiseComponents: PremiseComponent[] = []): RecipeObligation[] {
   const obligations: RecipeObligation[] = [];
   const add = (
     classification: RecipeObligationClass,
@@ -98,6 +104,15 @@ export function deriveRecipeObligations(recipe: Record<string, unknown>): Recipe
 
   const motifs = Array.isArray(recipe.selectedMotifs) ? recipe.selectedMotifs : [];
   for (const motif of motifs) if (meaningful(motif)) add("supporting_motif", `Use this motif as supporting texture where natural, not as a substitute for plot: ${compact(motif)}`, "selectedMotifs", false);
+
+  // Append instead of renumbering existing R1..Rn. Paid legacy outlines and
+  // their durable checkpoints retain their original recipe requirement IDs.
+  premiseComponents.forEach((component, index) => {
+    if (!component?.sourceQuote?.trim() || !component?.requirement?.trim()) return;
+    add("hard_premise",
+      `Materially establish or advance this distinct AUTHOR-AUTHORED premise commitment in the current book: ${component.requirement.trim()} [source: "${component.sourceQuote.trim()}"]. A larger series-level payoff may remain open only when the current book makes a concrete, causally meaningful contribution; a local victory with no demonstrated connection is not sufficient.`,
+      `project.summary.component.${index + 1}`, true);
+  });
 
   return obligations;
 }
