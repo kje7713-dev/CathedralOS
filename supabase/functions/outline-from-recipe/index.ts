@@ -2985,6 +2985,11 @@ Every defining behavior, event, or conflict explicitly specified by the author m
 ## Character-Driven Dramatic Selection
 When multiple developments satisfy the recipe, Story Arc, continuity, and section contract, choose the most entertaining, original, surprising, and dramatically compelling option. Let authored and invented characters' distinctive personalities, desires, flaws, obsessions, relationships, and unpredictable decisions generate events: supporting characters should create complications, change relationships, trigger reversals, and produce lasting consequences rather than serving as informants, exposition, transportation, or other functional devices. When the authored genre and tone support it, favor outrageous encounters, reckless decisions, dark humor, grotesque absurdity, dangerous confrontations, unexpected reversals, and escalating chaos over conventional investigations, administrative discoveries, tactical missions, or procedural problem-solving. Preserve intended adult intensity without sanitizing it; make the climax emerge from the protagonists' distinctive choices and behavior and deliver the premise's consequential outcome rather than merely completing a generic tactical objective. Do not force randomness, spectacle, or artificial chaos into restrained stories. Preserve causality, continuity, and authorial intent.
 
+## Character-caused story selection before plot construction
+First choose the story's causal drivers, BEFORE deciding on its central apparatus, tactical objective, climax method, or beat-by-beat plot. Read the authored protagonists' motives and relationships and the planningContext.characterDecisionCandidates. Identify the distinct desires and compromised choices that could make this story happen specifically to THESE people. Select the strongest optional supporting characters for their independent decisions, conflicting agendas, betrayals, selfish gambles, outrageous mistakes, and effects on the protagonists. For each selected character, work out privately what they want, the distinctive choice they make, whose plan it derails, and a later consequence that would not happen without that choice. Their choices and the protagonists' reactions must supply the causal spine; a preselected institutional mission, pursuit, technical device, or generic threat must not be the spine with characters added afterward. If the recipe calls for a system-driven procedural story, preserve it, but still let authored character agency determine its crucial turns.
+
+Do not force every generated character into the outline. A candidate whose choices cannot earn a consequence may be dropped; do not add cameos, exposition couriers, or filler scenes to satisfy an invented cast quota. Equally, do not replace a distinctive, consequential candidate with a nameless official, contact, or contractor merely because a functional role makes the plot easier. Before finalizing the sequence, test each retained supporting character: if substituting an interchangeable job title would leave the important events unchanged, give that character a genuinely consequential personal decision or omit them. Keep the Story Arc as the ordered dramatic progression AFTER selecting the story, not the source of a generic sequence of missions. Preserve the author's tone, adult intensity, ambiguity, restrained genres, and all continuity and output contracts.
+
 ## Premise outcome and ending causality
 Before drafting sections, determine the whole story's cause-and-effect trajectory, including the decisive climax, the irreversible change it causes, and an ending that inherits that change. Plan the final outcome before distributing distinct events across Story Arc beats. The protagonists' specific traits, choices, and relationships must materially cause or complicate that outcome; an interchangeable tactical or institutional solution must not replace their agency. Across the entire sequence, preserve irreversible events: a threat stopped in one section stays stopped unless a new and expressly caused event changes that state; deaths, departures, promises, discoveries, and destroyed objects persist. Do not let a subsequent section restart the same countdown, restage a resolved confrontation, or resolve the central conflict a second time. Check the complete resultingChange and terminalState sequence before returning the first-pass outline. The ending can be ambiguous, tragic, grotesque, destructive, morally compromised, or only partly understood; it need not answer every question, but must deliver the premise's consequential promise.
 
@@ -3038,6 +3043,16 @@ Respond with structured JSON matching the schema. This is the only provider call
     storyMaterial,
   );
   planningView.materialIndex = compactMaterialForOutline(storyMaterial);
+  // Put decision-capable supporting people in front of the outliner as an
+  // explicit selection pool, rather than burying them among plot machinery.
+  // This is not a cast quota or an additional canon/validation contract.
+  planningView.characterDecisionCandidates = (storyMaterial?.characters ?? [])
+    .filter((item) => item.source === "planner")
+    .map((item) => ({
+      id: item.id,
+      label: item.label,
+      description: item.description,
+    }));
   const user = JSON.stringify({
     planningContext: planningView,
     // Only quantitative constraints cross into the creative generation call.
@@ -3896,12 +3911,20 @@ export function validateSuggestions(
 }
 
 
+export interface PlannerCharacterIntegration {
+  // Advisory evidence only. Name/contract anchoring does not prove agency.
+  absent: string[];
+  mentionedWithoutCausalAnchor: string[];
+  withCausalAnchor: string[];
+}
+
 export interface OutlineQualityDiagnostic {
   distinctnessIssues: string[];
   causalScaleIssues: string[];
   semanticArcIssues: string[];
   supportingEntities: string[];
   unusedStoryMaterialItems: number;
+  plannerCharacterIntegration: PlannerCharacterIntegration;
   advisoryValidationError?: string;
 }
 
@@ -3912,6 +3935,47 @@ function contractText(suggestion: Suggestion): string {
     suggestion.resultingChange ?? suggestion.terminalBeat,
     suggestion.terminalState ?? suggestion.terminalBeat,
   ].join(" ").toLowerCase();
+}
+
+// Character integration is an advisory, deliberately conservative name test.
+// Unlike unused-material heuristics, it never credits generic label words such
+// as "attention" or "security" as evidence that a character was selected.
+function characterIsNamed(text: string, label: string): boolean {
+  const fullName = label.split(",")[0].trim().replace(/^(?:Dr|Mr|Mrs|Ms)\\.?\\s+/i, "");
+  if (!fullName) return false;
+  const escaped = (value: string) => value.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`\\b${escaped(fullName)}\\b`, "i").test(text)) return true;
+  const parts = fullName.split(/\\s+/);
+  // Standalone proper names must be distinct; case-sensitive matching avoids
+  // counting ordinary words (e.g., "bell", "being") as character references.
+  const lastName = parts.length > 1 ? parts[parts.length - 1] : fullName;
+  return lastName.length >= 4 && new RegExp(`\\b${escaped(lastName)}\\b`).test(text);
+}
+
+export function analyzePlannerCharacterIntegration(
+  suggestions: Suggestion[],
+  storyMaterial?: StoryMaterialEnrichment,
+): PlannerCharacterIntegration {
+  const result: PlannerCharacterIntegration = {
+    absent: [],
+    mentionedWithoutCausalAnchor: [],
+    withCausalAnchor: [],
+  };
+  for (const item of storyMaterial?.characters ?? []) {
+    if (item.source !== "planner") continue;
+    const mentioned = suggestions.some((section) =>
+      characterIsNamed([section.title, section.summary, section.entryState, section.dramaticEvent, section.resultingChange, section.terminalState].join(" "), item.label)
+    );
+    if (!mentioned) {
+      result.absent.push(item.id);
+      continue;
+    }
+    const causal = suggestions.some((section) =>
+      characterIsNamed([section.dramaticEvent, section.resultingChange].join(" "), item.label)
+    );
+    (causal ? result.withCausalAnchor : result.mentionedWithoutCausalAnchor).push(item.id);
+  }
+  return result;
 }
 
 function contentTokens(value: string): Set<string> {
@@ -4772,6 +4836,7 @@ export function validateOutlinePlanningQuality(
     semanticArcIssues,
     supportingEntities,
     unusedStoryMaterialItems: supportingEntities.length,
+    plannerCharacterIntegration: analyzePlannerCharacterIntegration(suggestions, storyMaterial),
   };
 }
 
@@ -4797,6 +4862,7 @@ export function collectAdvisoryOutlineQuality(
       semanticArcIssues: [],
       supportingEntities: [],
       unusedStoryMaterialItems: 0,
+      plannerCharacterIntegration: { absent: [], mentionedWithoutCausalAnchor: [], withCausalAnchor: [] },
       advisoryValidationError: error instanceof Error ? error.message : String(error),
     };
   }
@@ -6470,6 +6536,7 @@ export async function runSuggestionJob(
       semanticArcIssues: initialQuality.semanticArcIssues,
       causalScaleIssues: initialQuality.causalScaleIssues,
       unusedStoryMaterialItems: initialQuality.unusedStoryMaterialItems,
+      plannerCharacterIntegration: initialQuality.plannerCharacterIntegration,
       ...(initialQuality.advisoryValidationError
         ? { advisoryValidationError: initialQuality.advisoryValidationError }
         : {}),
