@@ -114,27 +114,32 @@ export function buildCompactPlanningView(req: any, obligations: any[] = [], mate
 }
 
 /**
- * For the global story-architecture decision, don't hand the planner an
- * already-assembled antagonist apparatus or step-by-step tactical story.
- * Those optional candidate categories remain available downstream after
- * the authored recipe has determined the narrative trajectory.
+ * Canonical author facts are always available through planningContext.recipe.
+ * Optional enrichment is a bank of ideas, not a second story brief. Only
+ * independent people/relationships and thematic context may influence the
+ * causal architecture or later outline; otherwise a prebuilt procedural plot
+ * leaks back into generation after the architecture has already been chosen.
+ *
+ * Keep the FULL enrichment persisted for provenance/QA, not as mandatory
+ * model input. This selection policy applies to the initial plan, outline,
+ * and optional length expansion. Never use a source=planner category as canon.
  */
+export function authorFirstMaterialIndex(material: any): Array<Record<string, unknown>> {
+  const characterLedCategories = new Set([
+    "characters", "relationships", "thematicPressures",
+  ]);
+  return (compactMaterial(material) as Array<Record<string, unknown>>).filter((item) =>
+    item.source === "recipe" || characterLedCategories.has(String(item.category))
+  );
+}
+
 export function buildArchitecturePlanningView(
   req: any,
   obligations: any[] = [],
   material = req?.storyMaterialEnrichment,
 ): Record<string, unknown> {
   const context = buildCompactPlanningView(req, obligations, material);
-  const preselectedPlotCategories = new Set([
-    "antagonisticForces", "institutionsAndGroups", "escalationLadder",
-    "locations", "discoveries", "conflictSources",
-  ]);
-  return {
-    ...context,
-    materialIndex: (context.materialIndex as Array<Record<string, unknown>>).filter((item) =>
-      item.source === "recipe" || !preselectedPlotCategories.has(String(item.category))
-    ),
-  };
+  return { ...context, materialIndex: authorFirstMaterialIndex(material) };
 }
 
 export function promptMetrics(messages: Array<{ role: string; content: unknown }>, extra: Record<string, unknown> = {}) {
