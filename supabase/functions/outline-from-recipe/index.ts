@@ -4609,113 +4609,9 @@ export function validateRequiredStoryArcFunctions(
   return issues;
 }
 
-/** Validate both the declared function and the sequence-level macro-structure. */
-const REQUIRED_FUNCTION_REPAIR_SCHEMA = {
-  type: "object",
-  properties: {
-    section: SECTION_SCHEMA,
-  },
-  required: ["section"],
-  additionalProperties: false,
-} as const;
-
-/**
- * Repair a required Story Arc function by rewriting one existing section.
- * This is intentionally separate from macro beat reassignment: an aftermath
- * section is in the correct Final Image beat, but it still needs a concrete
- * resolution event and settled terminal state. The post-repair gate below
- * rejects a cosmetic function relabel or another aftermath-only rewrite.
- */
-export async function repairRequiredStoryArcFunctions(
-  suggestions: Suggestion[],
-  template: Pick<ArcTemplateBlob, "name" | "beats">,
-  billableCall: SuggestionLLMCall,
-  obligations: RecipeObligation[] = [],
-  context: { premise?: string; recipe?: CanonicalRecipeEnvelope } = {},
-): Promise<{ suggestions: Suggestion[]; repaired: string[]; unresolved: string[] }> {
-  let result = suggestions.map((section) => ({ ...section }));
-  const repaired: string[] = [];
-  const unresolved: string[] = [];
-
-  for (const beat of template.beats) {
-    const roleContract = arcRoleContract(beat, template.name);
-    for (const required of roleContract.requiredFunctions) {
-      const currentIssues = validateRequiredStoryArcFunctions(result, { ...template, beats: [beat] });
-      const issue = currentIssues.find((item) => item.includes(`(${beat.id})`));
-      if (!issue) continue;
-      const beatSections = result.filter((section) => section.storyArcBeatID === beat.id);
-      const target = beatSections.find((section) => section.dramaticFunction !== required) ?? beatSections[0];
-      if (!target) {
-        unresolved.push(beat.label);
-        continue;
-      }
-      const repairTargetIndex = result.indexOf(target);
-      const precedingClimax = result
-        .slice(0, repairTargetIndex)
-        .reverse()
-        .find((section) => section.dramaticFunction === "climax");
-      const system = `${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}\n\nYou are repairing one outline section for the ${template.name} Story Arc. Rewrite the supplied section in place; do not add a new section, change its beat, or invent a new primary conflict. The beat requires the dramatic function ${required}. For resolution, the resultingChange and terminalState must show the central dramatic question or conflict being answered and settled on the page. An aftermath, mood, memorial, or continuing residue alone is not a resolution. The premise and preceding climax below are read-only context: preserve their established facts and resolve the existing conflict rather than inventing a generic ending. Return only JSON matching the required repair schema.`;
-      const user = JSON.stringify({
-        beat: { id: beat.id, role: beat.role, label: beat.label, contract: roleContract },
-        requiredFunction: required,
-        context: {
-          recipe: context.recipe ?? null,
-          premise: context.premise ?? null,
-          precedingClimax: precedingClimax ?? null,
-        },
-        section: target,
-        instruction: "Preserve any applicable recipeRequirementIDs, but replace aftermath-only closure with a concrete resolution action and settled terminal state.",
-      }, null, 2);
-      let repairedSection: Suggestion | undefined;
-      try {
-        const raw = await billableCall(
-          system,
-          user,
-          4000,
-          { type: "json_schema", json_schema: { name: "outline_required_function_repair", strict: true, schema: REQUIRED_FUNCTION_REPAIR_SCHEMA } },
-          `outline-semantic-repair-${beat.id}-${required}`,
-          (content, finishReason) => {
-            const parsed = parseOutlineJSON<{ section?: Record<string, unknown> }>(content, finishReason);
-            if (!parsed?.section || typeof parsed.section !== "object") throw new Error("semantic repair response missing section");
-            const candidate = {
-              ...parsed.section,
-              storyArcBeatID: beat.id,
-              recipeRequirementIDs: target.recipeRequirementIDs ?? [],
-            };
-            const validated = validateSuggestions({ suggestions: [candidate] }, new Set([beat.id]), undefined, obligations, { ...template, beats: [beat] });
-            if (validated.suggestions.length !== 1) throw new Error("semantic repair response did not produce one valid section");
-            return validated.suggestions[0];
-          },
-        );
-        const parsed = parseOutlineJSON<{ section?: Record<string, unknown> }>(raw.content, raw.finishReason);
-        const candidate = {
-          ...parsed.section,
-          storyArcBeatID: beat.id,
-          recipeRequirementIDs: target.recipeRequirementIDs ?? [],
-        };
-        repairedSection = validateSuggestions({ suggestions: [candidate] }, new Set([beat.id]), undefined, obligations, { ...template, beats: [beat] }).suggestions[0];
-      } catch (error) {
-        if (error instanceof OutlineOutputExhaustedError) throw error;
-        repairedSection = undefined;
-      }
-      if (!repairedSection) {
-        unresolved.push(target.title);
-        continue;
-      }
-      const targetIndex = result.indexOf(target);
-      const candidateResult = result.map((section, index) => index === targetIndex ? repairedSection : section);
-      const remainingIssue = validateRequiredStoryArcFunctions(candidateResult, { ...template, beats: [beat] }).find((item) => item.includes(`(${beat.id})`));
-      if (remainingIssue) {
-        unresolved.push(target.title);
-      } else {
-        result[targetIndex] = repairedSection;
-        repaired.push(`${target.title}: ${required}`);
-      }
-    }
-  }
-  return { suggestions: result, repaired, unresolved };
-}
-
+/** Story Arc function gaps are diagnostic only. A localized model rewrite
+ * cannot safely update downstream narrative state and must never be launched
+ * as a repair of a paid, coherent first-pass outline. */
 export function validateStoryArcSemantics(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats">,
@@ -6029,21 +5925,15 @@ export async function runSuggestionJob(
     };
     const continueAfterSemanticVerification = async (suggestions: Suggestion[], completionWarnings: string[] = []) => {
       const requiredStoryArcIssues = validateRequiredStoryArcFunctions(suggestions, body.arcTemplate);
-      const storyArcRepairAttempted = planningState.storyArcRepairAttempted === true;
-      if (requiredStoryArcIssues.length > 0 && !storyArcRepairAttempted) {
-        planningState = {
-          ...planningState,
-          phase: "story_arc_repair_pending",
-          nextAction: "story-arc-repair",
-          storyArcRepairIssues: requiredStoryArcIssues,
-        };
+      // Report missing declared dramatic functions internally, but never
+      // rewrite one section in isolation: that can retroactively resolve a
+      // conflict that later paid sections still need to finish.
+      if (requiredStoryArcIssues.length > 0) {
         diagnostics = {
           ...diagnostics,
-          stage: "story_arc_repair_pending",
-          storyArcRepairIssues: requiredStoryArcIssues,
+          storyArcFunctionIssues: requiredStoryArcIssues,
+          storyArcRewriteSkipped: true,
         };
-        await updateRun({ suggestions, planning_state: planningState, diagnostics });
-        throw new SuggestionWorkerYield();
       }
       const semanticCoverage = obligationCoverage([...(body.existingSections ?? []), ...suggestions], recipeObligations);
       if (semanticCoverage.missingRequired.length > 0) {
@@ -6160,43 +6050,13 @@ export async function runSuggestionJob(
       await continueAfterSemanticVerification(selectedSuggestions);
       return;
     }
-    if (planningState.nextAction === "story-arc-repair" || planningState.nextAction === "story-arc-repair-completion") {
-      let repairedSuggestions = persistedSemanticSuggestions;
-      if (planningState.nextAction === "story-arc-repair") {
-        const repair = await repairRequiredStoryArcFunctions(
-          persistedSemanticSuggestions,
-          body.arcTemplate,
-          billableCall,
-          recipeObligations,
-          { premise: body.recipe?.project?.summary, recipe: body.recipe },
-        );
-        repairedSuggestions = repair.suggestions;
-        const repairedQuality = collectAdvisoryOutlineQuality(
-          repairedSuggestions,
-          body.storyMaterialEnrichment,
-          requestedStoryMaterialFormat(body),
-          body.arcTemplate,
-          allocation,
-        );
-        planningState = {
-          ...planningState,
-          phase: "story_arc_repair_complete",
-          nextAction: "story-arc-repair-completion",
-          storyArcRepairAttempted: true,
-        };
-        diagnostics = {
-          ...diagnostics,
-          stage: "story_arc_repair_complete",
-          storyArcRepairIssues: Array.isArray(planningState.storyArcRepairIssues)
-            ? planningState.storyArcRepairIssues
-            : [],
-          semanticArcRepairedSections: repair.repaired,
-          semanticArcUnresolvedSections: repair.unresolved,
-          semanticArcIssues: repairedQuality.semanticArcIssues,
-        };
-        await updateRun({ suggestions: repairedSuggestions, planning_state: planningState, diagnostics });
-      }
-      await continueAfterSemanticVerification(repairedSuggestions);
+    // Runs checkpointed by the old worker must remain recoverable without
+    // a new provider call, including if the prior worker already saved a
+    // paid narrative. Complete from exactly that saved section sequence.
+    if (planningState.nextAction === "story-arc-repair" ||
+        planningState.nextAction === "story-arc-repair-completion" ||
+        planningState.nextAction === "semantic-completion") {
+      await continueAfterSemanticVerification(persistedSemanticSuggestions);
       return;
     }
     if (planningState.nextAction === "obligation-repair") {
