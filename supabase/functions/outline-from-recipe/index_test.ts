@@ -6210,60 +6210,58 @@ Deno.test("required-obligation repair is one billable stage and rechecks coverag
   assertEquals(result.missing, []);
 });
 
-Deno.test("durable worker lifecycle checkpoints missing obligations then completes through the common gate", async () => {
+Deno.test("first-pass omitted recipe IDs fail deterministically without a repair call", async () => {
   const body = await executableWorkerBody();
-  const obligations = deriveRecipeObligations(body.recipe as any);
-  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: "A section", container: "scene", pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before", dramaticEvent: "It happens", resultingChange: "Pressure changes", terminalState: "After", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
-  const row: any = checkpointedWorkerRow(body);
-  const db = new ExecutableRunDb(row);
-  const actions: string[] = [];
-  const billable = validatedWorkerBilling(actions, (action) => action === "outline-suggestions"
-    ? { beats: { "beat-1": [section([])], "beat-2": [section([], "beat-2")] } }
-    : { operations: [{ action: "add", replaceIndex: null, section: { ...section(obligations.map((obligation) => obligation.id)), title: "Repair addition" } }] });
-  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
-    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
+  const section = (beat: string) => ({
+    title: `Missing ${beat}`, summary: "Missing recipe coverage", container: "scene",
+    pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before",
+    dramaticEvent: "It happens", resultingChange: "Pressure changes",
+    terminalState: "After", storyArcBeatID: beat,
+    dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: [],
   });
-  await run();
-  assertEquals(db.row.status, "pending", JSON.stringify({ actions, error: db.row.error, diagnostics: db.row.diagnostics, planningState: db.row.planning_state }));
-  await run();
-  assertEquals(db.row.planning_state.phase, "obligation_repair_pending");
-  assertEquals(db.row.planning_state.nextAction, "obligation-repair");
-  assertEquals(db.row.suggestions.length, 2);
-  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.length > 0, true);
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
-  await run();
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-obligation-repair"]);
-  assertEquals(db.row.status, "completed");
-  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations, []);
-});
-
-Deno.test("failed obligation repair becomes a terminal missing_recipe_obligations worker failure", async () => {
-  const body = await executableWorkerBody();
-  const obligations = deriveRecipeObligations(body.recipe as any);
-  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: "A section", container: "scene", pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before", dramaticEvent: "It happens", resultingChange: "Pressure changes", terminalState: "After", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
   const actions: string[] = [];
   const billable = validatedWorkerBilling(actions, (action) => action === "outline-suggestions"
-    ? { beats: { "beat-1": [section([])], "beat-2": [section([], "beat-2")] } }
-    : { operations: [{ action: "add", replaceIndex: null, section: { ...section([obligations[0].id]), title: "Still incomplete" } }] });
+    ? { beats: { "beat-1": [section("beat-1")], "beat-2": [section("beat-2")] } }
+    : { suggestions: [] });
   const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
-    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any, scheduleContinuation: async () => {},
   });
   await run();
   assertEquals(db.row.status, "pending");
   await run();
-  assertEquals(db.row.planning_state.nextAction, "obligation-repair");
-  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.includes("R14"), true);
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
-  await run();
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-obligation-repair"]);
-  assertEquals(db.row.status, "failed", JSON.stringify({ error: db.row.error, diagnostics: db.row.diagnostics }));
+  assertEquals(db.row.status, "failed");
   assertEquals(db.row.error_code, "missing_recipe_obligations");
-  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.includes("R14"), true);
-  assertEquals(db.row.status === "completed", false);
+  assertEquals(db.row.suggestions.length, 2, "the paid first-pass outline survives");
+  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.length > 0, true);
+  assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
 });
 
-Deno.test("successful obligation repair enters novel expansion instead of completing early", async () => {
+Deno.test("missing recipe ID coverage never schedules an obligation repair checkpoint", async () => {
+  const body = await executableWorkerBody();
+  const row = {
+    ...checkpointedWorkerRow(body),
+    suggestions: [
+      { title: "Opening", storyArcBeatID: "beat-1", container: "scene", recipeRequirementIDs: [] },
+      { title: "Ending", storyArcBeatID: "beat-2", container: "scene", recipeRequirementIDs: [] },
+    ],
+    planning_state: { version: 2, phase: "semantic_completion", nextAction: "semantic-completion" },
+  };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(actions, []);
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "missing_recipe_obligations");
+  assertEquals(db.row.planning_state.nextAction !== "obligation-repair", true);
+});
+
+Deno.test("first-pass recipe coverage reaches novel length expansion without a narrative repair", async () => {
   const fullBody = await executableWorkerBody();
   const novelMaterial = attachRecipeProvenance({
     ...repairStoryMaterialFromRecipe(fullBody.recipe as any, {
@@ -6294,8 +6292,7 @@ Deno.test("successful obligation repair enters novel expansion instead of comple
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
   const actions: string[] = [];
   const billable = validatedWorkerBilling(actions, (action) => {
-    if (action === "outline-suggestions") return { beats: { "beat-1": [section([])], "beat-2": [section([], "beat-2")] } };
-    if (action === "outline-obligation-repair") return { operations: [{ action: "add", replaceIndex: null, section: { ...section(obligations.map((obligation) => obligation.id)), title: "Repair addition" } }] };
+    if (action === "outline-suggestions") return { beats: { "beat-1": [section(obligations.map((obligation) => obligation.id))], "beat-2": [section(obligations.map((obligation) => obligation.id), "beat-2")] } };
     return { suggestions: [] };
   });
   const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
@@ -6307,7 +6304,7 @@ Deno.test("successful obligation repair enters novel expansion instead of comple
   assertEquals(db.row.status, "pending", JSON.stringify({ actions, error: db.row.error, diagnostics: db.row.diagnostics, planningState: db.row.planning_state }));
   assertEquals(db.row.planning_state.phase, "expansion");
   assertEquals(db.row.status === "completed", false);
-  assertEquals(actions.slice(0, 3), ["outline-suggestions", "outline-semantic-verification", "outline-obligation-repair"]);
+  assertEquals(actions.slice(0, 3), ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global"]);
 });
 
 Deno.test("provider billing unavailable during allocation bypasses retry and fails safely", async () => {
@@ -6852,20 +6849,6 @@ Deno.test("provider output exhaustion reaches terminal run state for each produc
       action: "outline-suggestions",
       failureStage: "outline_generation",
     },
-    {
-      name: "obligation repair",
-      body: fullBody,
-      row: {
-        ...checkpointedWorkerRow(fullBody),
-        suggestions: [],
-        planning_state: { version: 2, phase: "obligation_repair_pending", nextAction: "obligation-repair", allocationEntries: [
-          ["beat-1", { minSections: 1, rationale: "fixture" }],
-          ["beat-2", { minSections: 1, rationale: "fixture" }],
-        ] },
-      },
-      action: "outline-obligation-repair",
-      failureStage: "obligation_repair_generation",
-    },
   ];
 
   for (const testCase of cases) {
@@ -7257,11 +7240,11 @@ Deno.test("PR #798 evidence-only semantic checkpoint uses one verifier call, no 
     db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
     billableLLM: billable as any, scheduleContinuation: async () => {},
   });
-  assertEquals(actions, ["outline-semantic-repair-batch"]);
+  assertEquals(actions, [], "retired semantic repair must not run a paid evidence-only re-verification");
   assertEquals(db.row.status, "completed", JSON.stringify({error: db.row.error, diagnostics: db.row.diagnostics}));
   assertEquals(db.row.suggestions, original);
-  assertEquals(db.row.diagnostics.semanticEvidenceReverification.attempted, true);
-  assertEquals(db.row.diagnostics.semanticEvidenceReverification.unresolvedCount, 0);
+  assertEquals(db.row.diagnostics.legacySemanticRepairCheckpointRecovered, true);
+  assertEquals(db.row.diagnostics.semanticVerification.unsatisfied, failures);
 });
 
 Deno.test("semantic verifier preserves a provider false judgment even with grounded evidence", async () => {
@@ -7399,11 +7382,12 @@ Deno.test("worker persists selected original suggestions with authoritative orig
   await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
     db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
   });
-  assertEquals(actions, ["outline-semantic-verification"]);
+  assertEquals(actions, [], "old paid repair checkpoints must be recovered without another verification");
   assertEquals(db.row.status, "completed");
   assertEquals(db.row.suggestions, original);
   assertEquals(db.row.diagnostics.semanticVerification, originalVerification);
-  assertEquals(db.row.diagnostics.semanticRepairRejectedVerification.unsatisfied, [{ beatID: "beat-2", obligationID: "authored_beat_requirement", reason: "repair introduced an unresolved beat requirement" }]);
+  assertEquals(db.row.diagnostics.legacySemanticRepairCheckpointRecovered, true);
+  assertEquals(db.row.diagnostics.semanticRepairRejectedVerification, undefined);
 });
 
 Deno.test("creative-fidelity verifier rejects procedural drift and routes it to the affected beat", async () => {
