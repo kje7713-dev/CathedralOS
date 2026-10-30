@@ -3946,10 +3946,12 @@ function characterIsNamed(text: string, label: string): boolean {
   const escaped = (value: string) => value.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\$&");
   if (new RegExp(`\\b${escaped(fullName)}\\b`, "i").test(text)) return true;
   const parts = fullName.split(/\s+/);
-  // Standalone proper names must be distinct; case-sensitive matching avoids
-  // counting ordinary words (e.g., "bell", "being") as character references.
-  const lastName = parts.length > 1 ? parts[parts.length - 1] : fullName;
-  return lastName.length >= 4 && new RegExp(`\\b${escaped(lastName)}\\b`).test(text);
+  // Proper first names or surnames may be used alone in section contracts.
+  // Case-sensitive matching avoids counting ordinary lowercase label words
+  // such as "being", "attention", or "security" as character references.
+  return [parts[0], parts[parts.length - 1]]
+    .filter((name) => name.length >= 3 && /^[A-Z]/.test(name))
+    .some((name) => new RegExp(`\\b${escaped(name)}\\b`).test(text));
 }
 
 export function analyzePlannerCharacterIntegration(
