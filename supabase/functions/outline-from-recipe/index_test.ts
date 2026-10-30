@@ -5123,6 +5123,58 @@ Deno.test("retired Story Arc rewrite resumes old paid checkpoints without AI cal
   }
 });
 
+Deno.test("first-pass missing climax declaration stays intact after verification with no Story Arc rewrite", async () => {
+  const fullBody = await executableWorkerBody();
+  const body: any = {
+    ...fullBody,
+    arcTemplate: {
+      ...fullBody.arcTemplate,
+      name: "Save the Cat!",
+      beats: fullBody.arcTemplate.beats.map((beat: any, index: number) => index === 1
+        ? { ...beat, role: "final_image", label: "Final Image", description: "Show the accomplished result." }
+        : beat),
+    },
+  };
+  const ids = Array.from({ length: 63 }, (_, index) => `R${index + 1}`);
+  const original = [
+    {
+      title: "The attempt fails", summary: "The captives remain on the transport.", container: "scene",
+      pov: "thirdPersonLimited", terminalBeat: "They must improvise.", entryState: "Captives remain locked inside.",
+      dramaticEvent: "The first attempt fails.", resultingChange: "The problem persists.",
+      terminalState: "Captives remain on the transport.", dramaticFunction: "setup", storyArcBeatID: "beat-1", recipeRequirementIDs: ids,
+    },
+    {
+      title: "They finally escape", summary: "The crowd opens the way and the captives escape.", container: "scene",
+      pov: "thirdPersonLimited", terminalBeat: "The captives are free.", entryState: "The captives remain on the transport.",
+      dramaticEvent: "The captives escape when the crowd blocks the guards.",
+      resultingChange: "The transfer is stopped and the captives escape.",
+      terminalState: "The captives remain free and the transfer cannot resume.",
+      dramaticFunction: "aftermath", storyArcBeatID: "beat-2", recipeRequirementIDs: ids,
+    },
+  ];
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    suggestions: original,
+    planning_state: {
+      version: 2, phase: "semantic_verification_pending", nextAction: "semantic-verification",
+      allocationEntries: [
+        ["beat-1", { minSections: 1, rationale: "fixture" }],
+        ["beat-2", { minSections: 1, rationale: "fixture" }],
+      ],
+    },
+  });
+  const calls: string[] = [];
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: fakeWorkerBilling(calls) as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(calls, ["outline-semantic-verification"]);
+  assertEquals(db.row.status, "completed", JSON.stringify({ error: db.row.error, diagnostics: db.row.diagnostics }));
+  assertEquals(db.row.suggestions, original);
+  assertEquals(db.row.diagnostics.storyArcRewriteSkipped, true);
+  assertEquals((db.row.warnings ?? []).length, 0);
+});
+
 Deno.test("enrichment semantic failure checkpoints one repair without repeating the first call", async () => {
   const fullBody = await executableWorkerBody();
   const body = { ...fullBody, storyMaterialEnrichment: undefined } as any;
