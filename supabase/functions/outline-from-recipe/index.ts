@@ -3073,12 +3073,35 @@ Respond with structured JSON matching the schema. This is the only provider call
   return { system, user };
 }
 
-// Stage 1: planner. Decides how many sections each arc beat deserves
-// before the generation call runs. The response is strict and validated so a
-// malformed planner response can never silently become an unbounded plan.
+// One existing planning call now chooses an authored-recipe-grounded causal
+// architecture BEFORE sizing the chapters. The architecture survives the
+// allocator→outliner handoff; enrichment remains optional creative material.
+export type StoryArchitecture = {
+  centralQuestion: string;
+  characterCausality: string;
+  decisiveClimax: string;
+  endingConsequence: string;
+  deliberatelyOpenThreads: string;
+};
+
+const STORY_ARCHITECTURE_SCHEMA = {
+  type: "object",
+  properties: {
+    centralQuestion: { type: "string", minLength: 1, maxLength: 650 },
+    characterCausality: { type: "string", minLength: 1, maxLength: 850 },
+    decisiveClimax: { type: "string", minLength: 1, maxLength: 850 },
+    endingConsequence: { type: "string", minLength: 1, maxLength: 650 },
+    deliberatelyOpenThreads: { type: "string", minLength: 1, maxLength: 650 },
+  },
+  required: ["centralQuestion", "characterCausality", "decisiveClimax", "endingConsequence", "deliberatelyOpenThreads"],
+  additionalProperties: false,
+} as const;
+
+// A single strict response contains causal decisions AND chapter sizing.
 const ALLOCATION_SCHEMA = {
   type: "object",
   properties: {
+    storyArchitecture: STORY_ARCHITECTURE_SCHEMA,
     allocations: {
       type: "array",
       minItems: 0,
@@ -3106,7 +3129,7 @@ const ALLOCATION_SCHEMA = {
       },
     },
   },
-  required: ["allocations"],
+  required: ["storyArchitecture", "allocations"],
   additionalProperties: false,
 } as const;
 
@@ -3348,6 +3371,7 @@ export function parseAndValidateAllocation(
   raw: string,
   beats: Array<{ id: string }>,
   finishReason?: string,
+  onArchitecture?: (architecture: StoryArchitecture) => void,
 ): Map<string, Allocation> {
   let parsed: unknown;
   try {
@@ -3432,6 +3456,28 @@ export function parseAndValidateAllocation(
       beat.id
     );
     throw new Error(`allocation is missing beat(s): ${missing.join(", ")}`);
+  }
+  // Legacy saved provider fixtures/checkpoints contain allocations only.
+  // Live strict-schema responses include storyArchitecture; reject malformed
+  // content rather than silently promoting a half-formed plan.
+  const rawArchitecture = (parsed as Record<string, unknown>).storyArchitecture;
+  if (rawArchitecture !== undefined) {
+    const keys = STORY_ARCHITECTURE_SCHEMA.required;
+    if (!rawArchitecture || typeof rawArchitecture !== "object" || Array.isArray(rawArchitecture) ||
+        Object.keys(rawArchitecture).length !== keys.length) {
+      throw new Error("allocation contains malformed storyArchitecture");
+    }
+    const values = rawArchitecture as Record<string, unknown>;
+    const architecture = {} as StoryArchitecture;
+    for (const key of keys) {
+      const value = values[key];
+      const maxLength = STORY_ARCHITECTURE_SCHEMA.properties[key].maxLength;
+      if (typeof value !== "string" || !value.trim() || value.length > maxLength) {
+        throw new Error(`allocation contains invalid storyArchitecture.${key}`);
+      }
+      architecture[key] = value.trim();
+    }
+    onArchitecture?.(architecture);
   }
   return new Map(beats.map((beat) => [beat.id, out.get(beat.id)!]));
 }
@@ -3519,7 +3565,7 @@ export async function planSectionAllocation(
   apiKey: string,
   billableCall?: SuggestionLLMCall,
   obligations: RecipeObligation[] = [],
-  options: { retryOnly?: boolean; deferRetry?: boolean } = {},
+  options: { retryOnly?: boolean; deferRetry?: boolean; onArchitecture?: (architecture: StoryArchitecture) => void } = {},
 ): Promise<Map<string, Allocation>> {
   const { system, user } = buildAllocationPrompt(req, obligations);
   const allocationSchema = allocationSchemaForFormat(req);
@@ -3540,14 +3586,14 @@ export async function planSectionAllocation(
       ? await billableCall(
         callSystem,
         user,
-        2048,
+        3600,
         responseFormat,
         correction ? "outline-plan-retry" : "outline-plan",
         (content, finishReason) => parseAndValidateAllocation(content, req.arcTemplate.beats, finishReason),
       )
       : {
         content: await callOpenAI(callSystem, user, apiKey, {
-          maxTokens: 2048,
+          maxTokens: 3600,
           useJsonSchema: true,
           jsonSchemaName: "outline_section_allocations",
           jsonSchema: allocationSchema,
@@ -3562,10 +3608,14 @@ export async function planSectionAllocation(
   const corrections = options.retryOnly ? [true] : [false, true];
   for (const correction of corrections) {
     try {
-      return fitAllocationToNovelBudget(
-        parseAndValidateAllocation(await call(correction), req.arcTemplate.beats),
-        req,
+      let architecture: StoryArchitecture | undefined;
+      const parsed = parseAndValidateAllocation(
+        await call(correction), req.arcTemplate.beats, undefined,
+        (value) => { architecture = value; },
       );
+      const fitted = fitAllocationToNovelBudget(parsed, req);
+      if (architecture) options.onArchitecture?.(architecture);
+      return fitted;
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
       if (error instanceof OutlineOutputExhaustedError) throw error;
