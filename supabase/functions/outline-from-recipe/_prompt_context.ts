@@ -113,6 +113,30 @@ export function buildCompactPlanningView(req: any, obligations: any[] = [], mate
   };
 }
 
+/**
+ * For the global story-architecture decision, don't hand the planner an
+ * already-assembled antagonist apparatus or step-by-step tactical story.
+ * Those optional candidate categories remain available downstream after
+ * the authored recipe has determined the narrative trajectory.
+ */
+export function buildArchitecturePlanningView(
+  req: any,
+  obligations: any[] = [],
+  material = req?.storyMaterialEnrichment,
+): Record<string, unknown> {
+  const context = buildCompactPlanningView(req, obligations, material);
+  const preselectedPlotCategories = new Set([
+    "antagonisticForces", "institutionsAndGroups", "escalationLadder",
+    "locations", "discoveries", "conflictSources",
+  ]);
+  return {
+    ...context,
+    materialIndex: (context.materialIndex as Array<Record<string, unknown>>).filter((item) =>
+      item.source === "recipe" || !preselectedPlotCategories.has(String(item.category))
+    ),
+  };
+}
+
 export function promptMetrics(messages: Array<{ role: string; content: unknown }>, extra: Record<string, unknown> = {}) {
   const serialized = messages.map((m) => `${m.role}:${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`).join("\n");
   return { promptBytes: new TextEncoder().encode(serialized).byteLength, promptChars: serialized.length, estimatedInputTokens: Math.ceil(serialized.length / 4), ...extra };
