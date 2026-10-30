@@ -32,7 +32,7 @@ export function stableJSONStringify(value: unknown): string {
 
 export function compactMaterial(material: any): unknown[] {
   if (!material || typeof material !== "object") return [];
-  return Object.entries(material).flatMap(([category, values]) => Array.isArray(values)
+  return Object.entries(material).flatMap(([category, values]) => category !== "premiseComponents" && Array.isArray(values)
     ? values.map((item: any) => ({ id: item?.id ?? null, category, label: compactText(item?.label ?? item?.name, 180), description: compactText(item?.description ?? item?.summary, 650), source: item?.source === "recipe" ? "recipe" : "planner", sourceReference: item?.sourceReference ?? null, sourceRefs: Array.isArray(item?.sourceRefs) ? item.sourceRefs.slice(0, 12) : Array.isArray(item?.sourceReferenceIDs) ? item.sourceReferenceIDs.slice(0, 12) : [], priority: item?.priority ?? null }))
     : []);
 }
@@ -88,6 +88,13 @@ export function buildCompactPlanningView(req: any, obligations: any[] = [], mate
     } : null,
     recipe: req?.recipe ?? null,
     obligations: compactObligations(obligations),
+    // Author-grounded, atomic premise commitments are a separate input, never
+    // optional planner material. Preserve the source quote and current meaning.
+    premiseComponents: (material?.premiseComponents ?? []).map((component: any, index: number) => ({
+      id: `premise_component_${index}`,
+      sourceQuote: compactText(component.sourceQuote, 600),
+      requirement: compactText(component.requirement, 750),
+    })),
     mustDos: compactObligations(obligations.filter((o: any) => o.classification === "story_non_negotiable")),
     materialIndex: compactMaterial(material),
     arc: {
