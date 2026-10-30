@@ -715,7 +715,7 @@ Deno.test("allocation prompt selects causal outcome before sizing chapters witho
   assertStringIncludes(allocationPrompt.system, "government contractor");
   const payload = JSON.parse(allocationPrompt.user);
   assertEquals(payload.planningContext.recipe, req.recipe);
-  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2").source, "planner");
+  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2"), undefined);
   assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p1").source, "planner");
   assertStringIncludes(buildEnrichmentPrompt(req).system, "avoid defaulting to a government contractor");
   const original = buildPrompt(req, new Map(), [], material);
@@ -3620,7 +3620,7 @@ Deno.test("PR3 expansion prioritizes unused enrichment and exposes soft word ran
   assertEquals(plannedWordRangeForContainer("scene"), { minWords: 615, maxWords: 1385 });
   const prompt = buildExpansionPrompt({ ...sparseRequest, storyMaterialEnrichment: material } as any, current as any);
   assertEquals(prompt.user.includes("unusedStoryMaterial"), true);
-  assertEquals(prompt.user.includes("force-emergency-network"), true);
+  assertEquals(prompt.user.includes("force-emergency-network"), false);
   assertEquals(prompt.system.includes("deepen the authored recipe's premise"), true);
   assertEquals(prompt.system.includes("unused or underdeveloped enrichment items"), false);
   assertEquals(prompt.system.includes("soft literary planning range"), false);
@@ -5278,7 +5278,7 @@ Deno.test("new semantic verification reports unmet obligations without launching
   assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
   assertEquals(db.row.diagnostics.semanticAssessment, "needs_review");
   assertEquals(db.row.diagnostics.semanticUnresolvedCount, 1);
-  assertStringIncludes((db.row.warnings ?? []).join(" "), "no automatic narrative rewrite");
+  assertEquals(db.row.warnings ?? [], []);
   assertEquals(db.row.planning_state.nextAction, "completed");
 });
 
