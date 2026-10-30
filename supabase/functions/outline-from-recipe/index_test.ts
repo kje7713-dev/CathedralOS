@@ -1258,7 +1258,7 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Every section must commit to one canonical event."), true);
   assertEquals(system.includes("Each section must produce a materially new resulting state."), true);
   assertEquals(system.includes("The Resurrection must not replay the Ordeal at greater scale."), true);
-  assertEquals(system.includes("Use planner candidates only when they strengthen the authored narrative experience"), true);
+  assertEquals(system.includes("Planner categories are possible story ingredients, not an already chosen plot"), true);
   assertEquals(system.includes("Author-supplied names and facts"), true);
   assertEquals(system.includes("A revelation, discovery, confession, or relationship change may occur only once as the primary dramatic event."), true);
   assertEquals(system.includes("Maintain the established narrative POV mode across the outline unless the supplied recipe explicitly requires a POV change."), true);
@@ -3221,7 +3221,7 @@ Deno.test("enrichment prompt favors audacity, adult intensity, and memorable exp
   assertStringIncludes(prompt, "## Invent distinctive experiences");
   assertStringIncludes(prompt, "Let information matter through what it makes people do");
   assertStringIncludes(prompt, "Quiet, intricate, realistic, or investigative experiences remain entirely valid");
-  assertStringIncludes(prompt, "Do not add arbitrary violence, sex, comedy, or spectacle");
+  assertStringIncludes(prompt, "intensity and originality come from the recipe, not a universal genre preference");
   assertStringIncludes(prompt, "## Keep enrichment genuinely exploratory");
   assertEquals(prompt.includes("There is no cast quota"), true);
 });
@@ -3231,8 +3231,8 @@ Deno.test("enrichment prompt favors inventive situations over generic machinery"
   const payload = JSON.parse(prompt.user);
   assertStringIncludes(prompt.system, "personality, independent desire, flaw or contradiction");
   assertStringIncludes(prompt.system, "Build a Distinctive Narrative Engine");
-  assertStringIncludes(prompt.system, "specific storytelling experience promised by the author's recipe");
-  assertStringIncludes(prompt.system, "Escalation means the story becomes more interesting");
+  assertStringIncludes(prompt.system, "particular experiences, tensions, surprises, and unresolved questions promised by the author's recipe");
+  assertStringIncludes(prompt.system, "Escalation means their choices produce increasingly consequential and distinctive experiences");
   assertStringIncludes(prompt.system, "independent characters, conflicting agendas, accidental encounters");
   assertStringIncludes(prompt.system, "not a directive to construct one complete and coordinated plot apparatus");
   assertStringIncludes(prompt.system, "do not all need to describe the same invented opposition or operation");
@@ -3276,7 +3276,7 @@ Deno.test("enrichment categories do not preselect one operational plot and prese
   assertStringIncludes(prompt.system, "The enrichment categories are ways to describe possible material");
   assertStringIncludes(prompt.system, "do not all need to describe the same invented opposition or operation");
   assertStringIncludes(prompt.system, "Some ideas may connect; others can be alternatives");
-  assertStringIncludes(prompt.system, "The eventual outline chooses events directly from the recipe");
+  assertStringIncludes(prompt.system, "the outliner will choose between");
   assertEquals(prompt.system.includes("Do not automatically invent a central mission, investigation, pursuit"), false);
   assertEquals(prompt.system.includes("Do not globally prohibit procedural storytelling"), false);
   const outline = buildPrompt(richRequest, new Map());
