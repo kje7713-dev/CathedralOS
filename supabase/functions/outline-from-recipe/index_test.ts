@@ -631,6 +631,96 @@ Deno.test("novel planning provider receives strict typed budget and carries 40 s
   assertEquals(allocation.get("beat-1")?.containerCounts, counts);
 });
 
+
+Deno.test("architecture + allocation share one provider response, with recipe authority and optional enrichment", async () => {
+  const req = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const architecture = {
+    centralQuestion: "Can Mara rescue the family she betrayed?",
+    characterCausality: "Mara's deception drives her brother to protect the wrong person, forcing a personal reckoning.",
+    decisiveClimax: "Mara confronts the threat and saves her family at an irreversible personal cost.",
+    endingConsequence: "The family survives, but their trust cannot return to its prior state.",
+    deliberatelyOpenThreads: "The identity of the anonymous witness remains unknown.",
+  };
+  let calls = 0;
+  let saved: any;
+  const planned = await planSectionAllocation(req, "unused", async (_system: string, _user: string, maxTokens: number, format: any, action: string) => {
+    calls++;
+    assertEquals(action, "outline-plan");
+    assertEquals(maxTokens >= 3500, true);
+    const schema = format.json_schema.schema;
+    assertEquals(schema.required.includes("storyArchitecture"), true);
+    assertEquals(schema.properties.storyArchitecture.required.length, 5);
+    return {
+      content: JSON.stringify({
+        storyArchitecture: architecture,
+        allocations: [
+          { beatIndex: 0, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "Mara's lie launches the family conflict." },
+          { beatIndex: 1, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "Mara confronts the threat, pays the cost, and the family survives." },
+        ],
+      }),
+      creditCostCharged: 1, remainingCredits: 99,
+    } as any;
+  }, [], { onArchitecture: (a) => { saved = a; } });
+  assertEquals(calls, 1);
+  assertEquals(saved, architecture);
+  assertEquals(planned.size, 2);
+  const { system, user } = buildPrompt(req, planned, [], undefined, saved);
+  assertStringIncludes(system, "## Selected causal architecture from the allocation call");
+  assertStringIncludes(system, architecture.decisiveClimax);
+  assertStringIncludes(system, architecture.endingConsequence);
+  assertStringIncludes(system, "Mara confronts the threat, pays the cost");
+  assertStringIncludes(system, "resolution may only dramatize its consequences");
+  const payload = JSON.parse(user);
+  assertEquals(payload.allocation[0][1].minSections, planned.get("beat-1")?.minSections);
+  assertEquals(payload.allocation[1][1].minSections, planned.get("beat-2")?.minSections);
+  assertEquals(payload.planningContext.recipe, req.recipe);
+});
+
+Deno.test("allocation rejects malformed architecture instead of passing it to prose generation", () => {
+  const good = {
+    centralQuestion: "Who survives?",
+    characterCausality: "Mara's betrayal forces her brother to fight.",
+    decisiveClimax: "The siblings stop the threat together.",
+    endingConsequence: "They survive estranged.",
+    deliberatelyOpenThreads: "The witness's employer remains unknown.",
+  };
+  const allocations = [
+    { beatIndex: 0, minSections: 1, rationale: "Cause" },
+    { beatIndex: 1, minSections: 1, rationale: "Outcome" },
+  ];
+  const beats = sparseRequest.arcTemplate.beats;
+  const parsed = parseAndValidateAllocation(JSON.stringify({ storyArchitecture: good, allocations }), beats);
+  assertEquals(parsed.size, 2);
+  for (const bad of [{ ...good, decisiveClimax: "" }, { ...good, unapprovedCanon: "A new authorial mandate" }, { ...good, endingConsequence: 5 }, []]) {
+    assertThrows(() => parseAndValidateAllocation(JSON.stringify({ storyArchitecture: bad, allocations }), beats), Error);
+  }
+  // A persisted pre-upgrade allocation can still be replayed without a new
+  // provider call; absence of architecture must not corrupt old checkpoints.
+  assertEquals(parseAndValidateAllocation(JSON.stringify({ allocations }), beats).size, 2);
+  assertStringIncludes(buildPrompt(sparseRequest as any, parsed).system, "Legacy checkpoint");
+});
+
+Deno.test("allocation prompt selects causal outcome before sizing chapters without canonizing contractors", () => {
+  const material: any = {
+    characters: [{ id: "p1", label: "Inez", source: "planner", sourceReference: null, description: "Sells out a friend to gain control." }],
+    antagonisticForces: [{ id: "p2", label: "Government contractor screen", source: "planner", sourceReference: null, description: "Generic audit program." }],
+  };
+  const req = { ...sparseRequest, requestedFormat: "novel", storyMaterialEnrichment: material } as any;
+  const allocationPrompt = buildAllocationPrompt(req, deriveRecipeObligations(req.recipe));
+  assertStringIncludes(allocationPrompt.system, "## Choose the story BEFORE allocating its chapters");
+  assertStringIncludes(allocationPrompt.system, "The recipe is authoritative");
+  assertStringIncludes(allocationPrompt.system, "THEN choose the beat-by-beat causal movements");
+  assertStringIncludes(allocationPrompt.system, "THEN budget and assign containerCounts");
+  assertStringIncludes(allocationPrompt.system, "government contractor");
+  const payload = JSON.parse(allocationPrompt.user);
+  assertEquals(payload.planningContext.recipe, req.recipe);
+  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2").source, "planner");
+  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p1").source, "planner");
+  assertStringIncludes(buildEnrichmentPrompt(req).system, "avoid defaulting to a government contractor");
+  const original = buildPrompt(req, new Map(), [], material);
+  assertStringIncludes(original.system, "Legacy checkpoint");
+});
+
 Deno.test("non-novel allocation keeps its legacy strict planner schema and prompt", async () => {
   let schema: any;
   const req = { ...sparseRequest, requestedFormat: "shortStory" } as any;
