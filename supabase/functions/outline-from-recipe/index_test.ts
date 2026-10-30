@@ -6983,12 +6983,12 @@ Deno.test("PR #798 semantic evidence correction recovers only uniquely grounded 
 
 Deno.test("PR #798 verifier corrects quote metadata without accepting wrong-beat resolution evidence", async () => {
   const template: any = {
-    name: "Custom",
+    name: "Save the Cat!",
     beats: [
       { id: "setup", role: "setup", label: "Setup", description: "" },
       { id: "isolation", role: "isolation", label: "Isolation", description: "The protagonists lose access to safe help." },
       { id: "confrontation", role: "climax", label: "Confrontation", description: "" },
-      { id: "final", role: "resolution", label: "Final", description: "Show survival." },
+      { id: "final", role: "final_image", label: "Final", description: "Show survival." },
     ],
   };
   const sections: any[] = [
