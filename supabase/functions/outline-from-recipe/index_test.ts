@@ -5075,6 +5075,54 @@ function outputExhaustedBilling(actions: string[]) {
   };
 }
 
+Deno.test("retired Story Arc rewrite resumes old paid checkpoints without AI calls or changing their plot", async () => {
+  const fullBody = await executableWorkerBody();
+  const body: any = {
+    ...fullBody,
+    arcTemplate: {
+      ...fullBody.arcTemplate,
+      name: "Save the Cat!",
+      beats: fullBody.arcTemplate.beats.map((beat: any, index: number) => index === 1
+        ? { ...beat, role: "final_image", label: "Final Image", description: "Show what survives." }
+        : beat),
+    },
+  };
+  const ids = Array.from({ length: 63 }, (_, index) => `R${index + 1}`);
+  const section = (title: string, beat: string, dramaticFunction: string, event: string, change: string, terminal: string) => ({
+    title, summary: event, container: "scene", pov: "thirdPersonLimited", terminalBeat: terminal,
+    entryState: "The former event remains true.", dramaticEvent: event, resultingChange: change,
+    terminalState: terminal, dramaticFunction, storyArcBeatID: beat, recipeRequirementIDs: ids,
+  });
+  const paidOutline = [
+    section("The first escape", "beat-1", "setup", "The captives leave the transport.", "The transport is empty.", "The captives remain free."),
+    section("The survivors continue", "beat-2", "aftermath", "The group drives away after the rescue.", "The costly escape remains accomplished.", "The rescued people are safe and the new normal persists."),
+  ];
+  for (const nextAction of ["story-arc-repair", "story-arc-repair-completion", "semantic-completion"]) {
+    const row: any = {
+      ...checkpointedWorkerRow(body),
+      suggestions: structuredClone(paidOutline),
+      planning_state: {
+        version: 2, phase: "story_arc_repair_pending", nextAction,
+        allocationEntries: [
+          ["beat-1", { minSections: 1, rationale: "fixture" }],
+          ["beat-2", { minSections: 1, rationale: "fixture" }],
+        ],
+      },
+    };
+    const db = new ExecutableRunDb(row);
+    const calls: string[] = [];
+    await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+      db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+      billableLLM: fakeWorkerBilling(calls) as any, scheduleContinuation: async () => {},
+    });
+    assertEquals(calls, [], nextAction);
+    assertEquals(db.row.status, "completed", JSON.stringify({ nextAction, error: db.row.error, diagnostics: db.row.diagnostics }));
+    assertEquals(db.row.suggestions, paidOutline, nextAction);
+    assertEquals(db.row.diagnostics.storyArcRewriteSkipped, true, nextAction);
+    assertEquals((db.row.warnings ?? []).length, 0, nextAction);
+  }
+});
+
 Deno.test("enrichment semantic failure checkpoints one repair without repeating the first call", async () => {
   const fullBody = await executableWorkerBody();
   const body = { ...fullBody, storyMaterialEnrichment: undefined } as any;
