@@ -6171,8 +6171,6 @@ export async function runSuggestionJob(
       await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
       await continueAfterSemanticVerification(persistedSemanticSuggestions, notice ? [notice] : []);
       return;
-      await continueAfterSemanticVerification(persistedSemanticSuggestions);
-      return;
     }
     // Compatibility only: an old paid run may already be checkpointed in
     // semantic-repair or semantic-reverification. Retire both dispatches:
