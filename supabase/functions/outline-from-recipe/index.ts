@@ -4399,7 +4399,7 @@ export async function verifyStoryArcSemantics(
     } as SemanticVerificationObligation;
     arcWideObligations.push(creativeVerified);
     if (!creativeVerified.satisfied) {
-      const repairSection = creativeSection ?? suggestions[0];
+      const repairSection = suggestions[creativeGrounding?.sectionIndex ?? creativeSectionIndex] ?? suggestions[0];
       unsatisfied.push({
         beatID: repairSection?.storyArcBeatID ?? "__story_arc__",
         obligationID: CREATIVE_FIDELITY_OBLIGATION,
@@ -4434,7 +4434,7 @@ export async function verifyStoryArcSemantics(
         : String(rawObligation?.reason ?? `section does not unmistakably satisfy: ${required.instruction}`),
     } as SemanticVerificationObligation;
     arcWideObligations.push(verified);
-    if (!verified.satisfied) unsatisfied.push({ beatID: section?.storyArcBeatID ?? "__story_arc__", obligationID: required.obligationID, reason: verified.reason });
+    if (!verified.satisfied) unsatisfied.push({ beatID: suggestions[grounding?.sectionIndex ?? sectionIndex]?.storyArcBeatID ?? "__story_arc__", obligationID: required.obligationID, reason: verified.reason });
   }
   if (requirement) {
     const rawObligation = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === SELECTED_INTIMACY_LEVEL_OBLIGATION);
@@ -6141,7 +6141,7 @@ export async function runSuggestionJob(
           };
         }
         planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_evidence_review_complete" };
+        diagnostics = { ...diagnostics, stage: "semantic_verified" };
         await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
         await continueAfterSemanticVerification(originalSemanticSuggestions);
         return;
