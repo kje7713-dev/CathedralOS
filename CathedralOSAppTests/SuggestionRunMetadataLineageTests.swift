@@ -240,7 +240,7 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             failureCode: nil,
             failureMessage: "Novel outline exceeds the 120,000-word hard cap before expansion."
         )
-        XCTAssertTrue(message.contains("exceeded the novel-length limit"))
+        XCTAssertTrue(message.contains("saved the available outline"))
         XCTAssertTrue(message.contains("Review Suggestions"))
     }
 
@@ -256,7 +256,7 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             result: result,
             failureCode: "failed_over_target"
         )
-        XCTAssertTrue(message.contains("exceeded the novel-length limit"))
+        XCTAssertTrue(message.contains("saved the available outline"))
         XCTAssertTrue(message.contains("Review Suggestions"))
         XCTAssertTrue(message.contains("No additional charge was made"))
     }
@@ -273,9 +273,30 @@ final class SuggestionRunMetadataLineageTests: XCTestCase {
             result: result,
             failureCode: "story_arc_semantic_unresolved"
         )
-        XCTAssertTrue(message.contains("final Story Arc check"))
-        XCTAssertTrue(message.contains("authored requirement"))
+        XCTAssertTrue(message.contains("ready to review"))
+        XCTAssertFalse(message.lowercased().contains("validation"))
+        XCTAssertFalse(message.lowercased().contains("story arc"))
         XCTAssertTrue(message.contains("You were charged 15.21 credits"))
+    }
+
+    func testMissingRecipeIDMetadataIsNotCustomerFacingValidationWarning() {
+        let result = OutlineSuggestionResult(
+            suggestions: [makeSuggestion()],
+            warnings: [],
+            creditCostCharged: 3.57,
+            remainingCredits: 100.0,
+            sourceRecipe: makeRequest().recipe
+        )
+        let message = DataDurabilityCoordinator.paidSavedSuggestionFeedback(
+            result: result,
+            failureCode: "missing_recipe_obligations",
+            failureMessage: "missing_recipe_obligations: R19, R20"
+        )
+        XCTAssertTrue(message.contains("ready to review"))
+        XCTAssertFalse(message.lowercased().contains("validation"))
+        XCTAssertFalse(message.contains("R19"))
+        XCTAssertFalse(message.contains("R20"))
+        XCTAssertFalse(message.lowercased().contains("obligations"))
     }
 
     func testSuggestionStatusPollingHasARealSuccessInterval() {
