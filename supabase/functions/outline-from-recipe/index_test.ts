@@ -102,6 +102,7 @@ import {
   collectAdvisoryOutlineQuality,
   plannedWordRangeForContainer,
   findUnusedStoryMaterial,
+  analyzePlannerCharacterIntegration,
   validateStoryArcSemantics,
   validateArcSemanticObligations,
   validateGroundedArcEvidence,
@@ -1285,6 +1286,71 @@ Deno.test("global buildPrompt favors character-driven dramatic selection without
   assertStringIncludes(system, "Preserve causality, continuity, and authorial intent");
   assertStringIncludes(system, "The recipe is the governing creative brief");
   assertStringIncludes(system, "## Narrative-state continuity");
+});
+
+
+Deno.test("outliner selects character-caused events before deciding its climax or slots", () => {
+  const material: any = {
+    ...enrichmentFixture(),
+    characters: [
+      { id: "vee", label: "Vee Sato, the attention broker", source: "planner", description: "Leaks the trio's location to manufacture a viral spectacle." },
+      { id: "pike", label: "Marlon Pike, the security consultant", source: "planner", description: "Provokes an unstable man to improve his contract." },
+      { id: "fred", label: "Fred", source: "recipe", description: "An authored protagonist." },
+    ],
+  };
+  const { system, user } = buildPrompt({ ...sparseRequest, storyMaterialEnrichment: material } as any, new Map(), [], material);
+  const payload = JSON.parse(user);
+  assertEquals(payload.planningContext.characterDecisionCandidates.map((candidate: any) => candidate.id), ["vee", "pike"]);
+  assertStringIncludes(payload.planningContext.characterDecisionCandidates[0].description, "Leaks the trio");
+  assertEquals(payload.planningContext.recipe, sparseRequest.recipe);
+  assertEquals(payload.planningContext.materialIndex.some((item: any) => item.id === "pike"), true);
+  assertStringIncludes(system, "## Character-caused story selection before plot construction");
+  assertStringIncludes(system, "First choose the story's causal drivers, BEFORE deciding");
+  assertStringIncludes(system, "what they want, the distinctive choice they make, whose plan it derails");
+  assertStringIncludes(system, "Do not force every generated character into the outline");
+  assertStringIncludes(system, "do not replace a distinctive, consequential candidate with a nameless official");
+  assertStringIncludes(system, "if substituting an interchangeable job title would leave the important events unchanged");
+  assertEquals(system.indexOf("## Character-caused story selection before plot construction") < system.indexOf("## Premise outcome and ending causality"), true);
+  assertStringIncludes(system, "preserve it, but still let authored character agency");
+  assertStringIncludes(system, "Preserve the author's tone, adult intensity, ambiguity, restrained genres");
+  assertStringIncludes(system, "Before drafting sections, determine the whole story's cause-and-effect trajectory");
+  assertStringIncludes(system, "## Narrative-state continuity");
+});
+
+Deno.test("character integration diagnostic rejects generic label words and distinguishes cameos from causal anchors", () => {
+  const material: any = {
+    characters: [
+      { id: "briggs", label: "Garnet Briggs, the deputy who hates being a meme", source: "planner" },
+      { id: "vee", label: "Vee Sato, the attention broker", source: "planner" },
+      { id: "pike", label: "Marlon Pike, the celebrated security consultant", source: "planner" },
+      { id: "inez", label: "Inez Bell, the motel night auditor", source: "planner" },
+      { id: "rusk", label: "Dale Rusk, the roadside livestream preacher", source: "planner" },
+      { id: "nash", label: "Merritt Nash, Millie's handler", source: "planner" },
+      { id: "recipe-character", label: "Fred", source: "recipe" },
+    ],
+  };
+  const suggestions: any[] = [
+    {
+      title: "Being watched", summary: "The public's attention forces a security response. Inez counts the motel receipts.",
+      dramaticEvent: "Rusk edits a livestream to exploit the attack.", resultingChange: "Ted gains a following.",
+      entryState: "The crowd is tense.", terminalState: "The crowd leaves.",
+    },
+    {
+      title: "Handler's lie", summary: "The hybrid operation loses control.",
+      dramaticEvent: "Nash lies to Millie about an extraction.", resultingChange: "Millie breaks with Nash.",
+      entryState: "They are hidden.", terminalState: "Millie leaves him.",
+    },
+  ];
+  const integration = analyzePlannerCharacterIntegration(suggestions, material);
+  assertEquals(integration, {
+    absent: ["briggs", "vee", "pike"],
+    mentionedWithoutCausalAnchor: ["inez"],
+    withCausalAnchor: ["rusk", "nash"],
+  });
+  assertEquals(analyzePlannerCharacterIntegration(suggestions, undefined), {
+    absent: [], mentionedWithoutCausalAnchor: [], withCausalAnchor: [],
+  });
+  assertEquals(collectAdvisoryOutlineQuality(suggestions, material).plannerCharacterIntegration, integration);
 });
 
 Deno.test("global buildPrompt requires continuity review while allowing valid offscreen transitions", () => {
@@ -5853,6 +5919,7 @@ Deno.test("global outline completion preserves advisory quality and obligation a
   assertEquals(Array.isArray(diagnostics.semanticArcIssues), true);
   assertEquals(Array.isArray(diagnostics.causalScaleIssues), true);
   assertEquals(typeof diagnostics.unusedStoryMaterialItems, "number");
+  assertEquals(typeof diagnostics.plannerCharacterIntegration, "object");
   assertEquals("advisoryValidationError" in diagnostics, false);
   assertEquals(typeof diagnostics.recipeObligationCoverage, "object");
   assertEquals(diagnostics.missingRequiredRecipeObligations, []);
