@@ -1319,6 +1319,7 @@ Deno.test("outliner selects character-caused events before deciding its climax o
 
 Deno.test("character integration diagnostic rejects generic label words and distinguishes cameos from causal anchors", () => {
   const material: any = {
+    ...enrichmentFixture(),
     characters: [
       { id: "briggs", label: "Garnet Briggs, the deputy who hates being a meme", source: "planner" },
       { id: "vee", label: "Vee Sato, the attention broker", source: "planner" },
