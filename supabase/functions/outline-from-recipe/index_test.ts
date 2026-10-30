@@ -92,6 +92,7 @@ import {
   normalizeProviderStoryMaterialItemIDs,
   downgradeUnverifiedProviderRecipeReferences,
   validateStoryMaterialEnrichment,
+  validatePremiseComponents,
   storyMaterialSufficiency,
   recipeProvenance,
   attachRecipeProvenance,
@@ -5234,6 +5235,181 @@ function outputExhaustedBilling(actions: string[]) {
   };
 }
 
+Deno.test("new semantic verification reports unmet obligations without launching a rewrite or re-verification", async () => {
+  const body = await executableWorkerBody();
+  const ids = Array.from({ length: 63 }, (_, index) => `R${index + 1}`);
+  const section = (beat: string, title: string) => ({
+    title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends`, storyArcBeatID: beat,
+    dramaticFunction: beat === "beat-1" ? "setup" : "resolution",
+    recipeRequirementIDs: ids, entryState: "Continuity holds.",
+    dramaticEvent: beat === "beat-1" ? "The journey begins." : "The conflict ends.",
+    resultingChange: beat === "beat-1" ? "New pressure begins." : "The conflict resolves.",
+    terminalState: beat === "beat-1" ? "The crisis remains." : "The new normal persists.",
+  });
+  const original = [section("beat-1", "First"), section("beat-2", "Last")];
+  const db = new ExecutableRunDb({
+    ...checkpointedWorkerRow(body),
+    suggestions: original,
+    planning_state: {
+      version: 2, phase: "semantic_verification_pending", nextAction: "semantic-verification",
+      allocationEntries: [
+        ["beat-1", { minSections: 1, rationale: "start" }],
+        ["beat-2", { minSections: 1, rationale: "end" }],
+      ],
+    },
+  });
+  const calls: string[] = [];
+  const billable = validatedWorkerBilling(calls, () => ({ suggestions: [] }), (request) => {
+    const response: any = semanticVerifierFixture(request);
+    if (response.beats[0]?.obligations[0]) {
+      response.beats[0].obligations[0].satisfied = false;
+      response.beats[0].obligations[0].reason = "The authored beat obligation was not achieved.";
+    }
+    return response;
+  });
+  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(calls, ["outline-semantic-verification"]);
+  assertEquals(db.row.status, "completed", db.row.error ?? "no error");
+  assertEquals(db.row.suggestions, original);
+  assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
+  assertEquals(db.row.diagnostics.semanticAssessment, "needs_review");
+  assertEquals(db.row.diagnostics.semanticUnresolvedCount, 1);
+  assertStringIncludes((db.row.warnings ?? []).join(" "), "no automatic narrative rewrite");
+  assertEquals(db.row.planning_state.nextAction, "completed");
+});
+
+Deno.test("old semantic and obligation repair checkpoints preserve paid story without dispatching new repair calls", async () => {
+  const body = await executableWorkerBody();
+  const ids = Array.from({ length: 63 }, (_, index) => `R${index + 1}`);
+  const section = (beat: string, title: string) => ({
+    title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited",
+    terminalBeat: `${title} ends`, storyArcBeatID: beat,
+    dramaticFunction: beat === "beat-1" ? "setup" : "resolution",
+    recipeRequirementIDs: ids, entryState: "Continuity holds.",
+    dramaticEvent: beat === "beat-1" ? "The journey begins." : "The conflict ends.",
+    resultingChange: beat === "beat-1" ? "New pressure begins." : "The conflict resolves.",
+    terminalState: beat === "beat-1" ? "The crisis remains." : "The new normal persists.",
+  });
+  const original = [section("beat-1", "First"), section("beat-2", "Last")];
+  const candidate = [section("beat-1", "Unwanted replacement"), original[1]];
+  for (const nextAction of ["semantic-repair", "semantic-reverification", "obligation-repair"]) {
+    const db = new ExecutableRunDb({
+      ...checkpointedWorkerRow(body),
+      suggestions: nextAction === "obligation-repair" ? original : candidate,
+      diagnostics: {
+        semanticVerification: {
+          arcWideObligations: [], beats: [],
+          unsatisfied: [{ beatID: "beat-1", obligationID: "authored_beat_requirement", reason: "fixture gap" }],
+        },
+      },
+      planning_state: {
+        version: 2, phase: nextAction, nextAction,
+        semanticRepairOriginalSuggestions: original,
+        allocationEntries: [
+          ["beat-1", { minSections: 1, rationale: "start" }],
+          ["beat-2", { minSections: 1, rationale: "end" }],
+        ],
+      },
+    });
+    const actions: string[] = [];
+    await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
+      db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+      billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
+    });
+    assertEquals(actions, [], nextAction);
+    assertEquals(db.row.status, "completed", JSON.stringify({ nextAction, error: db.row.error }));
+    assertEquals(db.row.suggestions, original, nextAction);
+    assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
+  }
+});
+
+Deno.test("first-pass prompts own whole-book obligations and active worker has no narrative repair dispatch", async () => {
+  const request: any = await executableWorkerBody();
+  assertStringIncludes(buildPrompt(request, new Map()).system, "## First-pass whole-book obligations (no narrative repair later)");
+  assertStringIncludes(buildPrompt(request, new Map()).system, "required functions=");
+  assertStringIncludes(buildAllocationPrompt(request).system, "Do not pack all story-wide obligations into the first beat");
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  for (const action of ['nextAction: "semantic-repair"', 'nextAction: "semantic-reverification"', 'nextAction: "obligation-repair"']) {
+    assertEquals(source.includes(action), false, action);
+  }
+});
+
+Deno.test("authored premise is decomposed into independent source-backed obligations without renumbering old IDs", () => {
+  const summary = "Two damaged drifters cross the country. One violent act turns them into public symbols. Their fame exposes a national conspiracy, and their disastrous choices become essential to preventing humanity's destruction.";
+  const components = [
+    { sourceQuote: "Two damaged drifters cross the country", requirement: "The drifters are damaged and cross the country." },
+    { sourceQuote: "One violent act turns them into public symbols", requirement: "A violent event produces an unintended public mythology." },
+    { sourceQuote: "Their fame exposes a national conspiracy", requirement: "Notoriety exposes the national conspiracy." },
+    { sourceQuote: "their disastrous choices become essential to preventing humanity's destruction", requirement: "Their flawed actions materially advance humanity's survival." },
+  ];
+  assertEquals(validatePremiseComponents(components, summary), components);
+  const recipe: any = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, summary } };
+  const baseline = deriveRecipeObligations(recipe);
+  const decomposed = deriveRecipeObligations(recipe, components);
+  assertEquals(decomposed.slice(0, baseline.length), baseline);
+  assertEquals(decomposed.length, baseline.length + 4);
+  assertEquals(decomposed.slice(-4).map((item) => item.source), [
+    "project.summary.component.1", "project.summary.component.2",
+    "project.summary.component.3", "project.summary.component.4",
+  ]);
+  assertEquals(decomposed.slice(-4).every((item) => item.required), true);
+  assertStringIncludes(decomposed.at(-1)!.statement, "humanity");
+  const material: any = { premiseComponents: components };
+  const request: any = { ...sparseRequest, recipe, storyMaterialEnrichment: material };
+  const planning = buildCompactPlanningView(request, decomposed, material);
+  assertEquals((planning.premiseComponents as any[]).length, 4);
+  assertEquals((planning.materialIndex as any[]).some((item) => item.category === "premiseComponents"), false);
+  assertStringIncludes(buildEnrichmentPrompt(request).system, "Decompose the AUTHOR'S project summary");
+  assertStringIncludes(buildAllocationPrompt(request, decomposed).user, "preventing humanity");
+  assertStringIncludes(buildPrompt(request, new Map(), decomposed, material).user, "preventing humanity");
+});
+
+Deno.test("premise extraction rejects invented source claims and omitted large promises", () => {
+  const summary = "The friends become notorious. Their unintended influence shakes the entire country. Their unpredictable choices will one day determine whether humanity survives.";
+  assertThrows(() => validatePremiseComponents([
+    { sourceQuote: "They overthrow the national government", requirement: "The government is overthrown." },
+  ], summary), Error, "invented source quote");
+  assertThrows(() => validatePremiseComponents([
+    { sourceQuote: "The friends become notorious", requirement: "Their notoriety grows." },
+    { sourceQuote: "Their unintended influence shakes the entire country", requirement: "The country is destabilized." },
+  ], summary), Error, "failed to cover");
+  assertThrows(() => validatePremiseComponents(undefined, summary), Error, "premiseComponents must contain");
+});
+
+Deno.test("independent verifier does not pass a humanity-scale premise component because a local victory happened", async () => {
+  const summary = "One violent event creates new public symbols. The national institutions begin to break down. The protagonists' mistakes become essential to humanity surviving a hidden threat.";
+  const components = [
+    { sourceQuote: "One violent event creates new public symbols", requirement: "Fame arises from a violent event." },
+    { sourceQuote: "The national institutions begin to break down", requirement: "The country begins a consequential transformation." },
+    { sourceQuote: "The protagonists' mistakes become essential to humanity surviving a hidden threat", requirement: "Their mistakes must be causally important to humanity's survival." },
+  ];
+  const recipe: any = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, summary } };
+  const template: any = { name: "Custom", beats: [{ id: "b1", label: "Beginning", role: "setup", description: "" }] };
+  const sections: any[] = [{
+    title: "A raid is stopped", storyArcBeatID: "b1",
+    dramaticEvent: "A viral clip makes the pair notorious and they stop a local raid.",
+    resultingChange: "Several detainees survive the confrontation.",
+    terminalState: "Their popularity is national, but the systemic threat and any causal link to humanity's fate remain unexplained.",
+  }];
+  const input = semanticVerificationInput(sections, template, recipe, components) as any;
+  assertEquals(input.arcWideObligations.filter((o: any) => o.obligationID.startsWith("premise_component_")).length, 3);
+  const response: any = semanticVerifierFixture({ messages: [{ role: "user", content: JSON.stringify(input) }] });
+  const humanity = response.arcWideObligations.find((o: any) => o.obligationID === "premise_component_2");
+  humanity.satisfied = false;
+  humanity.reason = "The local rescue does not establish the protagonists' causal importance to humanity's survival.";
+  const result = await verifyStoryArcSemantics(
+    sections, template, async () => ({ content: JSON.stringify(response) }) as any,
+    recipe, "outline-semantic-verification", components,
+  );
+  assertEquals(result.unsatisfied.some((failure) => failure.obligationID === "premise_component_2"), true);
+  assertEquals(result.arcWideObligations.filter((o) => o.obligationID.startsWith("premise_component_")).length, 3);
+  assertEquals(result.arcWideObligations.find((o) => o.obligationID === "premise_component_0")?.satisfied, true);
+});
+
 Deno.test("retired Story Arc rewrite resumes old paid checkpoints without AI calls or changing their plot", async () => {
   const fullBody = await executableWorkerBody();
   const body: any = {
@@ -5659,6 +5835,8 @@ Deno.test("fresh novel worker sequence is enrichment then allocation then one gl
   await run();
   await run();
   assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(db.row.diagnostics.generatedOrReused, "generated", "a continuation must not rewrite a fresh run as prior-run enrichment reuse");
+  assertEquals(db.row.diagnostics.enrichmentLoadedFromCheckpoint, true);
   assertEquals(db.row.attempt_count, 0);
   assertEquals(actions.some((action) => action.startsWith("outline-route-")), false);
   assertEquals(actions.some((action) => action.startsWith("outline-suggestions-beat-")), false);
@@ -6105,60 +6283,58 @@ Deno.test("required-obligation repair is one billable stage and rechecks coverag
   assertEquals(result.missing, []);
 });
 
-Deno.test("durable worker lifecycle checkpoints missing obligations then completes through the common gate", async () => {
+Deno.test("first-pass omitted recipe IDs fail deterministically without a repair call", async () => {
   const body = await executableWorkerBody();
-  const obligations = deriveRecipeObligations(body.recipe as any);
-  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: "A section", container: "scene", pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before", dramaticEvent: "It happens", resultingChange: "Pressure changes", terminalState: "After", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
-  const row: any = checkpointedWorkerRow(body);
-  const db = new ExecutableRunDb(row);
-  const actions: string[] = [];
-  const billable = validatedWorkerBilling(actions, (action) => action === "outline-suggestions"
-    ? { beats: { "beat-1": [section([])], "beat-2": [section([], "beat-2")] } }
-    : { operations: [{ action: "add", replaceIndex: null, section: { ...section(obligations.map((obligation) => obligation.id)), title: "Repair addition" } }] });
-  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
-    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
+  const section = (beat: string) => ({
+    title: `Missing ${beat}`, summary: "Missing recipe coverage", container: "scene",
+    pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before",
+    dramaticEvent: "It happens", resultingChange: "Pressure changes",
+    terminalState: "After", storyArcBeatID: beat,
+    dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: [],
   });
-  await run();
-  assertEquals(db.row.status, "pending", JSON.stringify({ actions, error: db.row.error, diagnostics: db.row.diagnostics, planningState: db.row.planning_state }));
-  await run();
-  assertEquals(db.row.planning_state.phase, "obligation_repair_pending");
-  assertEquals(db.row.planning_state.nextAction, "obligation-repair");
-  assertEquals(db.row.suggestions.length, 2);
-  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.length > 0, true);
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
-  await run();
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-obligation-repair"]);
-  assertEquals(db.row.status, "completed");
-  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations, []);
-});
-
-Deno.test("failed obligation repair becomes a terminal missing_recipe_obligations worker failure", async () => {
-  const body = await executableWorkerBody();
-  const obligations = deriveRecipeObligations(body.recipe as any);
-  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: "A section", container: "scene", pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before", dramaticEvent: "It happens", resultingChange: "Pressure changes", terminalState: "After", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
   const actions: string[] = [];
   const billable = validatedWorkerBilling(actions, (action) => action === "outline-suggestions"
-    ? { beats: { "beat-1": [section([])], "beat-2": [section([], "beat-2")] } }
-    : { operations: [{ action: "add", replaceIndex: null, section: { ...section([obligations[0].id]), title: "Still incomplete" } }] });
+    ? { beats: { "beat-1": [section("beat-1")], "beat-2": [section("beat-2")] } }
+    : { suggestions: [] });
   const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
-    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: billable as any, scheduleContinuation: async () => {},
   });
   await run();
   assertEquals(db.row.status, "pending");
   await run();
-  assertEquals(db.row.planning_state.nextAction, "obligation-repair");
-  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.includes("R14"), true);
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
-  await run();
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-obligation-repair"]);
-  assertEquals(db.row.status, "failed", JSON.stringify({ error: db.row.error, diagnostics: db.row.diagnostics }));
+  assertEquals(db.row.status, "failed");
   assertEquals(db.row.error_code, "missing_recipe_obligations");
-  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.includes("R14"), true);
-  assertEquals(db.row.status === "completed", false);
+  assertEquals(db.row.suggestions.length, 2, "the paid first-pass outline survives");
+  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.length > 0, true);
+  assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
 });
 
-Deno.test("successful obligation repair enters novel expansion instead of completing early", async () => {
+Deno.test("missing recipe ID coverage never schedules an obligation repair checkpoint", async () => {
+  const body = await executableWorkerBody();
+  const row = {
+    ...checkpointedWorkerRow(body),
+    suggestions: [
+      { title: "Opening", storyArcBeatID: "beat-1", container: "scene", recipeRequirementIDs: [] },
+      { title: "Ending", storyArcBeatID: "beat-2", container: "scene", recipeRequirementIDs: [] },
+    ],
+    planning_state: { version: 2, phase: "semantic_completion", nextAction: "semantic-completion" },
+  };
+  const db = new ExecutableRunDb(row);
+  const actions: string[] = [];
+  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
+    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
+    billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
+  });
+  assertEquals(actions, []);
+  assertEquals(db.row.status, "failed");
+  assertEquals(db.row.error_code, "missing_recipe_obligations");
+  assertEquals(db.row.planning_state.nextAction !== "obligation-repair", true);
+});
+
+Deno.test("first-pass recipe coverage enters novel length controls without a narrative repair", async () => {
   const fullBody = await executableWorkerBody();
   const novelMaterial = attachRecipeProvenance({
     ...repairStoryMaterialFromRecipe(fullBody.recipe as any, {
@@ -6189,8 +6365,7 @@ Deno.test("successful obligation repair enters novel expansion instead of comple
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
   const actions: string[] = [];
   const billable = validatedWorkerBilling(actions, (action) => {
-    if (action === "outline-suggestions") return { beats: { "beat-1": [section([])], "beat-2": [section([], "beat-2")] } };
-    if (action === "outline-obligation-repair") return { operations: [{ action: "add", replaceIndex: null, section: { ...section(obligations.map((obligation) => obligation.id)), title: "Repair addition" } }] };
+    if (action === "outline-suggestions") return { beats: { "beat-1": [section(obligations.map((obligation) => obligation.id))], "beat-2": [section(obligations.map((obligation) => obligation.id), "beat-2")] } };
     return { suggestions: [] };
   });
   const run = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
@@ -6199,10 +6374,11 @@ Deno.test("successful obligation repair enters novel expansion instead of comple
   await run();
   await run();
   await run();
-  assertEquals(db.row.status, "pending", JSON.stringify({ actions, error: db.row.error, diagnostics: db.row.diagnostics, planningState: db.row.planning_state }));
-  assertEquals(db.row.planning_state.phase, "expansion");
-  assertEquals(db.row.status === "completed", false);
-  assertEquals(actions.slice(0, 3), ["outline-suggestions", "outline-semantic-verification", "outline-obligation-repair"]);
+  assertEquals(db.row.status, "completed", db.row.error ?? "no error");
+  assertEquals(db.row.planning_state.phase, "completed");
+  assertEquals(actions.slice(0, 3), ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global"]);
+  assertEquals(actions.some((action) => action.includes("repair")), false);
+  assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
 });
 
 Deno.test("provider billing unavailable during allocation bypasses retry and fails safely", async () => {
@@ -6747,20 +6923,6 @@ Deno.test("provider output exhaustion reaches terminal run state for each produc
       action: "outline-suggestions",
       failureStage: "outline_generation",
     },
-    {
-      name: "obligation repair",
-      body: fullBody,
-      row: {
-        ...checkpointedWorkerRow(fullBody),
-        suggestions: [],
-        planning_state: { version: 2, phase: "obligation_repair_pending", nextAction: "obligation-repair", allocationEntries: [
-          ["beat-1", { minSections: 1, rationale: "fixture" }],
-          ["beat-2", { minSections: 1, rationale: "fixture" }],
-        ] },
-      },
-      action: "outline-obligation-repair",
-      failureStage: "obligation_repair_generation",
-    },
   ];
 
   for (const testCase of cases) {
@@ -7152,11 +7314,11 @@ Deno.test("PR #798 evidence-only semantic checkpoint uses one verifier call, no 
     db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
     billableLLM: billable as any, scheduleContinuation: async () => {},
   });
-  assertEquals(actions, ["outline-semantic-repair-batch"]);
+  assertEquals(actions, [], "retired semantic repair must not run a paid evidence-only re-verification");
   assertEquals(db.row.status, "completed", JSON.stringify({error: db.row.error, diagnostics: db.row.diagnostics}));
   assertEquals(db.row.suggestions, original);
-  assertEquals(db.row.diagnostics.semanticEvidenceReverification.attempted, true);
-  assertEquals(db.row.diagnostics.semanticEvidenceReverification.unresolvedCount, 0);
+  assertEquals(db.row.diagnostics.legacySemanticRepairCheckpointRecovered, true);
+  assertEquals(db.row.diagnostics.semanticVerification.unsatisfied, failures);
 });
 
 Deno.test("semantic verifier preserves a provider false judgment even with grounded evidence", async () => {
@@ -7294,11 +7456,12 @@ Deno.test("worker persists selected original suggestions with authoritative orig
   await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
     db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {}, billableLLM: billable as any, scheduleContinuation: async () => {},
   });
-  assertEquals(actions, ["outline-semantic-verification"]);
+  assertEquals(actions, [], "old paid repair checkpoints must be recovered without another verification");
   assertEquals(db.row.status, "completed");
   assertEquals(db.row.suggestions, original);
   assertEquals(db.row.diagnostics.semanticVerification, originalVerification);
-  assertEquals(db.row.diagnostics.semanticRepairRejectedVerification.unsatisfied, [{ beatID: "beat-2", obligationID: "authored_beat_requirement", reason: "repair introduced an unresolved beat requirement" }]);
+  assertEquals(db.row.diagnostics.legacySemanticRepairCheckpointRecovered, true);
+  assertEquals(db.row.diagnostics.semanticRepairRejectedVerification, undefined);
 });
 
 Deno.test("creative-fidelity verifier rejects procedural drift and routes it to the affected beat", async () => {

@@ -32,6 +32,7 @@ import {
 } from "./_prompt_context.ts";
 import {
   type RecipeObligation,
+  type PremiseComponent,
   deriveRecipeObligations,
   obligationCoverage,
   renderRecipeObligations,
@@ -936,6 +937,8 @@ export interface StoryMaterialEnrichment {
   sourcePromptPackID: string;
   sourcePromptPackName: string;
   rationale: string;
+  /** Independent, exact-quote-backed commitments extracted from the author's summary. */
+  premiseComponents?: PremiseComponent[]; // absent in already-paid legacy checkpoints
   characters: StoryMaterialItem[];
   antagonisticForces: StoryMaterialItem[];
   locations: StoryMaterialItem[];
@@ -969,6 +972,16 @@ const STORY_MATERIAL_ITEM_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+const PREMISE_COMPONENT_SCHEMA = {
+  type: "object",
+  properties: {
+    sourceQuote: { type: "string", minLength: 3, maxLength: 550 },
+    requirement: { type: "string", minLength: 5, maxLength: 650 },
+  },
+  required: ["sourceQuote", "requirement"],
+  additionalProperties: false,
+} as const;
+
 export const STORY_MATERIAL_ENRICHMENT_SCHEMA = {
   type: "object",
   properties: {
@@ -979,9 +992,10 @@ export const STORY_MATERIAL_ENRICHMENT_SCHEMA = {
     // intentionally absent from this strict provider schema; OpenAI requires
     // every declared property to appear in `required`.
     rationale: { type: "string", minLength: 1, maxLength: 2000 },
+    premiseComponents: { type: "array", maxItems: 16, items: PREMISE_COMPONENT_SCHEMA },
     ...Object.fromEntries(STORY_MATERIAL_CATEGORIES.map((category) => [category, { type: "array", maxItems: 50, items: STORY_MATERIAL_ITEM_SCHEMA }])),
   },
-  required: ["schema", "version", "format", "rationale", ...STORY_MATERIAL_CATEGORIES],
+  required: ["schema", "version", "format", "rationale", "premiseComponents", ...STORY_MATERIAL_CATEGORIES],
   additionalProperties: false,
 } as const;
 
@@ -1092,6 +1106,59 @@ export function normalizeProviderStoryMaterialItemIDs(value: unknown): unknown {
   return normalized;
 }
 
+/** Enforce source-literal premise extraction rather than hallucinated requirements. */
+export function validatePremiseComponents(raw: unknown, projectSummary: string): PremiseComponent[] {
+  if (!Array.isArray(raw) || raw.length > 16) throw new Error("premiseComponents must contain at most 16 items");
+  const summary = projectSummary.trim();
+  if (!summary && raw.length > 0) throw new Error("premiseComponents cannot invent a premise without an authored summary");
+  if (summary && raw.length === 0) throw new Error("premiseComponents omitted the authored summary");
+  const occupied = new Set<string>();
+  const covered = new Uint8Array(summary.length);
+  const components: PremiseComponent[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("invalid premise component");
+    const row = item as Record<string, unknown>;
+    const sourceQuote = typeof row.sourceQuote === "string" ? row.sourceQuote.trim() : "";
+    const requirement = typeof row.requirement === "string" ? row.requirement.trim() : "";
+    if (sourceQuote.length < 3 || sourceQuote.length > 550 || requirement.length < 5 || requirement.length > 650 ||
+        !summary.includes(sourceQuote) || occupied.has(sourceQuote)) {
+      throw new Error("premise component has a duplicate, missing, or invented source quote or invalid requirement");
+    }
+    occupied.add(sourceQuote);
+    const offset = summary.indexOf(sourceQuote);
+    for (let i = offset; i < offset + sourceQuote.length; i++) covered[i] = 1;
+    components.push({ sourceQuote, requirement });
+  }
+  if (summary.length >= 180 && components.length < 2) {
+    throw new Error("multi-part project summary cannot be represented by one premise obligation");
+  }
+  // Prevent a partial extraction from quietly erasing a major promise.
+  // Ignore whitespace/punctuation between contiguous authored phrases.
+  const materialChars = [...summary].map((letter, i) => /[\p{L}\p{N}]/u.test(letter) ? i : -1).filter((i) => i >= 0);
+  const coverage = materialChars.length ? materialChars.filter((i) => covered[i]).length / materialChars.length : 1;
+  if (coverage < 0.7) throw new Error("premiseComponents failed to cover the authored project summary");
+  // Whole-paragraph coverage can still conceal an omitted final promise. Require
+  // every substantive sentence, not merely the average, to survive extraction.
+  const sentences = [...summary.matchAll(/[^.!?]+[.!?]?/g)];
+  for (const sentence of sentences) {
+    const start = sentence.index ?? 0;
+    const text = sentence[0];
+    const positions = [...text].map((letter, offset) => /[\p{L}\p{N}]/u.test(letter) ? start + offset : -1).filter((i) => i >= 0);
+    if (positions.length < 12) continue;
+    if (positions.filter((i) => covered[i]).length / positions.length < 0.7) {
+      throw new Error("premiseComponents left a substantive sentence or ending promise uncovered");
+    }
+    if (text.length >= 130 && /,\s*(?:and|but|while|though)\b/i.test(text)) {
+      const distinct = components.filter((component) => {
+        const at = summary.indexOf(component.sourceQuote);
+        return at < start + text.length && at + component.sourceQuote.length > start;
+      });
+      if (distinct.length < 2) throw new Error("compound premise sentence was not decomposed into distinct commitments");
+    }
+  }
+  return components;
+}
+
 export function validateStoryMaterialEnrichment(value: unknown, options: { allowMissingProvenance?: boolean; recipe?: CanonicalRecipeEnvelope } = {}): StoryMaterialEnrichment {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("story material enrichment must be an object");
   const candidate = value as Record<string, unknown>;
@@ -1100,6 +1167,14 @@ export function validateStoryMaterialEnrichment(value: unknown, options: { allow
   if (typeof candidate.rationale !== "string" || candidate.rationale.trim() === "") throw new Error("story material enrichment requires a rationale");
   const provenanceFields = ["sourceRecipeHash", "sourceRecipeVersion", "sourcePromptPackID", "sourcePromptPackName"];
   if (!options.allowMissingProvenance && provenanceFields.some((field) => typeof candidate[field] !== "string" && field !== "sourceRecipeVersion" || field === "sourceRecipeVersion" && !Number.isInteger(candidate[field]))) throw new Error("story material enrichment is missing server-owned recipe provenance");
+  // A missing field belongs to a pre-change checkpoint: keep its paid IDs.
+  if (candidate.premiseComponents !== undefined) {
+    if (options.recipe) validatePremiseComponents(candidate.premiseComponents, String(options.recipe.project?.summary ?? ""));
+    else if (!Array.isArray(candidate.premiseComponents) || candidate.premiseComponents.some((item: any) =>
+      !item || typeof item.sourceQuote !== "string" || typeof item.requirement !== "string")) {
+      throw new Error("premiseComponents is malformed");
+    }
+  }
   const handles = options.recipe ? recipeMaterialHandles(options.recipe) : null;
   const ids = new Set<string>();
   for (const category of STORY_MATERIAL_CATEGORIES) {
@@ -1175,6 +1250,9 @@ Do not unnecessarily sanitize or dilute authored adult intensity. If the recipe 
 
 ## Invent distinctive experiences
 Give the reader the on-page encounters, actions, emotional consequences, absurdities, and discoveries promised by the author's recipe. Events should follow from choices and relationships, not from the convenience of a plot device. Let information matter through what it makes people do. Quiet, intricate, realistic, or investigative experiences remain entirely valid when the author actually wants them; intensity and originality come from the recipe, not a universal genre preference.
+
+## Decompose the AUTHOR'S project summary before inventing
+The premiseComponents array is not speculative enrichment: extract every independent factual setup, causal event, character transformation, and consequential promise from recipe.project.summary. Use the author's exact contiguous words as sourceQuote (a substring of the original summary) and a concise, faithful requirement statement for each component. Split compound sentences into independent commitments; do not collapse a national/social or humanity-scale consequence into one generic "danger" or "survival" obligation. Cover the substantive meaning of the ENTIRE summary, including its last clause, rather than just its first incident. Do not add invented claims, force an unrequested ending, or elevate a prompt-pack title into an authored event. A multi-book-scale promise must be materially advanced in the current book, not necessarily fully resolved: that choice belongs to architecture and book planning. Keep authored components separate from optional source=planner categories. Return [] when there is no authored summary.
 
 ## Build a Distinctive Narrative Engine
 Before inventing supporting developments, identify the particular experiences, tensions, surprises, and unresolved questions promised by the author's recipe. Build from characters' desires, contradictions, relationships, decisions, and interactions with the world. Escalation means their choices produce increasingly consequential and distinctive experiences, not merely a larger version of the same obstacle. Support a full ${format}-scale story with substantially different dramatic developments, rather than expanding one incident into a chain of logistical steps.
@@ -2896,9 +2974,8 @@ export function buildPrompt(
   storyArchitecture?: StoryArchitecture,
 ): { system: string; user: string } {
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
-  // Allocation controls section quantity and container sizing, not plot choice.
-  // Keep its saved rationale for diagnostics, but never promote the allocator's
-  // proposed scenes, enemies, or ending mechanism into the outline prompt.
+  // A recipe-grounded causal architecture now precedes allocation; its selected
+  // beat rationales are intentionally passed to the global outline generator.
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
       const beat = req.arcTemplate.beats.find((b) => b.id === beatId);
@@ -2915,14 +2992,14 @@ export function buildPrompt(
     })
     .join("\n");
   const allocationDirective = isNovel
-    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement; it does not prescribe events, antagonists, missions, locations, or an ending mechanism. Choose the narrative trajectory from the authored recipe and enrichment material while meeting the Story Arc's requirements. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Match the planned section container and narrative scale for each ordered named slot. When typed slots are present, return a JSON object of sections per beat keyed by those slot names; every slot has exactly one allowed container type. The allocator already priced each planned section at its actual midpoint. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
+    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-grounded narrative commitments selected BEFORE sizing. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Match the planned section container and narrative scale for each ordered named slot. When typed slots are present, return a JSON object of sections per beat keyed by those slot names; every slot has exactly one allowed container type. The allocator already priced each planned section at its actual midpoint. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
     : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
     const obligations = contract.semanticObligations.length > 0
       ? `; semantic obligations=${contract.semanticObligations.map((obligation) => obligation.id).join(", ")}`
       : "";
-    return `- ${beat.label} (${beat.role}): authored requirement=${compactArcNarrativeText(beat.description) || "(none supplied)"}; allowed functions=${contract.allowedFunctions.join(", ")}; phase=${contract.phaseDirection}; ${contract.forbidsNewPrimaryConflict ? "do not introduce a new primary conflict" : "major escalation is allowed"}${obligations}`;
+    return `- ${beat.label} (${beat.role}): authored requirement=${compactArcNarrativeText(beat.description) || "(none supplied)"}; required functions=${contract.requiredFunctions.join(", ") || "(none)"}; allowed functions=${contract.allowedFunctions.join(", ")}; phase=${contract.phaseDirection}; ${contract.forbidsNewPrimaryConflict ? "do not introduce a new primary conflict" : "major escalation is allowed"}${obligations}`;
   }).join("\n");
   const semanticObligationLines = req.arcTemplate.beats.flatMap((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
@@ -2986,6 +3063,10 @@ ${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
 The recipe is the governing creative brief, not metadata to distribute as section tags. Required recipe obligations outrank generic outline habits, filler, and even the desire for evenly balanced Story Arc coverage. Materially dramatize the premise, selected characters, relationships, story spark, themes, setting, tone/audience guidance, and ending intent wherever the recipe supplies them. A section may carry a recipe ID only when its Section Contract actually advances that requirement; never tag a section merely to make coverage counts pass. Planner-generated material may be rejected or replaced when it creates genre drift or contradicts the recipe; unused planner material is not a narrative quota. A character can transform without becoming morally better; a quest can remain chaotic, accidental, selfish, or destructive; a revelation need not provide neat explanatory closure; and a resolution settles the relevant dramatic question without requiring every mystery or conflict to be resolved. Before finalizing, audit the whole outline against every required obligation and redesign weak or generic sections until the recipe visibly drives the plot, escalation, relationship movement, and payoff.
 Every defining behavior, event, or conflict explicitly specified by the author must have a concrete realization somewhere in the outline. At least one relevant Section Contract must require that realization through its dramaticEvent, resultingChange, or terminalState. Mentioning it in a summary, labeling a character with the trait, or assigning a recipe requirement ID does not constitute realization. Preserve creative freedom over how and when the requirement is realized.
 
+## First-pass whole-book obligations (no narrative repair later)
+The planningContext.premiseComponents are independent AUTHOR-BASED commitments extracted from the original project summary. EACH component needs its own concrete causal realization or meaningful current-volume advancement, not a single generic plot win counted for the entire premise. If a component promises country-scale transformation or humanity-scale consequence, a small local rescue is not automatically equivalent; connect the book's achieved outcome credibly to the larger trajectory without forcing all multi-book promises to conclude now. Preserve these commitments even when optional planner material suggests a more convenient narrower plot.
+Before writing any sections, assign each author-required behavior, event, and story non-negotiable to an appropriate concrete dramatic development across the COMPLETE outline. Story-wide requirements cannot be met by repeating descriptive labels in the opening beat: distribute recurring behaviors and relationships across different chapter movements as the recipe warrants. For every selected requirement, construct the actual on-page action and its consequence in dramaticEvent and resultingChange or terminalState, not solely summary or tags. Ground adult tone and intensity in the author's recipe without imposing it on unrelated genres. Verify internally that every requirement has at least one material section-contract realization (and that recurring or quantified requirements have multiple distinct realizations). For any required climax or resolution function, explicitly declare that dramaticFunction on the correct Story Arc beat and give it an irreversible terminal state. All of this must be right in the FIRST provider response; there is no subsequent automatic narrative repair pass.
+
 ## Character-Driven Dramatic Selection
 When multiple developments satisfy the recipe, Story Arc, continuity, and section contract, choose the most entertaining, original, surprising, and dramatically compelling option. Let authored and invented characters' distinctive personalities, desires, flaws, obsessions, relationships, and unpredictable decisions generate events: supporting characters should create complications, change relationships, trigger reversals, and produce lasting consequences rather than serving as informants, exposition, transportation, or other functional devices. When the authored genre and tone support it, favor outrageous encounters, reckless decisions, dark humor, grotesque absurdity, dangerous confrontations, unexpected reversals, and escalating chaos over conventional investigations, administrative discoveries, tactical missions, or procedural problem-solving. Preserve intended adult intensity without sanitizing it; make the climax emerge from the protagonists' distinctive choices and behavior and deliver the premise's consequential outcome rather than merely completing a generic tactical objective. Do not force randomness, spectacle, or artificial chaos into restrained stories. Preserve causality, continuity, and authorial intent.
 
@@ -3006,7 +3087,7 @@ The JSON planning context contains the authoritative obligations exactly once.
 
 ## STORY NON-NEGOTIABLE MUST-DOS (acceptance criteria)
 ${renderStoryNonNegotiableMustDos(obligations)}
-These are mandatory acceptance criteria, not descriptive tags. Reserve concrete sections/events for every must-do. If a must-do contains a number, treat that number as the minimum count of distinct realized events, not prose flavor. Only assign a must-do ID when the section's dramaticEvent, resultingChange, or terminalState materially realizes the stated requirement; never attach the ID to an unrelated section to make coverage appear complete. Before finalizing, audit every must-do against the actual section contracts. If one is not realized, leave it unsatisfied for the server's repair path rather than falsely labeling an unrelated section.
+These are mandatory acceptance criteria, not descriptive tags. Reserve concrete sections/events for every must-do. If a must-do contains a number, treat that number as the minimum count of distinct realized events, not prose flavor. Only assign a must-do ID when the section's dramaticEvent, resultingChange, or terminalState materially realizes the stated requirement; never attach the ID to an unrelated section to make coverage appear complete. Before finalizing, audit every must-do against the actual section contracts and redesign the relevant section BEFORE returning this single response. If one is still unrealized, never falsely label an unrelated section to pass validation.
 
 ## Compact planning context
 Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation. Planner categories are possible story ingredients, not an already chosen plot. The outliner may use, combine, adapt, or discard any invented candidate, including recurring invented groups and mechanisms; frequency across categories does not make it canon. Let the authored recipe and the characters' distinctive choices select the causal trajectory. Prefer a concrete recipe-backed or already-accepted detail over a generic phrase, but do not promote a planner proposal to canon merely because it is specific.
@@ -3516,7 +3597,8 @@ Allocate sections according to distinct dramatic developments, not the number of
 ${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
 
 ## Recipe realization priority
-Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale. Do not let the arc's conventional genre associations dictate the kinds of scenes being allocated.
+Treat planningContext.premiseComponents as DISTINCT, authored requirements, not optional enrichment. Choose how this current volume establishes, advances, or resolves each without substituting one generic local victory for multiple larger author promises. Map each component to a specific beat's causal movement before assigning chapter counts; a series-wide promise may remain unresolved if this book makes observable, irreversible progress toward it. Preserve every component across the handoff to section generation.
+Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. In each beat rationale, reserve appropriate, DISTINCT dramatic developments for recipe story non-negotiables, including recurring experiences and adult intensity where authored. Do not pack all story-wide obligations into the first beat or treat them as decorative labels; chapter generation will NOT have a narrative repair pass. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale. Do not let the arc's conventional genre associations dictate the kinds of scenes being allocated.
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
@@ -4261,6 +4343,7 @@ export type SemanticVerificationResult = {
 function semanticFailureIdentity(failure: { beatID: string; obligationID: string }): string {
   const { obligationID } = failure;
   const isStoryWide = obligationID === CREATIVE_FIDELITY_OBLIGATION ||
+    obligationID.startsWith("premise_component_") ||
     obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION ||
     obligationID.startsWith("story_non_negotiable_");
   return isStoryWide ? `story:${obligationID}` : `beat:${failure.beatID}:${obligationID}`;
@@ -4337,6 +4420,7 @@ export function semanticVerificationInput(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
   recipe?: CanonicalRecipeEnvelope,
+  premiseComponents: PremiseComponent[] = [],
 ): Record<string, unknown> {
   const requirement = intimacyRequirement({ arcTemplate: template as ArcTemplateBlob, recipe: recipe as CanonicalRecipeEnvelope });
   const eligible = new Set((template.intimacyMilestoneRoles ?? []));
@@ -4357,7 +4441,16 @@ export function semanticVerificationInput(
         terminalState: section.terminalState ?? "",
       })),
     })),
-    arcWideObligations: [...(hasCreativeFidelityDirectives(recipe) ? [{
+    arcWideObligations: [...premiseComponents.map((component, index) => ({
+      obligationID: `premise_component_${index}`,
+      instruction: `Independently assess the authored promise "${component.sourceQuote}". Required current-book realization: ${component.requirement}. The outline must materially ESTABLISH or ADVANCE this distinct premise commitment through concrete causally consequential dramatic events, not just name it. A genuine series-level payoff need not be fully resolved this volume, but a small local win is insufficient if no credible causal connection to the larger promised transformation is established. Do not infer that a mere rescue already saves humanity or transforms society. Do not require an unrequested final-series ending.`,
+      sections: suggestions.map((section, sectionIndex) => ({
+        sectionIndex, beatID: section.storyArcBeatID,
+        dramaticEvent: section.dramaticEvent ?? "",
+        resultingChange: section.resultingChange ?? "",
+        terminalState: section.terminalState ?? "",
+      })),
+    })), ...(hasCreativeFidelityDirectives(recipe) ? [{
       obligationID: CREATIVE_FIDELITY_OBLIGATION,
       instruction: "Assess the whole outline's creative fidelity to the canonical recipe. Decide whether the sequence of actual dramatic events delivers the author's specified premise, character behavior, relationships, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience, rather than merely mentioning those ingredients. Treat planner-generated enrichment as provisional: reject only when it materially redirects the story into a different narrative experience, and accept unusual, destructive, morally compromised, or mixed-genre events when they remain faithful to the recipe. If rejecting, identify a concrete section and quote the field that demonstrates the drift.",
       sections: suggestions.map((section, sectionIndex) => ({
@@ -4400,16 +4493,18 @@ export async function verifyStoryArcSemantics(
   billableCall: SuggestionLLMCall,
   recipe?: CanonicalRecipeEnvelope,
   action = "outline-semantic-verification",
+  premiseComponents: PremiseComponent[] = [],
 ): Promise<SemanticVerificationResult> {
-  const input = semanticVerificationInput(suggestions, template, recipe);
+  const input = semanticVerificationInput(suggestions, template, recipe, premiseComponents);
   const raw = await billableCall(
-    "You are an independent semantic verifier. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and the required whole-outline creative_fidelity assessment, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. For creative_fidelity, evaluate the sequence of dramatic events against the complete canonical recipe's premise, populated character and relationship directives, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience; do not pass merely because names or keywords appear. This is a material-drift review, not a perfection or style score: a coherent, usable outline with minor weaknesses, uneven emphasis, legitimate mixed-genre scenes, or editorial opportunities is satisfied. Planner-generated candidates are provisional and may be discarded. Accept procedural or institutional material when the recipe makes it central, and reject it only when it fundamentally redirects the authored story or omits essential creative commitments needed for a usable outline. If rejecting, provide a grounded quote from the section that demonstrates the material drift. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
+    "You are an independent semantic verifier. First assess EVERY independently extracted authored premise component across the full outline. A single generic local success must not mask the loss of a larger causal promise (such as changed institutions or humanity-scale consequences). For a multi-book promise, accept concrete irreversible advancement this volume without requiring final-series resolution. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and the required whole-outline creative_fidelity assessment, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. For creative_fidelity, evaluate the sequence of dramatic events against the complete canonical recipe's premise, populated character and relationship directives, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience; do not pass merely because names or keywords appear. This is a material-drift review, not a perfection or style score: a coherent, usable outline with minor weaknesses, uneven emphasis, legitimate mixed-genre scenes, or editorial opportunities is satisfied. Planner-generated candidates are provisional and may be discarded. Accept procedural or institutional material when the recipe makes it central, and reject it only when it fundamentally redirects the authored story or omits essential creative commitments needed for a usable outline. If rejecting, provide a grounded quote from the section that demonstrates the material drift. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
     action,
   );
   const expectedObligationIDs = [
+    ...premiseComponents.map((_, i) => `arc-wide:premise_component_${i}`),
     ...(hasCreativeFidelityDirectives(recipe) ? ["arc-wide:" + CREATIVE_FIDELITY_OBLIGATION] : []),
     ...template.beats.flatMap((beat) =>
     verificationObligationsForBeat(beat, template.name).map((obligation) => `${beat.id}:${obligation.id}`))];
@@ -4442,6 +4537,32 @@ export async function verifyStoryArcSemantics(
   const beats: SemanticVerificationResult["beats"] = [];
   const unsatisfied: SemanticVerificationResult["unsatisfied"] = [];
   const allSectionIndexes = suggestions.map((_, index) => index);
+  for (const [index, component] of premiseComponents.entries()) {
+    const obligationID = `premise_component_${index}`;
+    const candidate = rawArcWide.find((entry: any) => String(entry?.obligationID ?? "") === obligationID);
+    const sectionIndex = Number(candidate?.sectionIndex);
+    const quote = normalizeEvidenceText(String(candidate?.quote ?? ""));
+    const grounding = resolveSemanticEvidenceCitation(
+      suggestions, sectionIndex, quote,
+      ["dramaticEvent", "resultingChange", "terminalState"], allSectionIndexes,
+    );
+    const grounded = Boolean(grounding?.field);
+    const satisfied = Boolean(candidate?.satisfied) && grounded;
+    const reason = candidate?.satisfied && !grounded
+      ? "provider premise-component evidence quote was not grounded in a Section Contract field"
+      : String(candidate?.reason ?? `premise component was not independently verified: ${component.requirement}`);
+    arcWideObligations.push({
+      obligationID, satisfied,
+      sectionIndex: grounding?.sectionIndex ?? (Number.isInteger(sectionIndex) ? sectionIndex : -1),
+      field: grounding?.field ?? "dramaticEvent", quote: grounding?.quote ?? quote, reason,
+    });
+    if (!satisfied) {
+      unsatisfied.push({
+        beatID: suggestions[grounding?.sectionIndex ?? sectionIndex]?.storyArcBeatID ?? "__story_arc__",
+        obligationID, reason,
+      });
+    }
+  }
   if (hasCreativeFidelityDirectives(recipe)) {
     const creativeRaw = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === CREATIVE_FIDELITY_OBLIGATION);
     const creativeSectionIndex = Number(creativeRaw?.sectionIndex);
@@ -5918,7 +6039,7 @@ export async function runSuggestionJob(
     };
 
     const provenance = await recipeProvenance(body.recipe);
-    const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
+    let recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
 
     const completeValidatedOutline = async (
       completedSuggestions: Suggestion[],
@@ -6106,6 +6227,10 @@ export async function runSuggestionJob(
         ) as StoryMaterialEnrichment,
       };
     }
+    // Resume from this run's persisted authored premise decomposition.
+    if (body.storyMaterialEnrichment?.premiseComponents) {
+      recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>, body.storyMaterialEnrichment.premiseComponents);
+    }
     const persistedSemanticSuggestions = Array.isArray(claimedRun.suggestions)
       ? claimedRun.suggestions as Suggestion[]
       : [];
@@ -6127,22 +6252,27 @@ export async function runSuggestionJob(
       }
       const semanticCoverage = obligationCoverage([...(body.existingSections ?? []), ...suggestions], recipeObligations);
       if (semanticCoverage.missingRequired.length > 0) {
-        planningState = { ...planningState, phase: "obligation_repair_pending", nextAction: "obligation-repair" };
+        // A missing deterministic recipe obligation is a first-pass defect,
+        // never permission to invent a new chapter after the story was fixed.
+        // The completion gate reports the typed failure and preserves the paid
+        // first-pass suggestions for inspection; no narrative call is queued.
         diagnostics = {
           ...diagnostics,
-          stage: "obligation_repair_pending",
           recipeObligationCoverage: semanticCoverage.covered,
           missingRequiredRecipeObligations: semanticCoverage.missingRequired.map((obligation) => obligation.id),
+          automaticNarrativeRepair: "disabled",
         };
-        await updateRun({ suggestions, planning_state: planningState, diagnostics });
-        throw new SuggestionWorkerYield();
+        await updateRun({ suggestions, diagnostics });
       }
       await postValidatedOutline(suggestions, completionWarnings);
     };
     if (planningState.nextAction === "semantic-verification") {
       let verification: SemanticVerificationResult | undefined;
       try {
-        verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
+        verification = await verifyStoryArcSemantics(
+          persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe,
+          "outline-semantic-verification", body.storyMaterialEnrichment?.premiseComponents ?? [],
+        );
       } catch (error) {
         recordSemanticWarning(`Semantic verification was unavailable; continuing with the best structural outline: ${error instanceof Error ? error.message : String(error)}`);
         planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
@@ -6152,134 +6282,57 @@ export async function runSuggestionJob(
         return;
       }
       diagnostics = { ...diagnostics, stage: "semantic_verified", semanticVerification: verification };
-      if (verification.unsatisfied.length > 0) {
-        planningState = {
-          ...planningState,
-          phase: "semantic_repair_pending",
-          nextAction: "semantic-repair",
-          semanticRepairFailures: verification.unsatisfied,
-          semanticRepairOriginalSuggestions: persistedSemanticSuggestions,
-        };
-        diagnostics = { ...diagnostics, stage: "semantic_repair_pending", semanticRepairFailures: verification.unsatisfied };
-        await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
-        throw new SuggestionWorkerYield();
-      }
-      await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: { ...planningState, phase: "semantic_verified", nextAction: "semantic-completion" }, diagnostics });
-      await continueAfterSemanticVerification(persistedSemanticSuggestions);
-      return;
-    }
-    if (planningState.nextAction === "semantic-repair") {
-      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
-        ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
-        : persistedSemanticSuggestions;
-      const semanticFailures = Array.isArray(planningState.semanticRepairFailures)
-        ? planningState.semanticRepairFailures as Array<{ beatID: string; obligationID: string; reason: string }>
-        : [];
-      // Evidence-only failures must not spend a narrative repair call rewriting
-      // a sound outline. Reuse the already budgeted repair dispatch to reverify
-      // the identical paid sections, then preserve them even if evidence remains
-      // ungrounded. The retry cannot silently claim those obligations passed.
-      if (semanticFailures.length > 0 && semanticFailures.every((failure) => isSemanticEvidenceGroundingFailure(failure.reason))) {
-        let verification: SemanticVerificationResult | undefined;
-        try {
-          verification = await verifyStoryArcSemantics(
-            originalSemanticSuggestions, body.arcTemplate, billableCall, body.recipe,
-            "outline-semantic-repair-batch",
-          );
-          diagnostics = {
-            ...diagnostics,
-            semanticVerification: verification,
-            semanticEvidenceReverification: {
-              attempted: true,
-              originalFailureCount: semanticFailures.length,
-              unresolvedCount: verification.unsatisfied.length,
-              originalOutlinePreserved: true,
-            },
-          };
-          if (verification.unsatisfied.length > 0) {
-            recordSemanticWarning(
-              `Semantic evidence remained unresolved after verification of the unchanged outline (${verification.unsatisfied.length} obligation(s)); original story preserved without narrative repair.`,
-            );
-          }
-        } catch (error) {
-          recordSemanticWarning(`Semantic evidence re-verification was unavailable; original story preserved without narrative repair: ${error instanceof Error ? error.message : String(error)}`);
-          diagnostics = {
-            ...diagnostics,
-            semanticEvidenceReverification: { attempted: true, unavailable: true, originalOutlinePreserved: true },
-          };
-        }
-        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_verified" };
-        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(originalSemanticSuggestions);
-        return;
-      }
-      let repaired = persistedSemanticSuggestions;
-      try {
-        repaired = await repairStoryArcSemanticObligations(
-          persistedSemanticSuggestions,
-          body.arcTemplate,
-          semanticFailures.filter((failure) => !isSemanticEvidenceGroundingFailure(failure.reason)),
-          billableCall,
-          recipeObligations,
-          body.recipe,
-        );
-      } catch (error) {
-        recordSemanticWarning(`Semantic repair was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
-        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_repair_warning" };
-        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(originalSemanticSuggestions);
-        return;
-      }
-      planningState = { ...planningState, phase: "semantic_reverification_pending", nextAction: "semantic-reverification", semanticRepairOriginalSuggestions: originalSemanticSuggestions };
-      const { semanticRepairProviderCheckpoint: _semanticRepairProviderCheckpoint, ...diagnosticsAfterRepair } = diagnostics;
-      diagnostics = { ...diagnosticsAfterRepair, stage: "semantic_reverification_pending" };
-      await updateRun({ suggestions: repaired, planning_state: planningState, diagnostics });
-      throw new SuggestionWorkerYield();
-    }
-    if (planningState.nextAction === "semantic-reverification") {
-      const originalSemanticSuggestions = Array.isArray(planningState.semanticRepairOriginalSuggestions)
-        ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
-        : persistedSemanticSuggestions;
-      const originalVerification = diagnostics.semanticVerification as SemanticVerificationResult | undefined;
-      let verification: SemanticVerificationResult | undefined;
-      try {
-        verification = await verifyStoryArcSemantics(persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe);
-      } catch (error) {
-        recordSemanticWarning(`Semantic re-verification was unavailable; continuing with the pre-repair outline: ${error instanceof Error ? error.message : String(error)}`);
-        planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-        diagnostics = { ...diagnostics, stage: "semantic_reverification_warning", semanticRepairFallback: "original_outline_provider_unavailable" };
-        await updateRun({ suggestions: originalSemanticSuggestions, planning_state: planningState, diagnostics });
-        await continueAfterSemanticVerification(originalSemanticSuggestions);
-        return;
-      }
-      const selectedSuggestions = chooseBestSemanticOutline(originalSemanticSuggestions, persistedSemanticSuggestions, originalVerification, verification);
-      const selectedRepaired = selectedSuggestions === persistedSemanticSuggestions;
-      const selectedVerification = selectedRepaired ? verification : originalVerification;
+      const unresolved = verification.unsatisfied.length;
+      const notice = unresolved > 0
+        ? `Independent semantic review found ${unresolved} unresolved requirement(s); no automatic narrative rewrite was made.`
+        : undefined;
       diagnostics = {
         ...diagnostics,
-        stage: "semantic_reverified",
-        // The authoritative verification must describe the persisted outline.
-        semanticVerification: selectedVerification,
-        ...(selectedRepaired ? {} : {
-          semanticRepairFallback: "original_outline_preserved_no_objective_improvement",
-          semanticRepairOriginalVerification: originalVerification,
-          semanticRepairRejectedVerification: verification,
-          semanticRepairOriginalUnresolved: originalVerification?.unsatisfied.length ?? null,
-          semanticRepairCandidateUnresolved: verification.unsatisfied.length,
-        }),
+        semanticAssessment: unresolved > 0 ? "needs_review" : "passed",
+        semanticUnresolvedCount: unresolved,
+        premiseComponentVerification: {
+          total: body.storyMaterialEnrichment?.premiseComponents?.length ?? 0,
+          unresolved: verification.unsatisfied.filter((issue) => issue.obligationID.startsWith("premise_component_")).map((issue) => issue.obligationID),
+        },
+        automaticNarrativeRepair: "disabled",
       };
-      if (verification.unsatisfied.length > 0) {
-        recordSemanticWarning(
-          selectedRepaired
-            ? `Semantic obligations remained after bounded repair; continuing with the repaired outline (${verification.unsatisfied.length} unresolved).`
-            : `Semantic repair did not objectively improve the outline; preserving the original usable paid draft (${verification.unsatisfied.length} unresolved in the repair candidate).`,
-        );
-      }
       planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
-      await updateRun({ suggestions: selectedSuggestions, planning_state: planningState, diagnostics });
-      await continueAfterSemanticVerification(selectedSuggestions);
+      if (notice) recordSemanticWarning(notice);
+      await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
+      await continueAfterSemanticVerification(persistedSemanticSuggestions, notice ? [notice] : []);
+      return;
+    }
+    // Compatibility only: an old paid run may already be checkpointed in
+    // semantic-repair or semantic-reverification. Retire both dispatches:
+    // restore its saved original narrative and its original verification,
+    // rather than calling another model to rewrite or rejudge the story.
+    if (planningState.nextAction === "semantic-repair" ||
+        planningState.nextAction === "semantic-reverification") {
+      const original = Array.isArray(planningState.semanticRepairOriginalSuggestions)
+        ? planningState.semanticRepairOriginalSuggestions as Suggestion[]
+        : persistedSemanticSuggestions;
+      const previousVerification = diagnostics.semanticRepairOriginalVerification ??
+        diagnostics.semanticVerification;
+      const unsatisfied = previousVerification &&
+        typeof previousVerification === "object" &&
+        Array.isArray((previousVerification as SemanticVerificationResult).unsatisfied)
+        ? (previousVerification as SemanticVerificationResult).unsatisfied.length
+        : null;
+      const notice = unsatisfied === null
+        ? "Retired semantic-repair checkpoint resumed with the original paid outline; existing verification was unavailable."
+        : `Retired semantic-repair checkpoint resumed with the original paid outline (${unsatisfied} semantic finding(s)); no further narrative rewrite.`;
+      planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
+      diagnostics = {
+        ...diagnostics,
+        ...(previousVerification ? { semanticVerification: previousVerification } : {}),
+        automaticNarrativeRepair: "disabled",
+        semanticAssessment: unsatisfied === null ? "unavailable" : unsatisfied > 0 ? "needs_review" : "passed",
+        semanticUnresolvedCount: unsatisfied,
+        legacySemanticRepairCheckpointRecovered: true,
+      };
+      recordSemanticWarning(notice);
+      await updateRun({ suggestions: original, planning_state: planningState, diagnostics });
+      await continueAfterSemanticVerification(original, [notice]);
       return;
     }
     // Runs checkpointed by the old worker must remain recoverable without
@@ -6292,15 +6345,16 @@ export async function runSuggestionJob(
       return;
     }
     if (planningState.nextAction === "obligation-repair") {
-      diagnostics = { ...diagnostics, stage: "obligation_repair_generation" };
-      const repairAllocation = Array.isArray(planningState.allocationEntries)
-        ? new Map<string, Allocation>(planningState.allocationEntries as Array<[string, Allocation]>)
-        : undefined;
-      const repair = await repairRequiredRecipeObligations(Array.isArray(claimedRun.suggestions) ? claimedRun.suggestions as Suggestion[] : [], body, recipeObligations, billableCall, repairAllocation);
-      const missing = repair.missing.map((obligation) => obligation.id);
-      diagnostics = { ...diagnostics, stage: missing.length ? "obligation_repair_failed" : "obligation_repair_complete", recipeObligationCoverage: obligationCoverage([...(body.existingSections ?? []), ...repair.suggestions], recipeObligations).covered, missingRequiredRecipeObligations: missing };
-      if (missing.length) throw new RecipeObligationValidationError(`missing_recipe_obligations: ${missing.join(", ")}`);
-      await postValidatedOutline(repair.suggestions, []);
+      // Old checkpoints still resume their already-paid first-pass outline,
+      // but no longer trigger an additional creative rewrite. The existing
+      // deterministic completion gate will report any missing recipe IDs.
+      diagnostics = {
+        ...diagnostics,
+        automaticNarrativeRepair: "disabled",
+        legacyObligationRepairCheckpointRecovered: true,
+      };
+      await updateRun({ suggestions: persistedSemanticSuggestions, diagnostics });
+      await continueAfterSemanticVerification(persistedSemanticSuggestions);
       return;
     }
     const resume = expansionResumeState(claimedRun);
@@ -6353,7 +6407,7 @@ export async function runSuggestionJob(
         story_material: resumedMaterial,
         diagnostics,
       });
-      const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
+      const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>, resumedMaterial.premiseComponents ?? []);
       let completedSuggestions = resume.suggestions;
       let completionWarnings: string[] = [];
       try {
@@ -6406,7 +6460,14 @@ export async function runSuggestionJob(
         const sufficiency = storyMaterialSufficiency(candidate, body.recipe, requestedStoryMaterialFormat(body));
         if (compatible && sufficiency.sufficient) {
           storyMaterial = candidate;
-          enrichmentDiagnostics = { ...enrichmentDiagnostics, generatedOrReused: "reused", enrichmentCreditCostCharged: 0, sufficiency: sufficiency.sufficient ? "sufficient" : "insufficient", sufficiencyReasons: sufficiency.reasons, itemCountsByCategory: sufficiency.counts, recipeDerivedItemCount: sufficiency.recipeDerivedItemCount, plannerInventedItemCount: sufficiency.plannerInventedItemCount };
+          enrichmentDiagnostics = {
+            ...enrichmentDiagnostics,
+            generatedOrReused: priorDiagnostics.generatedOrReused === "generated" ? "generated" : "reused",
+            enrichmentLoadedFromCheckpoint: true,
+            enrichmentCreditCostCharged: priorDiagnostics.generatedOrReused === "generated"
+              ? Number(priorDiagnostics.enrichmentCreditCostCharged ?? 0)
+              : 0,
+            sufficiency: sufficiency.sufficient ? "sufficient" : "insufficient", sufficiencyReasons: sufficiency.reasons, itemCountsByCategory: sufficiency.counts, recipeDerivedItemCount: sufficiency.recipeDerivedItemCount, plannerInventedItemCount: sufficiency.plannerInventedItemCount };
         } else {
           enrichmentDiagnostics = { ...enrichmentDiagnostics, reuseRejected: compatible ? "insufficient" : "recipe_provenance_mismatch", priorSourceRecipeHash: candidate.sourceRecipeHash, priorSourceRecipeVersion: candidate.sourceRecipeVersion };
         }
@@ -6511,6 +6572,8 @@ export async function runSuggestionJob(
       await updateRun({ story_material: storyMaterial, planning_state: planningState, diagnostics });
     }
     if (!storyMaterial) throw new Error("story material enrichment was not produced");
+    recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>, storyMaterial.premiseComponents ?? []);
+    diagnostics = { ...diagnostics, premiseComponents: storyMaterial.premiseComponents ?? [], premiseComponentCount: storyMaterial.premiseComponents?.length ?? 0 };
     // Loading already persisted enrichment is rehydration, not progress.
     diagnostics = { ...diagnostics, ...enrichmentDiagnostics, stage: "story_material_ready" };
     await updateRun({
