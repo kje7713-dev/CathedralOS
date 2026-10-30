@@ -1456,8 +1456,8 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation."), true);
   assertEquals(system.includes("Whenever practical, relationship and character-arc turns should cause or complicate plot events rather than occurring as isolated character-development scenes."), true);
   assertEquals(system.includes("## Premise outcome and ending causality"), true);
-  assertEquals(system.includes("Before drafting sections, determine the whole story's cause-and-effect trajectory"), true);
-  assertEquals(system.includes("the decisive climax, the irreversible change it causes"), true);
+  assertEquals(system.includes("Before drafting sections, identify the intended reader experience from this recipe's specific genre, tone"), true);
+  assertEquals(system.includes("the decisive climax, the irreversible character/world change it causes"), true);
   assertEquals(system.includes("Do not let a subsequent section restart the same countdown"), true);
   assertEquals(system.includes("must deliver the premise's consequential promise"), true);
   assertEquals(system.includes("Favor specific, memorable events and evocative section titles over functional briefing, regrouping, mapping, or explanatory scenes."), true);
@@ -1503,7 +1503,7 @@ Deno.test("outliner selects character-caused events before deciding its climax o
   assertEquals(system.indexOf("## Character-caused story selection before plot construction") < system.indexOf("## Premise outcome and ending causality"), true);
   assertStringIncludes(system, "preserve it, but still let authored character agency");
   assertStringIncludes(system, "Preserve the author's tone, adult intensity, ambiguity, restrained genres");
-  assertStringIncludes(system, "Before drafting sections, determine the whole story's cause-and-effect trajectory");
+  assertStringIncludes(system, "Before drafting sections, identify the intended reader experience from this recipe's specific genre, tone");
   assertStringIncludes(system, "## Narrative-state continuity");
 });
 
