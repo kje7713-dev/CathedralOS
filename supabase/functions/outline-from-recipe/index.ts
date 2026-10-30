@@ -1137,6 +1137,25 @@ export function validatePremiseComponents(raw: unknown, projectSummary: string):
   const materialChars = [...summary].map((letter, i) => /[\p{L}\p{N}]/u.test(letter) ? i : -1).filter((i) => i >= 0);
   const coverage = materialChars.length ? materialChars.filter((i) => covered[i]).length / materialChars.length : 1;
   if (coverage < 0.7) throw new Error("premiseComponents failed to cover the authored project summary");
+  // Whole-paragraph coverage can still conceal an omitted final promise. Require
+  // every substantive sentence, not merely the average, to survive extraction.
+  const sentences = [...summary.matchAll(/[^.!?]+[.!?]?/g)];
+  for (const sentence of sentences) {
+    const start = sentence.index ?? 0;
+    const text = sentence[0];
+    const positions = [...text].map((letter, offset) => /[\\p{L}\\p{N}]/u.test(letter) ? start + offset : -1).filter((i) => i >= 0);
+    if (positions.length < 12) continue;
+    if (positions.filter((i) => covered[i]).length / positions.length < 0.7) {
+      throw new Error("premiseComponents left a substantive sentence or ending promise uncovered");
+    }
+    if (text.length >= 130 && /,\\s*(?:and|but|while|though)\\b/i.test(text)) {
+      const distinct = components.filter((component) => {
+        const at = summary.indexOf(component.sourceQuote);
+        return at < start + text.length && at + component.sourceQuote.length > start;
+      });
+      if (distinct.length < 2) throw new Error("compound premise sentence was not decomposed into distinct commitments");
+    }
+  }
   return components;
 }
 
@@ -3045,6 +3064,7 @@ The recipe is the governing creative brief, not metadata to distribute as sectio
 Every defining behavior, event, or conflict explicitly specified by the author must have a concrete realization somewhere in the outline. At least one relevant Section Contract must require that realization through its dramaticEvent, resultingChange, or terminalState. Mentioning it in a summary, labeling a character with the trait, or assigning a recipe requirement ID does not constitute realization. Preserve creative freedom over how and when the requirement is realized.
 
 ## First-pass whole-book obligations (no narrative repair later)
+The planningContext.premiseComponents are independent AUTHOR-BASED commitments extracted from the original project summary. EACH component needs its own concrete causal realization or meaningful current-volume advancement, not a single generic plot win counted for the entire premise. If a component promises country-scale transformation or humanity-scale consequence, a small local rescue is not automatically equivalent; connect the book's achieved outcome credibly to the larger trajectory without forcing all multi-book promises to conclude now. Preserve these commitments even when optional planner material suggests a more convenient narrower plot.
 Before writing any sections, assign each author-required behavior, event, and story non-negotiable to an appropriate concrete dramatic development across the COMPLETE outline. Story-wide requirements cannot be met by repeating descriptive labels in the opening beat: distribute recurring behaviors and relationships across different chapter movements as the recipe warrants. For every selected requirement, construct the actual on-page action and its consequence in dramaticEvent and resultingChange or terminalState, not solely summary or tags. Ground adult tone and intensity in the author's recipe without imposing it on unrelated genres. Verify internally that every requirement has at least one material section-contract realization (and that recurring or quantified requirements have multiple distinct realizations). For any required climax or resolution function, explicitly declare that dramaticFunction on the correct Story Arc beat and give it an irreversible terminal state. All of this must be right in the FIRST provider response; there is no subsequent automatic narrative repair pass.
 
 ## Character-Driven Dramatic Selection
@@ -3577,6 +3597,7 @@ Allocate sections according to distinct dramatic developments, not the number of
 ${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
 
 ## Recipe realization priority
+Treat planningContext.premiseComponents as DISTINCT, authored requirements, not optional enrichment. Choose how this current volume establishes, advances, or resolves each without substituting one generic local victory for multiple larger author promises. Map each component to a specific beat's causal movement before assigning chapter counts; a series-wide promise may remain unresolved if this book makes observable, irreversible progress toward it. Preserve every component across the handoff to section generation.
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. In each beat rationale, reserve appropriate, DISTINCT dramatic developments for recipe story non-negotiables, including recurring experiences and adult intensity where authored. Do not pack all story-wide obligations into the first beat or treat them as decorative labels; chapter generation will NOT have a narrative repair pass. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale. Do not let the arc's conventional genre associations dictate the kinds of scenes being allocated.
 
 ## Recipe obligations
