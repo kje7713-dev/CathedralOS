@@ -1143,12 +1143,12 @@ export function validatePremiseComponents(raw: unknown, projectSummary: string):
   for (const sentence of sentences) {
     const start = sentence.index ?? 0;
     const text = sentence[0];
-    const positions = [...text].map((letter, offset) => /[\\p{L}\\p{N}]/u.test(letter) ? start + offset : -1).filter((i) => i >= 0);
+    const positions = [...text].map((letter, offset) => /[\p{L}\p{N}]/u.test(letter) ? start + offset : -1).filter((i) => i >= 0);
     if (positions.length < 12) continue;
     if (positions.filter((i) => covered[i]).length / positions.length < 0.7) {
       throw new Error("premiseComponents left a substantive sentence or ending promise uncovered");
     }
-    if (text.length >= 130 && /,\\s*(?:and|but|while|though)\\b/i.test(text)) {
+    if (text.length >= 130 && /,\s*(?:and|but|while|though)\b/i.test(text)) {
       const distinct = components.filter((component) => {
         const at = summary.indexOf(component.sourceQuote);
         return at < start + text.length && at + component.sourceQuote.length > start;
