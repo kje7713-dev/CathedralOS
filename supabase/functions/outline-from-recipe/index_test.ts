@@ -1057,6 +1057,53 @@ Deno.test("recipe obligation coverage reports missing required items without pro
   assertEquals(richCoverage.missingRequired.map((item) => item.id), ["R2"]);
 });
 
+Deno.test("allocation handoff preserves section budgets without importing plot rationales", () => {
+  const sentinel = "ALLOCATOR_ONLY_GOVERNMENT_RELAY_RESCUE_CLIMAX";
+  for (const format of ["novel", "shortStory"]) {
+    const novel = format === "novel";
+    const firstCounts = { scene: 0, developedScene: 1, setPiece: 0, sceneSequence: 0, chapter: 1 };
+    const finalCounts = { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 1 };
+    const first = {
+      minSections: novel ? 2 : 3,
+      ...(novel ? { containerCounts: firstCounts } : {}),
+      rationale: sentinel,
+    };
+    const last = {
+      minSections: 1,
+      ...(novel ? { containerCounts: finalCounts } : {}),
+      rationale: "ALLOCATOR_ONLY_REPEAT_THE_SAME_FINALE",
+    };
+    const allocation = new Map<string, any>([["beat-1", first], ["beat-2", last]]);
+    const request = { ...sparseRequest, requestedFormat: format } as any;
+    const prompt = buildPrompt(request, allocation);
+    const renamedRationale = new Map<string, any>([
+      ["beat-1", { ...first, rationale: "Allocate room for whatever the author requires." }],
+      ["beat-2", { ...last, rationale: "No specific plot prescribed." }],
+    ]);
+    // Changing only the allocator's speculative plot must not change either
+    // model-facing prompt, for novels or other formats.
+    assertEquals(buildPrompt(request, renamedRationale), prompt, format);
+    assertEquals(prompt.system.includes(sentinel), false, format);
+    assertEquals(prompt.user.includes(sentinel), false, format);
+    assertEquals(prompt.system.includes(last.rationale), false, format);
+    assertEquals(prompt.system.includes(`complete first-pass allocation: 2 sections`), novel, format);
+    assertEquals(prompt.system.includes(`minimum 3 sections`), !novel, format);
+    if (novel) {
+      assertStringIncludes(prompt.system, "planned containers: developedScene=1, chapter=1");
+      assertStringIncludes(prompt.system, "ordered slots: section_001=developedScene, section_002=chapter");
+      assertStringIncludes(prompt.system, "section counts, ordered container types, and Story Arc beat placement");
+    }
+    // This experiment removes only the creative instructions, not the stored
+    // allocation values or the behavioral effect of count/container choices.
+    assertEquals(allocation.get("beat-1")?.rationale, sentinel);
+    const changedCount = new Map<string, any>([
+      ["beat-1", { ...first, minSections: first.minSections + 1 }],
+      ["beat-2", last],
+    ]);
+    assertEquals(buildPrompt(request, changedCount).system === prompt.system, false, format);
+  }
+});
+
 Deno.test("sparse recipe context is preserved for the single comprehensive outline prompt", () => {
   const allocation = new Map([
     ["beat-1", { minSections: 1, rationale: "A concise setup." }],
@@ -1219,9 +1266,10 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation."), true);
   assertEquals(system.includes("Whenever practical, relationship and character-arc turns should cause or complicate plot events rather than occurring as isolated character-development scenes."), true);
   assertEquals(system.includes("## Premise outcome and ending causality"), true);
-  assertEquals(system.includes("The climax must change the central conflict and produce the promised consequential outcome"), true);
-  assertEquals(system.includes("resultingChange state what the climax achieved and terminalState establish the achieved condition"), true);
-  assertEquals(system.includes("The result may be ambiguous, tragic, grotesque, destructive, morally compromised"), true);
+  assertEquals(system.includes("Before drafting sections, determine the whole story's cause-and-effect trajectory"), true);
+  assertEquals(system.includes("the decisive climax, the irreversible change it causes"), true);
+  assertEquals(system.includes("Do not let a subsequent section restart the same countdown"), true);
+  assertEquals(system.includes("must deliver the premise's consequential promise"), true);
   assertEquals(system.includes("Favor specific, memorable events and evocative section titles over functional briefing, regrouping, mapping, or explanatory scenes."), true);
 });
 
@@ -3208,6 +3256,10 @@ Deno.test("character-first enrichment direction precedes situations, escalation,
   assertEquals(characters < engine, true);
   assertEquals(prompt.includes("independent desire"), true);
   assertEquals(prompt.includes("derail the protagonists' plans"), true);
+  assertStringIncludes(prompt, "Every invented character must be more than a job title or plot function");
+  assertStringIncludes(prompt, "If a character could be replaced by an anonymous role");
+  assertEquals(prompt.includes('role such as "handler"'), false);
+  assertEquals(prompt.includes('"contractor"'), false);
   assertEquals(prompt.includes("Do not automatically invent a central mission"), true);
 });
 
