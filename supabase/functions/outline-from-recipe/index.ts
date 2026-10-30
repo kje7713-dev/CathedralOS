@@ -26,7 +26,6 @@ import {
   compactExistingSections,
   compactText,
   compactMaterial,
-  compactMaterialForOutline,
   compactObligations,
   RECIPE_CREATIVE_AUTHORITY_DIRECTIVE,
   stableJSONStringify,
