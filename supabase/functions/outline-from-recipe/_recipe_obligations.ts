@@ -110,7 +110,7 @@ export function deriveRecipeObligations(recipe: Record<string, unknown>, premise
   premiseComponents.forEach((component, index) => {
     if (!component?.sourceQuote?.trim() || !component?.requirement?.trim()) return;
     add("hard_premise",
-      `Materially establish or advance this distinct AUTHOR-AUTHORED premise commitment in the current book: ${component.requirement.trim()} [source: "${component.sourceQuote.trim()}"]. A larger series-level payoff may remain open only when the current book makes a concrete, causally meaningful contribution; a local victory with no demonstrated connection is not sufficient.`,
+      `Preserve this distinct AUTHOR-AUTHORED premise commitment at its proper scope: ${component.requirement.trim()} [source: "${component.sourceQuote.trim()}"]. For a book-level obligation, dramatize the promised event. For a larger multi-book promise, establish, foreshadow or meaningfully develop the thread without pretending an unrelated local success is the final payoff. Do not impose a premature procedural showdown solely to discharge an eventual series outcome.`,
       `project.summary.component.${index + 1}`, true);
   });
 
