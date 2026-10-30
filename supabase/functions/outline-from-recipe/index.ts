@@ -1173,26 +1173,21 @@ Characters' addictions, appetites, obsessions, moral corruption, impulsivity, cr
 
 Do not unnecessarily sanitize or dilute authored adult intensity. If the recipe specifies explicit adult sexual content, drug use, grotesque violence, depravity, moral corruption, or disturbing subject matter, treat that intensity as part of the creative identity, subject to applicable content constraints. Characters may be deeply flawed, irrational, destructive, cruel, depraved, frightening, or unredeemable when appropriate to the story. Do not routinely replace explicit adult themes with vague implications, tame descriptions, sanitized relationships, or conventional moral commentary.
 
-## Prioritize experiences over explanations
-The reader should experience extraordinary events alongside the characters. Do not replace potentially exciting events with explanations, investigations, reports, records, briefings, or procedural discoveries. A character confronting an unpredictable rival is generally more dramatically useful than an administrative record describing that rival; an outrageous encounter with lasting consequences is generally more valuable than another clue about an organization's operations. Do not simply replace paperwork with recordings, messages, informants, or other exposition delivery mechanisms. Invent events worth reading, not explanations worth filing.
-
-This is not an instruction to make every story chaotic or extreme. A quiet literary novel, restrained romance, cozy mystery, or procedural thriller should remain faithful to its authored tone. Wildness must emerge from the characters, genre, and circumstances rather than random spectacle. Preserve causality and continuity without making procedural plausibility the dominant creative objective. Do not add arbitrary violence, sex, comedy, or spectacle to meet an artificial intensity threshold.
+## Invent distinctive experiences
+Give the reader the on-page encounters, actions, emotional consequences, absurdities, and discoveries promised by the author's recipe. Events should follow from choices and relationships, not from the convenience of a plot device. Let information matter through what it makes people do. Quiet, intricate, realistic, or investigative experiences remain entirely valid when the author actually wants them; intensity and originality come from the recipe, not a universal genre preference.
 
 ## Build a Distinctive Narrative Engine
-Before inventing conflicts, antagonistic forces, escalation, reversals, discoveries, and consequences, establish the specific storytelling experience promised by the author's recipe. Generate dramatic material from the characters' personalities, desires, contradictions, relationships, decisions, and interactions with their world. Favor compelling situations, surprising developments, and consequential experiences over convenient mechanisms for advancing the plot.
+Before inventing supporting developments, identify the particular experiences, tensions, surprises, and unresolved questions promised by the author's recipe. Build from characters' desires, contradictions, relationships, decisions, and interactions with the world. Escalation means their choices produce increasingly consequential and distinctive experiences, not merely a larger version of the same obstacle. Support a full ${format}-scale story with substantially different dramatic developments, rather than expanding one incident into a chain of logistical steps.
 
-Escalation means the story becomes more interesting, not merely that opposition becomes more organized, a mission becomes more difficult, or stakes become larger. Develop a connected progression sufficient to earn the intended outcome at ${format}-scale. Seek developments distinctive to this particular story. Characters should create problems, seize opportunities, misunderstand situations, pursue competing desires, make consequential mistakes, and experience unexpected outcomes.
+## Keep enrichment genuinely exploratory
+The enrichment categories are ways to describe possible material, not a directive to construct one complete and coordinated plot apparatus. Antagonistic forces, institutions, locations, discoveries, reversals, and the escalation ladder do not all need to describe the same invented opposition or operation. Create room for independent characters, conflicting agendas, accidental encounters, intimate betrayals, self-inflicted catastrophes, and different kinds of consequences as warranted by the recipe. Some ideas may connect; others can be alternatives that the outliner will choose between. Do not prematurely make one invented device responsible for every danger, revelation, and climax. A planner-invented mechanism is an optional candidate, not a required plot path.
 
-Do not automatically invent a central mission, investigation, pursuit, institutional conspiracy, or sequence of operational objectives to connect the narrative. Those structures are appropriate when the author's recipe calls for them, but must never be the default organizing mechanism. When generating an idea, consider whether it could appear virtually unchanged in an unrelated novel. If so, favor a more distinctive development grounded in the author's characters, premise, genre, and intended reader experience.
-
-Make the story's experiences determine its structure, rather than inventing a structure and filling it with experiences. Preserve narrative variety. Originality may involve outrageous chaos, intimate psychological conflict, quiet emotional development, mystery, romance, spectacle, or technical problem-solving depending on the authored work.
-
-Treat Story Arc templates as structural guidance, never as instructions to introduce a conventional quest, mission, investigation, or antagonist. Institutions, organizational machinery, technical systems, investigations, documents, and operational structures remain available when the authored story genuinely makes them central or when its genre calls for them. Do not globally prohibit procedural storytelling; preserve legal procedurals, investigative thrillers, accounting mysteries, bureaucratic satire, political dramas, and document-driven narratives when the author's recipe calls for that experience. Procedural completeness is not a measure of literary quality; causality and continuity are.
+Treat Story Arc templates as structural progression, not a source of genre conventions or an instruction to select a familiar causal storyline. Preserve the author's specific narrative experience, including when the author actually wants a meticulous investigation, institutional drama, or other specialized form. Causality and continuity matter; a mechanically complete operation is not a substitute for dramatic development.
 
 ## Package discipline without creative suppression
 Start with the author's premise, defining conflicts, supplied characters, relationships, themes, motifs, content requirements, and intended ending. Then create interconnected people, situations, escalation, reversals, consequences, relationships, discoveries, locations, and mechanisms in the order above. Sparse input still carries a larger invention burden; it does not mean a shorter or simpler story. For a novel, support the approximately 115,000-word planning target with connected conflicts, consequences, reversals, discoveries, relationships, and state changes: substantive connected dramatic material, not a large inventory of disconnected concepts, filler, fixed item counts, or unrelated subplots. Do not minimize candidate count as an objective. Instead, remove only interchangeable, redundant, purely explanatory, or non-dramatic entries; retain distinct people and situations when they create different choices, pressures, relationships, reversals, or consequences. The schema and existing sufficiency requirements remain authoritative, but they are not a reason to starve the supporting cast.
 
-The selected Story Arc template is structural guidance, not genre authority. Interpret its progression through the author's identity: a quest need not be a conventional mission, a revelation need not be tidy, an antagonist need not be an institution or mastermind, a sacrifice need not be noble, a climax need not be a technical operation, and transformation need not mean moral improvement. Do not let one elegant planner-created institution or operational mechanism become the mandatory explanation for every later event.
+The selected Story Arc describes dramatic progression, not a required sequence of plot devices. Interpret its beats through the author's characters, genre, and intended reader experience. Do not turn an invented institution, location, or conflict device into the inevitable explanation for every event.
 
 Rich input means preserve, connect, and deepen supplied material before inventing replacements. Treat defining traits, behaviors, moral complexity, tonal intensity, absurdity, and narrative uncertainty as creative commitments. Do not soften, explain away, or replace them with a generic central conflict. Every planner-invented item is a replaceable development candidate, not a new authorial obligation or canon fact. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Return only JSON matching the existing enrichment schema.${repairInstruction}`,
     user: JSON.stringify({
@@ -3001,7 +2996,7 @@ ${renderStoryNonNegotiableMustDos(obligations)}
 These are mandatory acceptance criteria, not descriptive tags. Reserve concrete sections/events for every must-do. If a must-do contains a number, treat that number as the minimum count of distinct realized events, not prose flavor. Only assign a must-do ID when the section's dramaticEvent, resultingChange, or terminalState materially realizes the stated requirement; never attach the ID to an unrelated section to make coverage appear complete. Before finalizing, audit every must-do against the actual section contracts. If one is not realized, leave it unsatisfied for the server's repair path rather than falsely labeling an unrelated section.
 
 ## Compact planning context
-Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation. Use planner candidates only when they strengthen the authored narrative experience; adapt or discard them when they pull the story toward a different genre, conflict, or solution. Prefer a concrete recipe-backed or already-accepted detail over a generic phrase, but do not promote a planner proposal to canon merely because it is specific.
+Use the deterministic, provenance-preserving planning view below. Items marked source=recipe are authored facts; source=planner are development candidates and must not be treated as authored facts. The server retains the full canonical recipe for validation. Planner categories are possible story ingredients, not an already chosen plot. The outliner may use, combine, adapt, or discard any invented candidate, including recurring invented groups and mechanisms; frequency across categories does not make it canon. Let the authored recipe and the characters' distinctive choices select the causal trajectory. Prefer a concrete recipe-backed or already-accepted detail over a generic phrase, but do not promote a planner proposal to canon merely because it is specific.
 
 ${allocationDirective}
 
@@ -4614,113 +4609,9 @@ export function validateRequiredStoryArcFunctions(
   return issues;
 }
 
-/** Validate both the declared function and the sequence-level macro-structure. */
-const REQUIRED_FUNCTION_REPAIR_SCHEMA = {
-  type: "object",
-  properties: {
-    section: SECTION_SCHEMA,
-  },
-  required: ["section"],
-  additionalProperties: false,
-} as const;
-
-/**
- * Repair a required Story Arc function by rewriting one existing section.
- * This is intentionally separate from macro beat reassignment: an aftermath
- * section is in the correct Final Image beat, but it still needs a concrete
- * resolution event and settled terminal state. The post-repair gate below
- * rejects a cosmetic function relabel or another aftermath-only rewrite.
- */
-export async function repairRequiredStoryArcFunctions(
-  suggestions: Suggestion[],
-  template: Pick<ArcTemplateBlob, "name" | "beats">,
-  billableCall: SuggestionLLMCall,
-  obligations: RecipeObligation[] = [],
-  context: { premise?: string; recipe?: CanonicalRecipeEnvelope } = {},
-): Promise<{ suggestions: Suggestion[]; repaired: string[]; unresolved: string[] }> {
-  let result = suggestions.map((section) => ({ ...section }));
-  const repaired: string[] = [];
-  const unresolved: string[] = [];
-
-  for (const beat of template.beats) {
-    const roleContract = arcRoleContract(beat, template.name);
-    for (const required of roleContract.requiredFunctions) {
-      const currentIssues = validateRequiredStoryArcFunctions(result, { ...template, beats: [beat] });
-      const issue = currentIssues.find((item) => item.includes(`(${beat.id})`));
-      if (!issue) continue;
-      const beatSections = result.filter((section) => section.storyArcBeatID === beat.id);
-      const target = beatSections.find((section) => section.dramaticFunction !== required) ?? beatSections[0];
-      if (!target) {
-        unresolved.push(beat.label);
-        continue;
-      }
-      const repairTargetIndex = result.indexOf(target);
-      const precedingClimax = result
-        .slice(0, repairTargetIndex)
-        .reverse()
-        .find((section) => section.dramaticFunction === "climax");
-      const system = `${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}\n\nYou are repairing one outline section for the ${template.name} Story Arc. Rewrite the supplied section in place; do not add a new section, change its beat, or invent a new primary conflict. The beat requires the dramatic function ${required}. For resolution, the resultingChange and terminalState must show the central dramatic question or conflict being answered and settled on the page. An aftermath, mood, memorial, or continuing residue alone is not a resolution. The premise and preceding climax below are read-only context: preserve their established facts and resolve the existing conflict rather than inventing a generic ending. Return only JSON matching the required repair schema.`;
-      const user = JSON.stringify({
-        beat: { id: beat.id, role: beat.role, label: beat.label, contract: roleContract },
-        requiredFunction: required,
-        context: {
-          recipe: context.recipe ?? null,
-          premise: context.premise ?? null,
-          precedingClimax: precedingClimax ?? null,
-        },
-        section: target,
-        instruction: "Preserve any applicable recipeRequirementIDs, but replace aftermath-only closure with a concrete resolution action and settled terminal state.",
-      }, null, 2);
-      let repairedSection: Suggestion | undefined;
-      try {
-        const raw = await billableCall(
-          system,
-          user,
-          4000,
-          { type: "json_schema", json_schema: { name: "outline_required_function_repair", strict: true, schema: REQUIRED_FUNCTION_REPAIR_SCHEMA } },
-          `outline-semantic-repair-${beat.id}-${required}`,
-          (content, finishReason) => {
-            const parsed = parseOutlineJSON<{ section?: Record<string, unknown> }>(content, finishReason);
-            if (!parsed?.section || typeof parsed.section !== "object") throw new Error("semantic repair response missing section");
-            const candidate = {
-              ...parsed.section,
-              storyArcBeatID: beat.id,
-              recipeRequirementIDs: target.recipeRequirementIDs ?? [],
-            };
-            const validated = validateSuggestions({ suggestions: [candidate] }, new Set([beat.id]), undefined, obligations, { ...template, beats: [beat] });
-            if (validated.suggestions.length !== 1) throw new Error("semantic repair response did not produce one valid section");
-            return validated.suggestions[0];
-          },
-        );
-        const parsed = parseOutlineJSON<{ section?: Record<string, unknown> }>(raw.content, raw.finishReason);
-        const candidate = {
-          ...parsed.section,
-          storyArcBeatID: beat.id,
-          recipeRequirementIDs: target.recipeRequirementIDs ?? [],
-        };
-        repairedSection = validateSuggestions({ suggestions: [candidate] }, new Set([beat.id]), undefined, obligations, { ...template, beats: [beat] }).suggestions[0];
-      } catch (error) {
-        if (error instanceof OutlineOutputExhaustedError) throw error;
-        repairedSection = undefined;
-      }
-      if (!repairedSection) {
-        unresolved.push(target.title);
-        continue;
-      }
-      const targetIndex = result.indexOf(target);
-      const candidateResult = result.map((section, index) => index === targetIndex ? repairedSection : section);
-      const remainingIssue = validateRequiredStoryArcFunctions(candidateResult, { ...template, beats: [beat] }).find((item) => item.includes(`(${beat.id})`));
-      if (remainingIssue) {
-        unresolved.push(target.title);
-      } else {
-        result[targetIndex] = repairedSection;
-        repaired.push(`${target.title}: ${required}`);
-      }
-    }
-  }
-  return { suggestions: result, repaired, unresolved };
-}
-
+/** Story Arc function gaps are diagnostic only. A localized model rewrite
+ * cannot safely update downstream narrative state and must never be launched
+ * as a repair of a paid, coherent first-pass outline. */
 export function validateStoryArcSemantics(
   suggestions: Suggestion[],
   template: Pick<ArcTemplateBlob, "name" | "beats">,
@@ -6034,21 +5925,15 @@ export async function runSuggestionJob(
     };
     const continueAfterSemanticVerification = async (suggestions: Suggestion[], completionWarnings: string[] = []) => {
       const requiredStoryArcIssues = validateRequiredStoryArcFunctions(suggestions, body.arcTemplate);
-      const storyArcRepairAttempted = planningState.storyArcRepairAttempted === true;
-      if (requiredStoryArcIssues.length > 0 && !storyArcRepairAttempted) {
-        planningState = {
-          ...planningState,
-          phase: "story_arc_repair_pending",
-          nextAction: "story-arc-repair",
-          storyArcRepairIssues: requiredStoryArcIssues,
-        };
+      // Report missing declared dramatic functions internally, but never
+      // rewrite one section in isolation: that can retroactively resolve a
+      // conflict that later paid sections still need to finish.
+      if (requiredStoryArcIssues.length > 0) {
         diagnostics = {
           ...diagnostics,
-          stage: "story_arc_repair_pending",
-          storyArcRepairIssues: requiredStoryArcIssues,
+          storyArcFunctionIssues: requiredStoryArcIssues,
+          storyArcRewriteSkipped: true,
         };
-        await updateRun({ suggestions, planning_state: planningState, diagnostics });
-        throw new SuggestionWorkerYield();
       }
       const semanticCoverage = obligationCoverage([...(body.existingSections ?? []), ...suggestions], recipeObligations);
       if (semanticCoverage.missingRequired.length > 0) {
@@ -6165,43 +6050,13 @@ export async function runSuggestionJob(
       await continueAfterSemanticVerification(selectedSuggestions);
       return;
     }
-    if (planningState.nextAction === "story-arc-repair" || planningState.nextAction === "story-arc-repair-completion") {
-      let repairedSuggestions = persistedSemanticSuggestions;
-      if (planningState.nextAction === "story-arc-repair") {
-        const repair = await repairRequiredStoryArcFunctions(
-          persistedSemanticSuggestions,
-          body.arcTemplate,
-          billableCall,
-          recipeObligations,
-          { premise: body.recipe?.project?.summary, recipe: body.recipe },
-        );
-        repairedSuggestions = repair.suggestions;
-        const repairedQuality = collectAdvisoryOutlineQuality(
-          repairedSuggestions,
-          body.storyMaterialEnrichment,
-          requestedStoryMaterialFormat(body),
-          body.arcTemplate,
-          allocation,
-        );
-        planningState = {
-          ...planningState,
-          phase: "story_arc_repair_complete",
-          nextAction: "story-arc-repair-completion",
-          storyArcRepairAttempted: true,
-        };
-        diagnostics = {
-          ...diagnostics,
-          stage: "story_arc_repair_complete",
-          storyArcRepairIssues: Array.isArray(planningState.storyArcRepairIssues)
-            ? planningState.storyArcRepairIssues
-            : [],
-          semanticArcRepairedSections: repair.repaired,
-          semanticArcUnresolvedSections: repair.unresolved,
-          semanticArcIssues: repairedQuality.semanticArcIssues,
-        };
-        await updateRun({ suggestions: repairedSuggestions, planning_state: planningState, diagnostics });
-      }
-      await continueAfterSemanticVerification(repairedSuggestions);
+    // Runs checkpointed by the old worker must remain recoverable without
+    // a new provider call, including if the prior worker already saved a
+    // paid narrative. Complete from exactly that saved section sequence.
+    if (planningState.nextAction === "story-arc-repair" ||
+        planningState.nextAction === "story-arc-repair-completion" ||
+        planningState.nextAction === "semantic-completion") {
+      await continueAfterSemanticVerification(persistedSemanticSuggestions);
       return;
     }
     if (planningState.nextAction === "obligation-repair") {
