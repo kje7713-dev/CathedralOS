@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects, assertThrows, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { deriveRecipeObligations, obligationCoverage, renderStoryNonNegotiableMustDos } from "./_recipe_obligations.ts";
-import { buildCompactPlanningView, compactArcNarrativeText, compactMaterial, RECIPE_CREATIVE_AUTHORITY_DIRECTIVE } from "./_prompt_context.ts";
+import { buildCompactPlanningView, buildArchitecturePlanningView, compactArcNarrativeText, compactMaterial, RECIPE_CREATIVE_AUTHORITY_DIRECTIVE } from "./_prompt_context.ts";
 
 Deno.test("continuation auth keeps user JWT out of apikey and authenticates watchdog explicitly", () => {
   assertEquals(continuationHeaders("Bearer user-access-jwt", "operator-secret"), {
@@ -6283,7 +6283,34 @@ Deno.test("required-obligation repair is one billable stage and rechecks coverag
   assertEquals(result.missing, []);
 });
 
-Deno.test("first-pass omitted recipe IDs fail deterministically without a repair call", async () => {
+Deno.test("global architecture does not inherit optional preassembled institutional plot machinery", () => {
+  const apparatus = { id: "invented-raid", source: "planner", label: "Government detainment", description: "Contractor transport and containment mission." };
+  const reversal = { id: "personal-betrayal", source: "planner", label: "The friend betrays the protagonist", description: "A choice with individual consequences." };
+  const authored = { id: "recipe-person", source: "recipe", label: "Authored antagonist", description: "A character the author requires." };
+  const request: any = {
+    ...sparseRequest,
+    storyMaterialEnrichment: {
+      antagonisticForces: [apparatus, authored],
+      escalationLadder: [apparatus],
+      locations: [apparatus],
+      institutionsAndGroups: [apparatus],
+      conflictSources: [apparatus],
+      discoveries: [apparatus],
+      reversals: [reversal],
+    },
+  };
+  const planning = buildArchitecturePlanningView(request, [], request.storyMaterialEnrichment);
+  const index = planning.materialIndex as any[];
+  assertEquals(index.some((item) => item.id === "invented-raid"), false);
+  assertEquals(index.some((item) => item.id === "recipe-person"), true);
+  assertEquals(index.some((item) => item.id === "personal-betrayal"), true);
+  assertEquals((buildCompactPlanningView(request).materialIndex as any[]).some((item) => item.id === "invented-raid"), true, "downstream material is preserved");
+  assertEquals((planning.recipe as any).project.summary, request.recipe.project.summary);
+  assertStringIncludes(buildAllocationPrompt(request).user, "personal-betrayal");
+  assertEquals(buildAllocationPrompt(request).user.includes("invented-raid"), false);
+});
+
+Deno.test("missing recipe IDs remain internal QA and never discard a paid outline", async () => {
   const body = await executableWorkerBody();
   const section = (beat: string) => ({
     title: `Missing ${beat}`, summary: "Missing recipe coverage", container: "scene",
@@ -6304,12 +6331,15 @@ Deno.test("first-pass omitted recipe IDs fail deterministically without a repair
   await run();
   assertEquals(db.row.status, "pending");
   await run();
-  assertEquals(db.row.status, "failed");
-  assertEquals(db.row.error_code, "missing_recipe_obligations");
+  assertEquals(db.row.status !== "failed", true, db.row.error ?? "no error");
+  assertEquals(db.row.error_code ?? null, null);
   assertEquals(db.row.suggestions.length, 2, "the paid first-pass outline survives");
   assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.length > 0, true);
+  assertEquals(db.row.diagnostics.premiseCoverageAssessment, "needs_review");
   assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(actions.slice(0, 2), ["outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(actions.some((action) => action.includes("repair")), false);
+  assertEquals((db.row.warnings ?? []).some((warning: string) => /semantic|validation|obligation|recipe/i.test(warning)), false);
 });
 
 Deno.test("missing recipe ID coverage never schedules an obligation repair checkpoint", async () => {
@@ -6329,8 +6359,9 @@ Deno.test("missing recipe ID coverage never schedules an obligation repair check
     billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
   });
   assertEquals(actions, []);
-  assertEquals(db.row.status, "failed");
-  assertEquals(db.row.error_code, "missing_recipe_obligations");
+  assertEquals(db.row.status !== "failed", true, db.row.error ?? "no error");
+  assertEquals(db.row.error_code ?? null, null);
+  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.length > 0, true);
   assertEquals(db.row.planning_state.nextAction !== "obligation-repair", true);
 });
 
