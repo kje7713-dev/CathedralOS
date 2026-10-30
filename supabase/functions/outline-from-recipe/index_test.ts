@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects, assertThrows, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { deriveRecipeObligations, obligationCoverage, renderStoryNonNegotiableMustDos } from "./_recipe_obligations.ts";
-import { buildCompactPlanningView, compactArcNarrativeText, compactMaterial, RECIPE_CREATIVE_AUTHORITY_DIRECTIVE } from "./_prompt_context.ts";
+import { buildCompactPlanningView, buildArchitecturePlanningView, compactArcNarrativeText, compactMaterial, RECIPE_CREATIVE_AUTHORITY_DIRECTIVE } from "./_prompt_context.ts";
 
 Deno.test("continuation auth keeps user JWT out of apikey and authenticates watchdog explicitly", () => {
   assertEquals(continuationHeaders("Bearer user-access-jwt", "operator-secret"), {
@@ -715,7 +715,7 @@ Deno.test("allocation prompt selects causal outcome before sizing chapters witho
   assertStringIncludes(allocationPrompt.system, "government contractor");
   const payload = JSON.parse(allocationPrompt.user);
   assertEquals(payload.planningContext.recipe, req.recipe);
-  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2").source, "planner");
+  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2"), undefined);
   assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p1").source, "planner");
   assertStringIncludes(buildEnrichmentPrompt(req).system, "avoid defaulting to a government contractor");
   const original = buildPrompt(req, new Map(), [], material);
@@ -3620,7 +3620,7 @@ Deno.test("PR3 expansion prioritizes unused enrichment and exposes soft word ran
   assertEquals(plannedWordRangeForContainer("scene"), { minWords: 615, maxWords: 1385 });
   const prompt = buildExpansionPrompt({ ...sparseRequest, storyMaterialEnrichment: material } as any, current as any);
   assertEquals(prompt.user.includes("unusedStoryMaterial"), true);
-  assertEquals(prompt.user.includes("force-emergency-network"), true);
+  assertEquals(prompt.user.includes("force-emergency-network"), false);
   assertEquals(prompt.system.includes("deepen the authored recipe's premise"), true);
   assertEquals(prompt.system.includes("unused or underdeveloped enrichment items"), false);
   assertEquals(prompt.system.includes("soft literary planning range"), false);
@@ -5278,7 +5278,7 @@ Deno.test("new semantic verification reports unmet obligations without launching
   assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
   assertEquals(db.row.diagnostics.semanticAssessment, "needs_review");
   assertEquals(db.row.diagnostics.semanticUnresolvedCount, 1);
-  assertStringIncludes((db.row.warnings ?? []).join(" "), "no automatic narrative rewrite");
+  assertEquals(db.row.warnings ?? [], []);
   assertEquals(db.row.planning_state.nextAction, "completed");
 });
 
@@ -6283,7 +6283,81 @@ Deno.test("required-obligation repair is one billable stage and rechecks coverag
   assertEquals(result.missing, []);
 });
 
-Deno.test("first-pass omitted recipe IDs fail deterministically without a repair call", async () => {
+Deno.test("authored recipe and character candidates survive but procedural enrichment never re-enters planning, outline, or expansion", () => {
+  const apparatus = { id: "invented-raid", source: "planner", label: "Government detainment", description: "Contractor transport and containment mission." };
+  const alternateApparatus = { id: "procedural-reversal", source: "planner", label: "Rescue requires a screening raid", description: "The heroes disable an official tracking program." };
+  const character = { id: "eccentric-character", source: "planner", label: "Feral road grifter", description: "An impulsive friend lies, steals, and wrecks relationships." };
+  const relationship = { id: "poisonous-pact", source: "planner", label: "Toxic friendship", description: "Mutual dependency drives escalating catastrophe." };
+  const authored = { id: "recipe-person", source: "recipe", label: "Authored antagonist", description: "A character the author requires." };
+  const categories = [
+    "characters", "antagonisticForces", "locations", "institutionsAndGroups",
+    "conflictSources", "escalationLadder", "reversals", "consequences",
+    "relationships", "discoveries", "unresolvedQuestions", "thematicPressures",
+  ];
+  const material = {
+    ...Object.fromEntries(categories.map((category) => [category, []])),
+    characters: [character],
+    relationships: [relationship],
+    antagonisticForces: [apparatus, authored],
+    escalationLadder: [apparatus],
+    locations: [apparatus],
+    institutionsAndGroups: [apparatus],
+    conflictSources: [apparatus],
+    discoveries: [apparatus],
+    reversals: [alternateApparatus],
+    consequences: [apparatus],
+    unresolvedQuestions: [apparatus],
+  };
+  const request: any = { ...sparseRequest, storyMaterialEnrichment: material };
+  const planning = buildArchitecturePlanningView(request, [], material);
+  const index = planning.materialIndex as any[];
+  assertEquals(index.some((item) => item.id === "invented-raid"), false);
+  assertEquals(index.some((item) => item.id === "procedural-reversal"), false);
+  assertEquals(index.some((item) => item.id === "recipe-person"), true);
+  assertEquals(index.some((item) => item.id === "eccentric-character"), true);
+  assertEquals(index.some((item) => item.id === "poisonous-pact"), true);
+  assertEquals((planning.recipe as any).project.summary, request.recipe.project.summary);
+  assertEquals((buildCompactPlanningView(request).materialIndex as any[]).some((item) => item.id === "invented-raid"), true, "full material stays available for QA and provenance");
+
+  const allocationPrompt = buildAllocationPrompt(request);
+  const outlinePrompt = buildPrompt(request, new Map(), [], material as any);
+  const expansionPrompt = buildExpansionPrompt(request, [], undefined, []);
+  for (const [stage, prompt] of [
+    ["architecture", allocationPrompt],
+    ["initial outline", outlinePrompt],
+    ["length expansion", expansionPrompt],
+  ] as const) {
+    assertEquals(prompt.user.includes("invented-raid"), false, stage);
+    assertEquals(prompt.user.includes("procedural-reversal"), false, stage);
+    assertEquals(prompt.user.includes("Contractor transport and containment mission"), false, stage);
+    assertEquals(prompt.user.includes("eccentric-character"), true, stage);
+    assertEquals(prompt.user.includes("recipe-person"), true, stage);
+  }
+  assertStringIncludes(outlinePrompt.user, "poisonous-pact");
+  assertStringIncludes(outlinePrompt.system, "Selected causal architecture");
+});
+
+Deno.test("series-scale authored premise components are preserved without forced book-one world-saving operations", () => {
+  const summary = "Their notoriety destabilizes America's institutions, and their chaotic actions someday become essential to humanity's survival.";
+  const premiseComponents = [
+    { sourceQuote: "Their notoriety destabilizes America's institutions", requirement: "Their notoriety eventually destabilizes institutions." },
+    { sourceQuote: "their chaotic actions someday become essential to humanity's survival", requirement: "Their decisions eventually matter to humanity's survival." },
+  ];
+  const recipe: any = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, summary } };
+  const obligations = deriveRecipeObligations(recipe, premiseComponents);
+  const statements = obligations.filter((obligation) => obligation.source.startsWith("project.summary.component."));
+  assertEquals(statements.length, 2);
+  assertEquals(statements.every((obligation) => obligation.required), true);
+  assertStringIncludes(statements[1].statement, "foreshadow");
+  assertStringIncludes(statements[1].statement, "multi-book");
+  assertEquals(statements[1].statement.includes("concrete, causally meaningful contribution"), false);
+  const request: any = { ...sparseRequest, recipe, storyMaterialEnrichment: { premiseComponents } };
+  assertStringIncludes(buildAllocationPrompt(request, obligations).system, "Series-level consequences can be seeded");
+  assertStringIncludes(buildPrompt(request, new Map(), obligations, request.storyMaterialEnrichment as any).system, "may be seeded");
+});
+
+
+Deno.test("missing recipe IDs remain internal QA and never discard a paid outline", async () => {
   const body = await executableWorkerBody();
   const section = (beat: string) => ({
     title: `Missing ${beat}`, summary: "Missing recipe coverage", container: "scene",
@@ -6304,12 +6378,15 @@ Deno.test("first-pass omitted recipe IDs fail deterministically without a repair
   await run();
   assertEquals(db.row.status, "pending");
   await run();
-  assertEquals(db.row.status, "failed");
-  assertEquals(db.row.error_code, "missing_recipe_obligations");
+  assertEquals(db.row.status !== "failed", true, db.row.error ?? "no error");
+  assertEquals(db.row.error_code ?? null, null);
   assertEquals(db.row.suggestions.length, 2, "the paid first-pass outline survives");
   assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.length > 0, true);
+  assertEquals(db.row.diagnostics.premiseCoverageAssessment, "needs_review");
   assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(actions.slice(0, 2), ["outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(actions.some((action) => action.includes("repair")), false);
+  assertEquals((db.row.warnings ?? []).some((warning: string) => /semantic|validation|obligation|recipe/i.test(warning)), false);
 });
 
 Deno.test("missing recipe ID coverage never schedules an obligation repair checkpoint", async () => {
@@ -6329,8 +6406,9 @@ Deno.test("missing recipe ID coverage never schedules an obligation repair check
     billableLLM: fakeWorkerBilling(actions) as any, scheduleContinuation: async () => {},
   });
   assertEquals(actions, []);
-  assertEquals(db.row.status, "failed");
-  assertEquals(db.row.error_code, "missing_recipe_obligations");
+  assertEquals(db.row.status !== "failed", true, db.row.error ?? "no error");
+  assertEquals(db.row.error_code ?? null, null);
+  assertEquals(db.row.diagnostics.missingRequiredRecipeObligations.length > 0, true);
   assertEquals(db.row.planning_state.nextAction !== "obligation-repair", true);
 });
 

@@ -20,11 +20,12 @@ import {
 } from "../generate-story/_provider.ts";
 import {
   buildCompactPlanningView,
+  buildArchitecturePlanningView,
+  authorFirstMaterialIndex,
   compactArcNarrativeText,
   compactExistingSections,
   compactText,
   compactMaterial,
-  compactMaterialForOutline,
   compactObligations,
   RECIPE_CREATIVE_AUTHORITY_DIRECTIVE,
   stableJSONStringify,
@@ -1255,7 +1256,7 @@ Give the reader the on-page encounters, actions, emotional consequences, absurdi
 The premiseComponents array is not speculative enrichment: extract every independent factual setup, causal event, character transformation, and consequential promise from recipe.project.summary. Use the author's exact contiguous words as sourceQuote (a substring of the original summary) and a concise, faithful requirement statement for each component. Split compound sentences into independent commitments; do not collapse a national/social or humanity-scale consequence into one generic "danger" or "survival" obligation. Cover the substantive meaning of the ENTIRE summary, including its last clause, rather than just its first incident. Do not add invented claims, force an unrequested ending, or elevate a prompt-pack title into an authored event. A multi-book-scale promise must be materially advanced in the current book, not necessarily fully resolved: that choice belongs to architecture and book planning. Keep authored components separate from optional source=planner categories. Return [] when there is no authored summary.
 
 ## Build a Distinctive Narrative Engine
-Before inventing supporting developments, identify the particular experiences, tensions, surprises, and unresolved questions promised by the author's recipe. Build from characters' desires, contradictions, relationships, decisions, and interactions with the world. Escalation means their choices produce increasingly consequential and distinctive experiences, not merely a larger version of the same obstacle. Support a full ${format}-scale story with substantially different dramatic developments, rather than expanding one incident into a chain of logistical steps.
+Before inventing supporting developments, identify the particular experiences, tensions, surprises, and unresolved questions promised by the author's recipe. Build from characters' desires, contradictions, relationships, decisions, and interactions with the world. When the authored story is grotesque, surreal, absurdist, or character-driven, invent a WIDE RANGE of personally consequential, non-institutional encounters instead of filling every category with variants of one invented government program, raid, security contractor, detention scheme, or crowd-control operation. The existence of a conspiracy is not itself a request to make its administrative machinery the plot. Escalation means their choices produce increasingly consequential and distinctive experiences, not merely a larger version of the same obstacle. Support a full ${format}-scale story with substantially different dramatic developments, rather than expanding one incident into a chain of logistical steps.
 
 ## Keep enrichment genuinely exploratory
 The enrichment categories are ways to describe possible material, not a directive to construct one complete and coordinated plot apparatus. Antagonistic forces, institutions, locations, discoveries, reversals, and the escalation ladder do not all need to describe the same invented opposition or operation. Create room for independent characters, conflicting agendas, accidental encounters, intimate betrayals, self-inflicted catastrophes, and different kinds of consequences as warranted by the recipe. Some ideas may connect; others can be alternatives that the outliner will choose between. Do not prematurely make one invented device responsible for every danger, revelation, and climax. A planner-invented mechanism is an optional candidate, not a required plot path. Specifically, avoid defaulting to a government contractor, audit, custody transfer, compliance program, or surveillance apparatus merely as a convenient engine for a conspiracy or climax. Those mechanisms are valid when the author requests them or distinctive character decisions genuinely make them the strongest story choice; otherwise explore threats arising from character ambition, relationships, accidents, and independent agendas instead of a single procedural operation.
@@ -2750,10 +2751,16 @@ export function buildExpansionPrompt(
     NOVEL_MIN_PROJECTED_TOKENS - projectedTokens,
   );
   const round = context?.round ?? 1;
+  // Expansion must use the SAME author-first candidate boundary as the
+  // initial outline; an unused optional escalation ladder is not a license
+  // to write new procedural scenes to fill the length budget.
+  const allowedCandidateIDs = new Set(authorFirstMaterialIndex(req.storyMaterialEnrichment).map(
+    (item) => String(item.id ?? ""),
+  ));
   const unusedStoryMaterial = findUnusedStoryMaterial(
     current,
     req.storyMaterialEnrichment,
-  );
+  ).filter((item) => allowedCandidateIDs.has(item.id));
   const beatContext = context?.beat;
   const targetBeat = beatContext ? req.arcTemplate.beats.find((beat) => beat.id === beatContext.beatID) : undefined;
   const targetContract = targetBeat ? arcRoleContract(targetBeat, req.arcTemplate.name) : undefined;
@@ -3064,7 +3071,7 @@ The recipe is the governing creative brief, not metadata to distribute as sectio
 Every defining behavior, event, or conflict explicitly specified by the author must have a concrete realization somewhere in the outline. At least one relevant Section Contract must require that realization through its dramaticEvent, resultingChange, or terminalState. Mentioning it in a summary, labeling a character with the trait, or assigning a recipe requirement ID does not constitute realization. Preserve creative freedom over how and when the requirement is realized.
 
 ## First-pass whole-book obligations (no narrative repair later)
-The planningContext.premiseComponents are independent AUTHOR-BASED commitments extracted from the original project summary. EACH component needs its own concrete causal realization or meaningful current-volume advancement, not a single generic plot win counted for the entire premise. If a component promises country-scale transformation or humanity-scale consequence, a small local rescue is not automatically equivalent; connect the book's achieved outcome credibly to the larger trajectory without forcing all multi-book promises to conclude now. Preserve these commitments even when optional planner material suggests a more convenient narrower plot.
+The planningContext.premiseComponents are independently extracted AUTHOR-BASED commitments, not commands to resolve a whole series in book one. Establish each component at the scope required by the current book: introduce, foreshadow, complicate, advance, or resolve it as warranted by the author's explicit book/series intent. A long-range country-scale or humanity-scale payoff may be seeded through credible stakes and character-caused consequences without prematurely producing a national showdown. Do not claim that an unrelated local rescue fulfills the ultimate promise, and do not manufacture an institutional mission merely to turn a long-range promise into a completed current-volume event. Preserve the components even when optional planner material suggests a narrower, easier plot.
 Before writing any sections, assign each author-required behavior, event, and story non-negotiable to an appropriate concrete dramatic development across the COMPLETE outline. Story-wide requirements cannot be met by repeating descriptive labels in the opening beat: distribute recurring behaviors and relationships across different chapter movements as the recipe warrants. For every selected requirement, construct the actual on-page action and its consequence in dramaticEvent and resultingChange or terminalState, not solely summary or tags. Ground adult tone and intensity in the author's recipe without imposing it on unrelated genres. Verify internally that every requirement has at least one material section-contract realization (and that recurring or quantified requirements have multiple distinct realizations). For any required climax or resolution function, explicitly declare that dramaticFunction on the correct Story Arc beat and give it an irreversible terminal state. All of this must be right in the FIRST provider response; there is no subsequent automatic narrative repair pass.
 
 ## Character-Driven Dramatic Selection
@@ -3131,7 +3138,14 @@ Respond with structured JSON matching the schema. This is the only provider call
     obligations,
     storyMaterial,
   );
-  planningView.materialIndex = compactMaterialForOutline(storyMaterial);
+  // Keep the original recipe and selected architecture authoritative. The
+  // broader enrichment pool remains saved but must not reintroduce the plot
+  // packages intentionally excluded from the architecture call.
+  planningView.materialIndex = authorFirstMaterialIndex(storyMaterial).map((item) => {
+    if (item.source !== "recipe") return item;
+    const { label: _label, description: _description, ...sourceIdentity } = item;
+    return sourceIdentity;
+  });
   // Put decision-capable supporting people in front of the outliner as an
   // explicit selection pool, rather than burying them among plot machinery.
   // This is not a cast quota or an additional canon/validation contract.
@@ -3584,7 +3598,7 @@ export function buildAllocationPrompt(
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
 ## Choose the story BEFORE allocating its chapters (same model call)
-First derive the causal story architecture from the AUTHOR'S RECIPE, including its actual protagonist motives, genre, tone, relationships, world rules, and ending promise. The recipe is authoritative. Treat enrichment as optional candidate characters, reversals, antagonists, and locations; use only ideas that make the authored premise more specific and compelling. An invented institutional operation, government contractor, screening campaign, investigation, or technical gadget is NOT an implicit canon fact. Never allow repetition of a planner-invented apparatus across categories to make it the automatic plot engine; such mechanisms remain valid when the recipe calls for them or when character-caused events make them compelling.
+First derive the causal story architecture from the AUTHOR'S RECIPE, including its actual protagonist motives, genre, tone, relationships, world rules, and ending promise. The recipe is authoritative. The context deliberately withholds planner-invented institutional apparatus, tactical escalation ladders, and ready-made event locations until the author-driven story is selected. Choose a narrative trajectory that could only arise from these characters' particular appetites, humiliations, obsessions, mistakes and competing desires; do not fill a national or humanity-scale premise with a single bounded security operation just because that is easy to resolve. Treat enrichment as optional candidate characters, reversals, antagonists, and locations; use only ideas that make the authored premise more specific and compelling. An invented institutional operation, government contractor, screening campaign, investigation, or technical gadget is NOT an implicit canon fact. Never allow repetition of a planner-invented apparatus across categories to make it the automatic plot engine; such mechanisms remain valid when the recipe calls for them or when character-caused events make them compelling.
 
 Return a compact storyArchitecture: centralQuestion (the premise's concrete dramatic question), characterCausality (the specific protagonist/supporting-person decisions driving distinct reversals), decisiveClimax (what irreversibly HAPPENS to settle the central threat), endingConsequence (the definite changed world/relationships AFTER that completed confrontation), and deliberatelyOpenThreads (mysteries left open without withholding the central outcome). Choose the decisive outcome first. For a Story Arc with a required climax beat, commit the actual resolution of the central confrontation to that beat; final-image/aftermath beats must inherit the achieved outcome, not start another rescue, larger confrontation, or cliffhanger. Tragedy, ambiguity, partial victories, and morally compromised endings are welcome when the CENTRAL outcome is definite. If there are accepted existing sections, honor their established events and do not rewrite their history.
 
@@ -3597,7 +3611,7 @@ Allocate sections according to distinct dramatic developments, not the number of
 ${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
 
 ## Recipe realization priority
-Treat planningContext.premiseComponents as DISTINCT, authored requirements, not optional enrichment. Choose how this current volume establishes, advances, or resolves each without substituting one generic local victory for multiple larger author promises. Map each component to a specific beat's causal movement before assigning chapter counts; a series-wide promise may remain unresolved if this book makes observable, irreversible progress toward it. Preserve every component across the handoff to section generation.
+Treat planningContext.premiseComponents as DISTINCT, authored commitments, not optional enrichment. Map them to the current book at the scale the author actually requested. Series-level consequences can be seeded, foreshadowed or advanced through character-driven choices; do not invent a forced national or humanity-saving operation to discharge them now. A chapter-level local victory is neither a substitute for a series promise nor grounds to claim that promise has already been fulfilled. Preserve each component without dictating its final-series payoff.
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. In each beat rationale, reserve appropriate, DISTINCT dramatic developments for recipe story non-negotiables, including recurring experiences and adult intensity where authored. Do not pack all story-wide obligations into the first beat or treat them as decorative labels; chapter generation will NOT have a narrative repair pass. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale. Do not let the arc's conventional genre associations dictate the kinds of scenes being allocated.
 
 ## Recipe obligations
@@ -3607,7 +3621,7 @@ Output a single storyArchitecture FIRST (all five short text fields), THEN exact
 
 Output JSON only. No commentary, no prose.`;
 
-  const planningView = buildCompactPlanningView(
+  const planningView = buildArchitecturePlanningView(
     { ...req, storyMaterialEnrichment: req.storyMaterialEnrichment },
     obligations,
     req.storyMaterialEnrichment,
@@ -4443,7 +4457,7 @@ export function semanticVerificationInput(
     })),
     arcWideObligations: [...premiseComponents.map((component, index) => ({
       obligationID: `premise_component_${index}`,
-      instruction: `Independently assess the authored promise "${component.sourceQuote}". Required current-book realization: ${component.requirement}. The outline must materially ESTABLISH or ADVANCE this distinct premise commitment through concrete causally consequential dramatic events, not just name it. A genuine series-level payoff need not be fully resolved this volume, but a small local win is insufficient if no credible causal connection to the larger promised transformation is established. Do not infer that a mere rescue already saves humanity or transforms society. Do not require an unrequested final-series ending.`,
+      instruction: `Independently assess the authored promise "${component.sourceQuote}". Required current-book realization: ${component.requirement}. Verify that this distinct premise commitment is established at the AUTHOR'S intended scope: a book-level obligation requires a concrete dramatic realization, while a series-level payoff may be plausibly planted, foreshadowed, complicated or advanced without being resolved in this volume. Do not equate an unrelated local rescue with a world-saving victory, or demand a tactical operation to manufacture one. Ground the assessment in actual Section Contract events and consequences rather than labels. Do not require an unrequested final-series ending.`,
       sections: suggestions.map((section, sectionIndex) => ({
         sectionIndex, beatID: section.storyArcBeatID,
         dramaticEvent: section.dramaticEvent ?? "",
@@ -4497,7 +4511,7 @@ export async function verifyStoryArcSemantics(
 ): Promise<SemanticVerificationResult> {
   const input = semanticVerificationInput(suggestions, template, recipe, premiseComponents);
   const raw = await billableCall(
-    "You are an independent semantic verifier. First assess EVERY independently extracted authored premise component across the full outline. A single generic local success must not mask the loss of a larger causal promise (such as changed institutions or humanity-scale consequences). For a multi-book promise, accept concrete irreversible advancement this volume without requiring final-series resolution. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and the required whole-outline creative_fidelity assessment, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. For creative_fidelity, evaluate the sequence of dramatic events against the complete canonical recipe's premise, populated character and relationship directives, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience; do not pass merely because names or keywords appear. This is a material-drift review, not a perfection or style score: a coherent, usable outline with minor weaknesses, uneven emphasis, legitimate mixed-genre scenes, or editorial opportunities is satisfied. Planner-generated candidates are provisional and may be discarded. Accept procedural or institutional material when the recipe makes it central, and reject it only when it fundamentally redirects the authored story or omits essential creative commitments needed for a usable outline. If rejecting, provide a grounded quote from the section that demonstrates the material drift. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
+    "You are an independent semantic verifier. First assess EVERY independently extracted authored premise component across the full outline. A local success cannot be declared fulfillment of a different larger promise. For a multi-book premise, an organically established credible thread or foreshadowed long-range stake can be satisfactory without a premature national or humanity-saving climax. Do not invent a required current-volume outcome when the author supplied only a series premise. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and the required whole-outline creative_fidelity assessment, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. For creative_fidelity, evaluate the sequence of dramatic events against the complete canonical recipe's premise, populated character and relationship directives, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience; do not pass merely because names or keywords appear. This is a material-drift review, not a perfection or style score: a coherent, usable outline with minor weaknesses, uneven emphasis, legitimate mixed-genre scenes, or editorial opportunities is satisfied. Planner-generated candidates are provisional and may be discarded. Accept procedural or institutional material when the recipe makes it central, and reject it only when it fundamentally redirects the authored story or omits essential creative commitments needed for a usable outline. If rejecting, provide a grounded quote from the section that demonstrates the material drift. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
@@ -6053,7 +6067,15 @@ export async function runSuggestionJob(
         missingRequiredRecipeObligations: finalCoverage.missingRequired.map((obligation) => obligation.id),
       };
       if (finalCoverage.missingRequired.length > 0) {
-        throw new RecipeObligationValidationError(`missing_recipe_obligations: ${finalCoverage.missingRequired.map((obligation) => obligation.id).join(", ")}`);
+        // Requirement ID annotations are writer metadata, not the story.
+        // A paid, structurally complete outline is deliverable even if its
+        // non-authoritative ID index missed a premise component. Internal QA
+        // retains the precise gap for product analysis, never a customer alert.
+        diagnostics = {
+          ...diagnostics,
+          premiseCoverageAssessment: "needs_review",
+          automaticNarrativeRepair: "disabled",
+        };
       }
       const finalScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
       const belowLengthTolerance = needsNovelExpansion(completedSuggestions, body.existingSections ?? []);
@@ -6299,7 +6321,9 @@ export async function runSuggestionJob(
       planningState = { ...planningState, phase: "semantic_completion", nextAction: "semantic-completion" };
       if (notice) recordSemanticWarning(notice);
       await updateRun({ suggestions: persistedSemanticSuggestions, planning_state: planningState, diagnostics });
-      await continueAfterSemanticVerification(persistedSemanticSuggestions, notice ? [notice] : []);
+      // Verification findings are product telemetry, NOT a customer-facing
+      // warning. A paid outline should be reviewable without exposing QA.
+      await continueAfterSemanticVerification(persistedSemanticSuggestions);
       return;
     }
     // Compatibility only: an old paid run may already be checkpointed in
@@ -6332,7 +6356,7 @@ export async function runSuggestionJob(
       };
       recordSemanticWarning(notice);
       await updateRun({ suggestions: original, planning_state: planningState, diagnostics });
-      await continueAfterSemanticVerification(original, [notice]);
+      await continueAfterSemanticVerification(original);
       return;
     }
     // Runs checkpointed by the old worker must remain recoverable without

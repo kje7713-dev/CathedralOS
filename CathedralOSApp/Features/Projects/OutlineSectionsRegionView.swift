@@ -470,9 +470,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             }
         }
         .alert(suggestionsFeedbackTitle, isPresented: suggestionsFeedbackPresented) {
-            if recoverableSuggestionFailureCode == "insufficient_credits" ||
-                recoverableSuggestionFailureCode == "story_arc_semantic_unresolved" {
-                Button(recoverableSuggestionFailureCode == "insufficient_credits" ? "Resume After Adding Credits" : "Retry Final Check") {
+            if recoverableSuggestionFailureCode == "insufficient_credits" {
+                Button("Resume After Adding Credits") {
                     suggestionsFeedback = nil
                     recoverableSuggestions = nil
                     recoverableSuggestionFailureCode = nil
@@ -739,7 +738,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private var suggestionsFeedbackTitle: String {
-        recoverableSuggestionFailureCode != nil ? "Suggestions Saved — Review Required" : "Suggestions Ready"
+        recoverableSuggestionFailureCode == "insufficient_credits" ? "Suggestions Saved — Action Needed" : "Suggestions Ready"
     }
 
     private var suggestionsReady: Bool {

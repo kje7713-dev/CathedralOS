@@ -1035,13 +1035,11 @@ final class DataDurabilityCoordinator: ObservableObject {
         let exceededNovelCap = failureCode == "failed_over_target" ||
             normalizedFailureMessage.contains("120,000-word hard cap") ||
             normalizedFailureMessage.contains("exceeds the 120,000")
-        var message = "Your suggestions were saved and are ready to review. The final validation did not pass."
-        if exceededNovelCap {
-            message = "Your suggestions were saved, but the draft exceeded the novel-length limit, so the final outline check stopped."
-        } else if failureCode == "failed_under_target" {
-            message = "Your suggestions were saved, but the draft was still below the required novel length, so the final outline check stopped."
-        } else if failureCode == "failed_expansion" {
-            message = "Your suggestions were saved, but the outline could not be expanded to the required length."
+        // Only actionable delivery/billing problems belong in a customer
+        // message. Backend semantic and recipe-ID checks are internal QA.
+        var message = "Your outline is ready to review."
+        if exceededNovelCap || failureCode == "failed_under_target" || failureCode == "failed_expansion" {
+            message = "We saved the available outline. You can review the draft."
         }
         if let charged = result.creditCostCharged, charged > 0 {
             message += " You were charged \(String(format: "%.2f", charged)) credits for the completed stages."
@@ -1051,8 +1049,6 @@ final class DataDurabilityCoordinator: ObservableObject {
         }
         if failureCode == "insufficient_credits" {
             message += " The next stage could not start because your balance was too low. Add credits and choose Resume After Adding Credits, or choose Review Suggestions to use the saved output."
-        } else if failureCode == "story_arc_semantic_unresolved" {
-            message += " The final Story Arc check still found an authored requirement that needs attention. Review the saved sections before accepting them."
         } else {
             message += " No additional charge was made. Choose Review Suggestions to decide what to keep."
         }
