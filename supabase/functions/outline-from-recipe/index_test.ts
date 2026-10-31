@@ -906,7 +906,7 @@ Deno.test("selected book-level climax persists into outline without forcing the 
   assertStringIncludes(outlinePrompt.system, savedArchitecture.decisiveClimax);
   assertStringIncludes(outlinePrompt.system, savedArchitecture.deliberatelyOpenThreads);
   assertStringIncludes(outlinePrompt.system, "not necessarily resolve every external threat");
-  assertStringIncludes(outlinePrompt.system, "the decisive BOOK-level outcome must be DRAMATIZED as the climax section\'s dramaticEvent");
+  assertStringIncludes(outlinePrompt.system, "the decisive BOOK-level outcome must be DRAMATIZED as the climax section's dramaticEvent");
 });
 
 Deno.test("explicitly authored external victory and relationship resolution remain permitted in all genres", () => {
