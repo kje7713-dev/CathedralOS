@@ -792,10 +792,10 @@ Deno.test("same authored recipe with different arcs reaches the payoff handoff",
     const data = JSON.parse(user);
     assertEquals(data.planningContext.arc.name, arc.name);
     assertEquals(data.planningContext.arc.beats[1].description, arc.ending);
-    assertStringIncludes(system, "Design an arc-specific climactic payoff BEFORE committing to the plot");
+    assertStringIncludes(system, "## Choose an exceptional, arc-specific ending before building the central plot");
     assertStringIncludes(system, "COUNTERFACTUAL ARC CHECK");
     assertStringIncludes(system, "WORK BACKWARD");
-    assertStringIncludes(system, "Procedural work, bureaucracy, investigations and institutions are welcome");
+    assertStringIncludes(system, "Select any investigation, mission, tactical operation, technical solution");
     if (sharedPrompt === undefined) sharedPrompt = system;
     else assertEquals(system, sharedPrompt);
 
@@ -894,7 +894,7 @@ Deno.test("architecture + allocation share one provider response, with recipe au
   assertStringIncludes(system, architecture.decisiveClimax);
   assertStringIncludes(system, architecture.endingConsequence);
   assertStringIncludes(system, "Mara confronts the threat, pays the cost");
-  assertStringIncludes(system, "resolution may only dramatize its consequences");
+  assertStringIncludes(system, "the decisive BOOK-level outcome must be DRAMATIZED as the climax section's dramaticEvent");
   const payload = JSON.parse(user);
   assertEquals(payload.allocation[0][1].minSections, planned.get("beat-1")?.minSections);
   assertEquals(payload.allocation[1][1].minSections, planned.get("beat-2")?.minSections);
@@ -1002,7 +1002,7 @@ Deno.test("selected book-level climax persists into outline without forcing the 
   assertStringIncludes(outlinePrompt.system, savedArchitecture.decisiveClimax);
   assertStringIncludes(outlinePrompt.system, savedArchitecture.deliberatelyOpenThreads);
   assertStringIncludes(outlinePrompt.system, "not necessarily resolve every external threat");
-  assertStringIncludes(outlinePrompt.system, "the decisive BOOK-level outcome must be achieved in the climax role");
+  assertStringIncludes(outlinePrompt.system, "the decisive BOOK-level outcome must be DRAMATIZED as the climax section's dramaticEvent");
 });
 
 Deno.test("explicitly authored external victory and relationship resolution remain permitted in all genres", () => {
