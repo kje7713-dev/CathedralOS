@@ -644,7 +644,7 @@ Deno.test("arc-first architecture derives plot from every authored beat before c
     const { system, user } = buildAllocationPrompt(request);
     const arcFirst = system.indexOf("Interpret the recipe AND selected Story Arc BEFORE choosing the story");
     const chooseOutcome = system.indexOf("After reconciling the recipe with the ordered arc movements");
-    const persistBeatPlans = system.indexOf("THEN write the already-selected beat-by-beat movements into allocation rationale");
+    const persistBeatPlans = system.indexOf("THEN work backward from that chosen payoff through the ordered arc beats");
     const sizeChapters = system.indexOf("Only AFTER those story and arc decisions");
     assertEquals(arcFirst >= 0 && arcFirst < chooseOutcome && chooseOutcome < persistBeatPlans && persistBeatPlans < sizeChapters, true, arcName);
     assertStringIncludes(system, "Each rationale must explain BOTH the specific effect required by that beat's authored description");
@@ -661,6 +661,111 @@ Deno.test("arc-first architecture derives plot from every authored beat before c
     assertStringIncludes(outline.system, "Each beat's rationale must realize that beat's authored dramatic requirement");
     assertStringIncludes(outline.system, "Reconcile the authored Story Arc's dramatic progression with the recipe BEFORE committing to the plot");
   }
+});
+
+Deno.test("exceptional payoff changes with the selected arc, not just beat labels", () => {
+  // The recipe is deliberately IDENTICAL. Only the selected Story Arc varies.
+  const sameRecipe: any = {
+    ...sparseRequest.recipe,
+    project: {
+      ...sparseRequest.recipe.project,
+      summary: "Two compromised companions share a secret and face a corrupt institution whose larger purpose remains unknown.",
+      audienceNotes: "Adult fiction with psychologically complex, morally compromised characters.",
+    },
+  };
+  const arcs = [
+    {
+      name: "Horror / Escalating Dread",
+      beats: [
+        { id: "h-a", role: "full_manifestation", label: "Full Manifestation", description: "Make the horror unavoidable and genuinely terrifying." },
+        { id: "h-b", role: "final_image", label: "Final Image", description: "Leave disturbing emotional residue after the decisive encounter." },
+      ],
+    },
+    {
+      name: "Romance / HEA",
+      beats: [
+        { id: "r-a", role: "grand_choice", label: "Grand Choice", description: "Force the lovers to risk something deeply personal for one another." },
+        { id: "r-b", role: "hea_hfn", label: "HEA", description: "Deliver an emotionally earned happy relationship outcome." },
+      ],
+    },
+    {
+      name: "Mystery",
+      beats: [
+        { id: "m-a", role: "key_revelation", label: "Key Revelation", description: "Change the meaning of all previous clues." },
+        { id: "m-b", role: "resolution", label: "Resolution", description: "Deliver the earned answer and its irreversible cost." },
+      ],
+    },
+    {
+      name: "Custom Experimental Arc",
+      beats: [
+        { id: "c-a", role: "rupture", label: "Rupture", description: "An irreversible relationship fracture." },
+        { id: "c-b", role: "aftermath", label: "Aftermath", description: "A quiet but devastating moral consequence." },
+      ],
+    },
+  ];
+  let baselineSystem: string | undefined;
+  for (const arc of arcs) {
+    const request: any = { ...sparseRequest, recipe: sameRecipe, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, ...arc } };
+    const architecture = buildAllocationPrompt(request);
+    const outline = buildPrompt(request, new Map(), [], undefined, {
+      centralQuestion: "Which truth must the protagonists confront?",
+      characterCausality: "The companions' conflicting decisions cause an irreversible confrontation.",
+      decisiveClimax: "One protagonist makes a decisive and costly choice.",
+      endingConsequence: "Their lives can never return to their earlier state.",
+      deliberatelyOpenThreads: "The larger institution remains unresolved.",
+    });
+    const payload = JSON.parse(architecture.user);
+    assertEquals(payload.planningContext.recipe.project.summary, sameRecipe.project.summary);
+    assertEquals(payload.planningContext.arc.name, arc.name);
+    assertEquals(payload.planningContext.arc.beats.map((b: any) => b.description), arc.beats.map((b) => b.description));
+    assertStringIncludes(architecture.system, "Choose an exceptional, arc-specific ending before building the central plot");
+    assertStringIncludes(architecture.system, "Survival, escape, staying together, a disrupted operation");
+    assertStringIncludes(architecture.system, "a DIFFERENT primary dramatic question, conflict trajectory, decisive event, and outcome");
+    assertStringIncludes(architecture.system, "Merely changing labels, tone");
+    assertStringIncludes(architecture.system, "impose a tragic ending on a happy-ending contract");
+    assertStringIncludes(architecture.system, "Personal stakes can be as devastating as national stakes");
+    assertStringIncludes(architecture.system, "THEN work backward from that chosen payoff");
+    assertStringIncludes(architecture.system, "Preserve wider series promises at their authored scope");
+    assertStringIncludes(outline.system, "Preserve the architecture's specifically selected, extraordinary arc-driven payoff");
+    assertStringIncludes(outline.system, "do not displace it with a report, explanation");
+    assertStringIncludes(outline.system, "procedural storytelling are entirely valid");
+    assertStringIncludes(outline.system, "a mere narrow escape, surviving together, stopping a routine operation");
+    // The same rules apply to every genre, while each distinct authored arc
+    // is actually passed to the planner to shape its generated ending.
+    if (baselineSystem === undefined) baselineSystem = architecture.system;
+    else assertEquals(architecture.system, baselineSystem);
+  }
+});
+
+Deno.test("high-impact endings preserve existing architecture schema and one-call planning", async () => {
+  const req = { ...sparseRequest, requestedFormat: "novel" } as any;
+  let calls = 0;
+  const result = await planSectionAllocation(req, "unused", async (system: string, _user: string, _maxTokens: number, format: any, action: string) => {
+    calls += 1;
+    assertEquals(action, "outline-plan");
+    assertStringIncludes(system, "Choose an exceptional, arc-specific ending before building the central plot");
+    assertEquals(Object.keys(format.json_schema.schema.properties.storyArchitecture.properties).sort(),
+      ["centralQuestion", "characterCausality", "decisiveClimax", "deliberatelyOpenThreads", "endingConsequence"].sort());
+    return {
+      content: JSON.stringify({
+        storyArchitecture: {
+          centralQuestion: "Will Mara tell the truth despite the irreversible consequences?",
+          characterCausality: "Her betrayal sets off the final reckoning.",
+          decisiveClimax: "Mara exposes her part in the betrayal and loses the person she most wanted to protect.",
+          endingConsequence: "The family knows the truth and is permanently changed.",
+          deliberatelyOpenThreads: "The wider political conspiracy remains.",
+        },
+        allocations: [
+          { beatIndex: 0, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "Mara's fatal mistake begins the betrayal." },
+          { beatIndex: 1, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "The irrevocable loss and resulting changed family fulfill this arc." },
+        ],
+      }),
+      creditCostCharged: 1,
+      remainingCredits: 99,
+    } as any;
+  });
+  assertEquals(calls, 1);
+  assertEquals(result.size, 2);
 });
 
 Deno.test("novel first-pass slot schema reserves required functions across arc templates", () => {
@@ -883,7 +988,7 @@ Deno.test("allocation prompt selects causal outcome before sizing chapters witho
   const allocationPrompt = buildAllocationPrompt(req, deriveRecipeObligations(req.recipe));
   assertStringIncludes(allocationPrompt.system, "## Interpret the recipe AND selected Story Arc BEFORE choosing the story");
   assertStringIncludes(allocationPrompt.system, "The recipe governs premise, genre, intended experience");
-  assertStringIncludes(allocationPrompt.system, "THEN write the already-selected beat-by-beat movements into allocation rationale");
+  assertStringIncludes(allocationPrompt.system, "THEN work backward from that chosen payoff through the ordered arc beats");
   assertStringIncludes(allocationPrompt.system, "Only AFTER those story and arc decisions, budget and assign containerCounts");
   assertStringIncludes(allocationPrompt.system, "An invented institution, operation, investigation, or technical solution is not implied");
   const payload = JSON.parse(allocationPrompt.user);
@@ -1545,7 +1650,7 @@ Deno.test("global buildPrompt favors character-driven dramatic selection without
   assertStringIncludes(system, "most entertaining, original, surprising, and dramatically compelling option");
   assertStringIncludes(system, "distinctive personalities, desires, flaws, obsessions, relationships, and unpredictable decisions");
   assertStringIncludes(system, "rather than serving as informants, exposition, transportation, or other functional devices");
-  assertStringIncludes(system, "outrageous encounters, reckless decisions, dark humor, grotesque absurdity");
+  assertStringIncludes(system, "daring encounters, consequential emotional choices, reckless mistakes, surprising reversals, memorable revelations");
   assertStringIncludes(system, "Preserve intended adult intensity without sanitizing it");
   assertStringIncludes(system, "climax emerge from the protagonists' distinctive choices and behavior");
   assertStringIncludes(system, "Do not force randomness, spectacle, or artificial chaos into restrained stories");
