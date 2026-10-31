@@ -719,8 +719,8 @@ Deno.test("exceptional payoff changes with the selected arc, not just beat label
     assertEquals(payload.planningContext.arc.name, arc.name);
     assertEquals(payload.planningContext.arc.beats.map((b: any) => b.description), arc.beats.map((b) => b.description));
     assertStringIncludes(architecture.system, "Choose an exceptional, arc-specific ending before building the central plot");
-    assertStringIncludes(architecture.system, "A mere");
-    assertStringIncludes(architecture.system, "the primary dramatic question, conflict trajectory, decisive event, and outcome");
+    assertStringIncludes(architecture.system, "Survival, escape, staying together, a disrupted operation");
+    assertStringIncludes(architecture.system, "a DIFFERENT primary dramatic question, conflict trajectory, decisive event, and outcome");
     assertStringIncludes(architecture.system, "Merely changing labels, tone");
     assertStringIncludes(architecture.system, "impose a tragic ending on a happy-ending contract");
     assertStringIncludes(architecture.system, "Personal stakes can be as devastating as national stakes");
