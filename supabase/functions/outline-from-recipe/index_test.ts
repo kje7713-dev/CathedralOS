@@ -665,10 +665,11 @@ Deno.test("arc-first architecture derives plot from every authored beat before c
 
 Deno.test("novel first-pass slot schema reserves required functions across arc templates", () => {
   const cases = [
-    { name: "Horror / Escalating Dread", climaxRole: "survival_confrontation", resolutionRole: "final_image" },
-    { name: "Romance / HEA", climaxRole: "grand_choice", resolutionRole: "hea_hfn" },
-    { name: "Three-Act", climaxRole: "climax", resolutionRole: "resolution" },
-    { name: "Custom Experimental Arc", climaxRole: "confrontation", resolutionRole: "final_image" },
+    { name: "Horror / Escalating Dread", climaxRole: "survival_confrontation", resolutionRole: "final_image", requiresResolution: true },
+    { name: "Romance / HEA", climaxRole: "grand_choice", resolutionRole: "hea_hfn", requiresResolution: true },
+    { name: "Mystery", climaxRole: "confrontation", resolutionRole: "resolution", requiresResolution: true },
+    { name: "Three-Act", climaxRole: "climax", resolutionRole: "resolution", requiresResolution: false },
+    { name: "Custom Experimental Arc", climaxRole: "confrontation", resolutionRole: "final_image", requiresResolution: false },
   ];
   for (const sample of cases) {
     const beats = [
@@ -685,7 +686,12 @@ Deno.test("novel first-pass slot schema reserves required functions across arc t
     const climax = schema.properties.beats.properties.decisive.properties;
     const resolution = schema.properties.beats.properties.last.properties;
     assertEquals(climax.section_003.properties.dramaticFunction.enum, ["climax"], sample.name);
-    assertEquals(resolution.section_003.properties.dramaticFunction.enum, ["resolution"], sample.name);
+    if (sample.requiresResolution) {
+      assertEquals(resolution.section_003.properties.dramaticFunction.enum, ["resolution"], sample.name);
+    } else {
+      // Don't invent requirements that the template's own contract lacks.
+      assertEquals(resolution.section_003.properties.dramaticFunction.enum.includes("aftermath"), true);
+    }
     assertEquals(climax.section_001.properties.dramaticFunction.enum.includes("climax"), true);
     assertEquals(resolution.section_001.properties.dramaticFunction.enum.includes("resolution"), true);
     assertEquals(climax.section_003.properties.container.enum, ["chapter"]);
