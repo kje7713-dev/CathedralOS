@@ -881,11 +881,11 @@ Deno.test("allocation prompt selects causal outcome before sizing chapters witho
   };
   const req = { ...sparseRequest, requestedFormat: "novel", storyMaterialEnrichment: material } as any;
   const allocationPrompt = buildAllocationPrompt(req, deriveRecipeObligations(req.recipe));
-  assertStringIncludes(allocationPrompt.system, "## Choose the story BEFORE allocating its chapters");
-  assertStringIncludes(allocationPrompt.system, "The recipe is authoritative");
-  assertStringIncludes(allocationPrompt.system, "THEN choose the beat-by-beat causal movements");
-  assertStringIncludes(allocationPrompt.system, "THEN budget and assign containerCounts");
-  assertStringIncludes(allocationPrompt.system, "government contractor");
+  assertStringIncludes(allocationPrompt.system, "## Interpret the recipe AND selected Story Arc BEFORE choosing the story");
+  assertStringIncludes(allocationPrompt.system, "The recipe governs premise, genre, intended experience");
+  assertStringIncludes(allocationPrompt.system, "THEN write the already-selected beat-by-beat movements into allocation rationale");
+  assertStringIncludes(allocationPrompt.system, "Only AFTER those story and arc decisions, budget and assign containerCounts");
+  assertStringIncludes(allocationPrompt.system, "An invented institution, operation, investigation, or technical solution is not implied");
   const payload = JSON.parse(allocationPrompt.user);
   assertEquals(payload.planningContext.recipe, req.recipe);
   assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2"), undefined);
