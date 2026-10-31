@@ -595,7 +595,7 @@ export function buildSuggestionResponseSchema(
   obligations: RecipeObligation[] = [],
   templateName = "",
   requestedFormat: StoryMaterialFormat = "other",
-  existingSections: Array<Pick<Suggestion, "storyArcBeatID" | "dramaticFunction">> = [],
+  existingSections: Array<{ storyArcBeatID?: string; dramaticFunction?: DramaticFunction }> = [],
 ) {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
