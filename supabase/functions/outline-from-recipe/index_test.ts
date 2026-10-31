@@ -701,6 +701,103 @@ Deno.test("allocation rejects malformed architecture instead of passing it to pr
   assertStringIncludes(buildPrompt(sparseRequest as any, parsed).system, "Legacy checkpoint");
 });
 
+Deno.test("reader-experience-first architecture applies equally across genres without a hardcoded genre solution", () => {
+  const recipes = [
+    {
+      name: "Horror / Escalating Dread",
+      summary: "Three ruined drifters encounter an unknowable conspiracy whose ultimate danger may unfold over several books.",
+      audienceNotes: "Grotesque psychological dread and surreal uncertainty.",
+    },
+    {
+      name: "Comedy / Escalating Chaos",
+      summary: "A vain grifter makes ridiculous promises that turn his failing town against him.",
+      audienceNotes: "Absurd comedy driven by humiliation and escalating mistakes.",
+    },
+    {
+      name: "Romance",
+      summary: "Two estranged friends must choose whether to risk their friendship to become lovers.",
+      audienceNotes: "Intimate, tender romantic tension and an earned emotional choice.",
+    },
+    {
+      name: "Thriller",
+      summary: "A whistleblower must expose the conspiracy and stop its planned raid before the book ends.",
+      audienceNotes: "A high-stakes investigation that culminates in stopping the raid.",
+    },
+    {
+      name: "Literary Drama",
+      summary: "Siblings struggle after their mother's death, and one finally admits the truth without earning forgiveness.",
+      audienceNotes: "Quiet moral ambiguity and painful family relationships.",
+    },
+  ];
+  let genreNeutralSystem: string | undefined;
+  for (const genre of recipes) {
+    const request: any = {
+      ...sparseRequest,
+      requestedFormat: "novel",
+      recipe: {
+        ...sparseRequest.recipe,
+        project: { ...sparseRequest.recipe.project, summary: genre.summary, audienceNotes: genre.audienceNotes },
+      },
+      arcTemplate: { ...sparseRequest.arcTemplate, name: genre.name },
+    };
+    const architecturePrompt = buildAllocationPrompt(request);
+    const outlinePrompt = buildPrompt(request, new Map());
+    assertStringIncludes(architecturePrompt.system, "Author-promised reader experience BEFORE plot machinery");
+    assertStringIncludes(architecturePrompt.system, "The Story Arc governs dramatic progression, not a default set of plot devices");
+    assertStringIncludes(architecturePrompt.system, "A premise fact does not itself create an objective");
+    assertStringIncludes(architecturePrompt.system, "This rule applies to ALL genres");
+    assertStringIncludes(architecturePrompt.system, "if the author explicitly requires a particular resolution in this volume, honor it");
+    assertStringIncludes(outlinePrompt.system, "identify the intended reader experience from this recipe's specific genre, tone");
+    assertStringIncludes(outlinePrompt.system, "Do not convert the authored reader experience into a generic mission");
+    assertStringIncludes(outlinePrompt.system, "relationship milestone is authored and dramatically appropriate");
+    assertEquals(JSON.parse(architecturePrompt.user).planningContext.recipe.project.summary, genre.summary);
+    assertEquals(JSON.parse(architecturePrompt.user).planningContext.arc.name, genre.name);
+    // The rule itself is shared: no code-level special treatment for the example horror recipe.
+    if (genreNeutralSystem === undefined) genreNeutralSystem = architecturePrompt.system;
+    else assertEquals(architecturePrompt.system, genreNeutralSystem);
+  }
+});
+
+Deno.test("selected book-level climax persists into outline without forcing the wider threat to be defeated", () => {
+  const request: any = {
+    ...sparseRequest,
+    recipe: {
+      ...sparseRequest.recipe,
+      project: { ...sparseRequest.recipe.project, summary: "Their accidental notoriety exposes a mystery whose stakes may reach other books." },
+    },
+  };
+  const savedArchitecture = {
+    centralQuestion: "Will Mara betray the people she promised to protect?",
+    characterCausality: "Her lies and her friend's reckless choices force a costly decision.",
+    decisiveClimax: "She chooses her friends and permanently loses the only safe home she knows.",
+    endingConsequence: "The group survives, but their relationships cannot return to what they were.",
+    deliberatelyOpenThreads: "The larger organization remains hidden and active.",
+  };
+  const outlinePrompt = buildPrompt(request, new Map(), [], undefined, savedArchitecture);
+  assertStringIncludes(outlinePrompt.system, savedArchitecture.centralQuestion);
+  assertStringIncludes(outlinePrompt.system, savedArchitecture.decisiveClimax);
+  assertStringIncludes(outlinePrompt.system, savedArchitecture.deliberatelyOpenThreads);
+  assertStringIncludes(outlinePrompt.system, "not necessarily resolve every external threat");
+  assertStringIncludes(outlinePrompt.system, "the decisive BOOK-level outcome must be achieved in the climax role");
+});
+
+Deno.test("explicitly authored external victory and relationship resolution remain permitted in all genres", () => {
+  for (const summary of [
+    "An investigator must expose the named conspiracy and stop its planned raid before the book ends.",
+    "Two lovers must reunite and confess their feelings before the end of this book.",
+  ]) {
+    const request: any = {
+      ...sparseRequest,
+      recipe: { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, summary } },
+    };
+    const architecturePrompt = buildAllocationPrompt(request);
+    const outlinePrompt = buildPrompt(request, new Map());
+    assertStringIncludes(architecturePrompt.system, "if the author explicitly requires a particular resolution in this volume, honor it");
+    assertStringIncludes(outlinePrompt.system, "if a procedural solution, external victory, or relationship milestone is authored and dramatically appropriate, deliver it");
+    assertEquals(JSON.parse(architecturePrompt.user).planningContext.recipe.project.summary, summary);
+  }
+});
+
 Deno.test("allocation prompt selects causal outcome before sizing chapters without canonizing contractors", () => {
   const material: any = {
     characters: [{ id: "p1", label: "Inez", source: "planner", sourceReference: null, description: "Sells out a friend to gain control." }],
@@ -1359,8 +1456,8 @@ Deno.test("global buildPrompt includes the requested concrete-event guardrails",
   assertEquals(system.includes("Every section must make a distinct irreversible contribution: reveal new information, force a consequential choice, alter a relationship, or materially change the tactical situation."), true);
   assertEquals(system.includes("Whenever practical, relationship and character-arc turns should cause or complicate plot events rather than occurring as isolated character-development scenes."), true);
   assertEquals(system.includes("## Premise outcome and ending causality"), true);
-  assertEquals(system.includes("Before drafting sections, determine the whole story's cause-and-effect trajectory"), true);
-  assertEquals(system.includes("the decisive climax, the irreversible change it causes"), true);
+  assertEquals(system.includes("Before drafting sections, identify the intended reader experience from this recipe's specific genre, tone"), true);
+  assertEquals(system.includes("the decisive climax, the irreversible character/world change it causes"), true);
   assertEquals(system.includes("Do not let a subsequent section restart the same countdown"), true);
   assertEquals(system.includes("must deliver the premise's consequential promise"), true);
   assertEquals(system.includes("Favor specific, memorable events and evocative section titles over functional briefing, regrouping, mapping, or explanatory scenes."), true);
@@ -1406,7 +1503,7 @@ Deno.test("outliner selects character-caused events before deciding its climax o
   assertEquals(system.indexOf("## Character-caused story selection before plot construction") < system.indexOf("## Premise outcome and ending causality"), true);
   assertStringIncludes(system, "preserve it, but still let authored character agency");
   assertStringIncludes(system, "Preserve the author's tone, adult intensity, ambiguity, restrained genres");
-  assertStringIncludes(system, "Before drafting sections, determine the whole story's cause-and-effect trajectory");
+  assertStringIncludes(system, "Before drafting sections, identify the intended reader experience from this recipe's specific genre, tone");
   assertStringIncludes(system, "## Narrative-state continuity");
 });
 
