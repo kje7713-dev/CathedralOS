@@ -644,7 +644,7 @@ Deno.test("arc-first architecture derives plot from every authored beat before c
     const { system, user } = buildAllocationPrompt(request);
     const arcFirst = system.indexOf("Interpret the recipe AND selected Story Arc BEFORE choosing the story");
     const chooseOutcome = system.indexOf("After reconciling the recipe with the ordered arc movements");
-    const persistBeatPlans = system.indexOf("THEN write the already-selected beat-by-beat movements into allocation rationale");
+    const persistBeatPlans = system.indexOf("THEN work backward from that chosen payoff through the ordered arc beats");
     const sizeChapters = system.indexOf("Only AFTER those story and arc decisions");
     assertEquals(arcFirst >= 0 && arcFirst < chooseOutcome && chooseOutcome < persistBeatPlans && persistBeatPlans < sizeChapters, true, arcName);
     assertStringIncludes(system, "Each rationale must explain BOTH the specific effect required by that beat's authored description");
@@ -988,7 +988,7 @@ Deno.test("allocation prompt selects causal outcome before sizing chapters witho
   const allocationPrompt = buildAllocationPrompt(req, deriveRecipeObligations(req.recipe));
   assertStringIncludes(allocationPrompt.system, "## Interpret the recipe AND selected Story Arc BEFORE choosing the story");
   assertStringIncludes(allocationPrompt.system, "The recipe governs premise, genre, intended experience");
-  assertStringIncludes(allocationPrompt.system, "THEN write the already-selected beat-by-beat movements into allocation rationale");
+  assertStringIncludes(allocationPrompt.system, "THEN work backward from that chosen payoff through the ordered arc beats");
   assertStringIncludes(allocationPrompt.system, "Only AFTER those story and arc decisions, budget and assign containerCounts");
   assertStringIncludes(allocationPrompt.system, "An invented institution, operation, investigation, or technical solution is not implied");
   const payload = JSON.parse(allocationPrompt.user);
@@ -1650,7 +1650,7 @@ Deno.test("global buildPrompt favors character-driven dramatic selection without
   assertStringIncludes(system, "most entertaining, original, surprising, and dramatically compelling option");
   assertStringIncludes(system, "distinctive personalities, desires, flaws, obsessions, relationships, and unpredictable decisions");
   assertStringIncludes(system, "rather than serving as informants, exposition, transportation, or other functional devices");
-  assertStringIncludes(system, "outrageous encounters, reckless decisions, dark humor, grotesque absurdity");
+  assertStringIncludes(system, "daring encounters, consequential emotional choices, reckless mistakes, surprising reversals, memorable revelations");
   assertStringIncludes(system, "Preserve intended adult intensity without sanitizing it");
   assertStringIncludes(system, "climax emerge from the protagonists' distinctive choices and behavior");
   assertStringIncludes(system, "Do not force randomness, spectacle, or artificial chaos into restrained stories");
