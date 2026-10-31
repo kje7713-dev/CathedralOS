@@ -663,6 +663,56 @@ Deno.test("arc-first architecture derives plot from every authored beat before c
   }
 });
 
+Deno.test("same authored recipe with different arcs demands materially different payoff decisions", () => {
+  const constantRecipe = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project,
+    summary: "Two estranged travelers discover a secret. Their painful loyalty, dangerous choices, and growing notoriety threaten their future.",
+  } };
+  const arcs = [
+    { name: "Intimate Relationship", ending: "The partners must make a defining reciprocal commitment and face what love costs them." },
+    { name: "Escalating Dread", ending: "The characters face a final terrifying encounter and must survive or suffer irreversible doom." },
+    { name: "Revelatory Mystery", ending: "A consequential discovery reinterprets the central question and requires a painful answer." },
+    { name: "Bitter Comedy", ending: "An accumulated series of comic reversals causes an outrageous and consequential last reversal." },
+  ];
+  let sharedPrompt: string | undefined;
+  for (const arc of arcs) {
+    const request: any = { ...sparseRequest, recipe: constantRecipe, arcTemplate: {
+      id: "arbitrary-template", name: arc.name,
+      beats: [
+        { id: "a", role: "setup", label: "Beginning", description: "Establish their specific relationship and circumstances." },
+        { id: "b", role: "climax", label: "Decisive Payoff", description: arc.ending },
+        { id: "c", role: "final_image", label: "Consequences", description: "Dramatize the lasting impact of this chosen payoff." },
+      ],
+    } };
+    const { system, user } = buildAllocationPrompt(request);
+    const data = JSON.parse(user);
+    assertEquals(data.planningContext.recipe.project.summary, constantRecipe.project.summary);
+    assertEquals(data.planningContext.arc.beats[1].description, arc.ending);
+    assertEquals(data.planningContext.arc.name, arc.name);
+    assertStringIncludes(system, "Design an arc-specific climactic payoff BEFORE committing to the plot");
+    assertStringIncludes(system, "COUNTERFACTUAL ARC CHECK");
+    assertStringIncludes(system, "central conflict, climax and ending");
+    assertStringIncludes(system, "WORK BACKWARD");
+    assertStringIncludes(system, "Procedural work, bureaucracy, investigations and institutions are welcome");
+    assertStringIncludes(system, "The climax rationale MUST describe the decisive on-page action");
+    assertStringIncludes(system, "Do NOT mandate explosions, deaths, rescue");
+    if (sharedPrompt === undefined) sharedPrompt = system;
+    else assertEquals(system, sharedPrompt); // Genre-specific demands come from the selected arc data, not hardcoded branches.
+
+    const selectedArchitecture = {
+      centralQuestion: "Will they choose each other?",
+      characterCausality: "The two make costly, conflicting decisions.",
+      decisiveClimax: arc.ending,
+      endingConsequence: "They cannot return to who they were.",
+      deliberatelyOpenThreads: "Their wider world remains dangerous.",
+    };
+    const outline = buildPrompt(request, new Map([["b", { minSections: 1, rationale: arc.ending }]]), [], undefined, selectedArchitecture);
+    assertStringIncludes(outline.system, arc.ending);
+    assertStringIncludes(outline.system, "Final-payoff realization across the Story Arc");
+    assertStringIncludes(outline.system, "A report that the event already happened is not itself the climax");
+    assertStringIncludes(outline.system, "the selected architecture's arc-specific climax");
+  }
+});
+
 Deno.test("novel first-pass slot schema reserves required functions across arc templates", () => {
   const cases = [
     { name: "Horror / Escalating Dread", climaxRole: "survival_confrontation", resolutionRole: "final_image", requiresResolution: true },
@@ -727,6 +777,8 @@ Deno.test("architecture + allocation share one provider response, with recipe au
     const schema = format.json_schema.schema;
     assertEquals(schema.required.includes("storyArchitecture"), true);
     assertEquals(schema.properties.storyArchitecture.required.length, 5);
+    assertStringIncludes(schema.properties.storyArchitecture.properties.decisiveClimax.description, "selected Story Arc");
+    assertStringIncludes(schema.properties.storyArchitecture.properties.endingConsequence.description, "after THAT climax");
     return {
       content: JSON.stringify({
         storyArchitecture: architecture,
@@ -746,7 +798,7 @@ Deno.test("architecture + allocation share one provider response, with recipe au
   assertStringIncludes(system, architecture.decisiveClimax);
   assertStringIncludes(system, architecture.endingConsequence);
   assertStringIncludes(system, "Mara confronts the threat, pays the cost");
-  assertStringIncludes(system, "resolution may only dramatize its consequences");
+  assertStringIncludes(system, "the resolution dramatizes the emotional and irreversible consequences");
   const payload = JSON.parse(user);
   assertEquals(payload.allocation[0][1].minSections, planned.get("beat-1")?.minSections);
   assertEquals(payload.allocation[1][1].minSections, planned.get("beat-2")?.minSections);
@@ -854,7 +906,7 @@ Deno.test("selected book-level climax persists into outline without forcing the 
   assertStringIncludes(outlinePrompt.system, savedArchitecture.decisiveClimax);
   assertStringIncludes(outlinePrompt.system, savedArchitecture.deliberatelyOpenThreads);
   assertStringIncludes(outlinePrompt.system, "not necessarily resolve every external threat");
-  assertStringIncludes(outlinePrompt.system, "the decisive BOOK-level outcome must be achieved in the climax role");
+  assertStringIncludes(outlinePrompt.system, "the decisive BOOK-level outcome must be DRAMATIZED as the climax section\'s dramaticEvent");
 });
 
 Deno.test("explicitly authored external victory and relationship resolution remain permitted in all genres", () => {
