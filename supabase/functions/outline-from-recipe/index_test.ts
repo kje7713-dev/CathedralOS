@@ -633,6 +633,82 @@ Deno.test("novel planning provider receives strict typed budget and carries 40 s
 });
 
 
+Deno.test("arc-first architecture derives plot from every authored beat before committing to an outcome", () => {
+  const beats = [
+    { id: "opening", role: "normal_with_crack", label: "Unsettling Opening", description: "Establish the particular wrongness of the ordinary world." },
+    { id: "manifest", role: "full_manifestation", label: "The Threat Arrives", description: "Make the principal danger immediate and unavoidable." },
+    { id: "ending", role: "final_image", label: "Final Image", description: "Show the irreversible consequence and emotional residue." },
+  ];
+  for (const arcName of ["Horror / Escalating Dread", "Romance / HEA", "Three-Act", "Custom Experimental Arc"]) {
+    const request: any = { ...sparseRequest, arcTemplate: { ...sparseRequest.arcTemplate, name: arcName, beats } };
+    const { system, user } = buildAllocationPrompt(request);
+    const arcFirst = system.indexOf("Interpret the recipe AND selected Story Arc BEFORE choosing the story");
+    const chooseOutcome = system.indexOf("After reconciling the recipe with the ordered arc movements");
+    const persistBeatPlans = system.indexOf("THEN write the already-selected beat-by-beat movements into allocation rationale");
+    const sizeChapters = system.indexOf("Only AFTER those story and arc decisions");
+    assertEquals(arcFirst >= 0 && arcFirst < chooseOutcome && chooseOutcome < persistBeatPlans && persistBeatPlans < sizeChapters, true, arcName);
+    assertStringIncludes(system, "Each rationale must explain BOTH the specific effect required by that beat's authored description");
+    const payload = JSON.parse(user);
+    assertEquals(payload.planningContext.arc.name, arcName);
+    assertEquals(payload.planningContext.arc.beats.map((beat: any) => beat.description), beats.map((beat) => beat.description));
+    const outline = buildPrompt(request, new Map(), [], undefined, {
+      centralQuestion: "Which value will the protagonist betray?",
+      characterCausality: "The protagonist makes decisions that compound the cost.",
+      decisiveClimax: "A decisive act permanently changes the relationship.",
+      endingConsequence: "The new relationship cannot revert.",
+      deliberatelyOpenThreads: "The wider mystery continues.",
+    });
+    assertStringIncludes(outline.system, "Each beat's rationale must realize that beat's authored dramatic requirement");
+    assertStringIncludes(outline.system, "Reconcile the authored Story Arc's dramatic progression with the recipe BEFORE committing to the plot");
+  }
+});
+
+Deno.test("novel first-pass slot schema reserves required functions across arc templates", () => {
+  const cases = [
+    { name: "Horror / Escalating Dread", climaxRole: "survival_confrontation", resolutionRole: "final_image", requiresResolution: true },
+    { name: "Romance / HEA", climaxRole: "grand_choice", resolutionRole: "hea_hfn", requiresResolution: true },
+    { name: "Mystery", climaxRole: "confrontation", resolutionRole: "resolution", requiresResolution: true },
+    { name: "Three-Act", climaxRole: "climax", resolutionRole: "resolution", requiresResolution: false },
+    { name: "Custom Experimental Arc", climaxRole: "confrontation", resolutionRole: "final_image", requiresResolution: false },
+  ];
+  for (const sample of cases) {
+    const beats = [
+      { id: "decisive", role: sample.climaxRole, label: "Decisive", description: "Achieve the beat's distinct dramatic change." },
+      { id: "last", role: sample.resolutionRole, label: "Last", description: "Carry that change into the final image." },
+    ];
+    const allocation = new Map(beats.map((beat) => [beat.id, {
+      minSections: 3,
+      rationale: "A distinct authored dramatic development.",
+      containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 3 },
+    }]));
+    const schema: any = buildSuggestionResponseSchema(beats, allocation, [], sample.name, "novel");
+    assertOpenAIStrictSchema(schema);
+    const climax = schema.properties.beats.properties.decisive.properties;
+    const resolution = schema.properties.beats.properties.last.properties;
+    assertEquals(climax.section_003.properties.dramaticFunction.enum, ["climax"], sample.name);
+    if (sample.requiresResolution) {
+      assertEquals(resolution.section_003.properties.dramaticFunction.enum, ["resolution"], sample.name);
+    } else {
+      // Don't invent requirements that the template's own contract lacks.
+      assertEquals(resolution.section_003.properties.dramaticFunction.enum.includes("aftermath"), true);
+    }
+    assertEquals(climax.section_001.properties.dramaticFunction.enum.includes("climax"), true);
+    assertEquals(resolution.section_001.properties.dramaticFunction.enum.includes("resolution"), true);
+    assertEquals(climax.section_003.properties.container.enum, ["chapter"]);
+    assertEquals(schema.properties.beats.properties.decisive.required.length, 3);
+    assertEquals(schema.properties.beats.properties.last.required.length, 3);
+    const withAccepted = buildSuggestionResponseSchema(beats, allocation, [], sample.name, "novel", [
+      { storyArcBeatID: "decisive", dramaticFunction: "climax" },
+      { storyArcBeatID: "last", dramaticFunction: "resolution" },
+    ]) as any;
+    assertEquals(withAccepted.properties.beats.properties.decisive.properties.section_003.properties.dramaticFunction.enum.includes("crisis"), true);
+    assertEquals(withAccepted.properties.beats.properties.last.properties.section_003.properties.dramaticFunction.enum.includes("aftermath"), true);
+    // No extra required field or rerun is introduced for non-novels and older array allocations.
+    const legacy = buildSuggestionResponseSchema(beats, new Map(beats.map((beat) => [beat.id, { minSections: 2, rationale: "legacy" }])), [], sample.name, "novel") as any;
+    assertEquals(legacy.properties.beats.properties.decisive.type, "array");
+  }
+});
+
 Deno.test("architecture + allocation share one provider response, with recipe authority and optional enrichment", async () => {
   const req = { ...sparseRequest, requestedFormat: "novel" } as any;
   const architecture = {
@@ -805,11 +881,11 @@ Deno.test("allocation prompt selects causal outcome before sizing chapters witho
   };
   const req = { ...sparseRequest, requestedFormat: "novel", storyMaterialEnrichment: material } as any;
   const allocationPrompt = buildAllocationPrompt(req, deriveRecipeObligations(req.recipe));
-  assertStringIncludes(allocationPrompt.system, "## Choose the story BEFORE allocating its chapters");
-  assertStringIncludes(allocationPrompt.system, "The recipe is authoritative");
-  assertStringIncludes(allocationPrompt.system, "THEN choose the beat-by-beat causal movements");
-  assertStringIncludes(allocationPrompt.system, "THEN budget and assign containerCounts");
-  assertStringIncludes(allocationPrompt.system, "government contractor");
+  assertStringIncludes(allocationPrompt.system, "## Interpret the recipe AND selected Story Arc BEFORE choosing the story");
+  assertStringIncludes(allocationPrompt.system, "The recipe governs premise, genre, intended experience");
+  assertStringIncludes(allocationPrompt.system, "THEN write the already-selected beat-by-beat movements into allocation rationale");
+  assertStringIncludes(allocationPrompt.system, "Only AFTER those story and arc decisions, budget and assign containerCounts");
+  assertStringIncludes(allocationPrompt.system, "An invented institution, operation, investigation, or technical solution is not implied");
   const payload = JSON.parse(allocationPrompt.user);
   assertEquals(payload.planningContext.recipe, req.recipe);
   assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2"), undefined);
