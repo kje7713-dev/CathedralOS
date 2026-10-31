@@ -645,8 +645,8 @@ export function buildSuggestionResponseSchema(
       // The flattened app payload remains the same ordered Suggestion[].
       const slots = plannedNovelContainerSlots(planned);
       // Reserve the last slot(s) for any still-missing required functions.
-      // This guarantees first-pass climax/resolution declarations for every
-      // template using the existing strict schema, without a retry or repair.
+      // Typed novel slots guarantee the declaration of any outstanding
+      // template-required functions without a retry or repair.
       // Previously accepted sections may already satisfy those functions.
       const outstandingFunctions = contract.requiredFunctions.filter((required) =>
         !existingSections.some((section) => section.storyArcBeatID === beat.id && section.dramaticFunction === required)
