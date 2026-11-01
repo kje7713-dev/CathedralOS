@@ -3623,7 +3623,8 @@ export function parseAndValidateAllocation(
     if (Array.isArray(candidates) && Number.isInteger(selectedIndex) &&
         Number(selectedIndex) >= 0 && Number(selectedIndex) < candidates.length) {
       const chosen = candidates[Number(selectedIndex)] as Record<string, unknown> | null;
-      if (chosen && ["centralQuestion", "decisiveClimax", "endingConsequence"].every((key) =>
+      const payoffKeys = ["centralQuestion", "decisiveClimax", "endingConsequence"] as const;
+      if (chosen && payoffKeys.every((key) =>
         typeof chosen[key] === "string" && String(chosen[key]).trim().length > 0 &&
         String(chosen[key]).length <= STORY_ARCHITECTURE_SCHEMA.properties[key].maxLength
       )) {
