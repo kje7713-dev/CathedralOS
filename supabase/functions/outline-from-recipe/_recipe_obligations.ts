@@ -128,6 +128,12 @@ export function obligationCoverage(
   return { covered, missingRequired: obligations.filter((obligation) => obligation.required && !covered[obligation.id]) };
 }
 
+export function renderRequiredRecipeCoverage(obligations: RecipeObligation[]): string {
+  const required = obligations.filter((obligation) => obligation.required);
+  if (required.length === 0) return "No required recipe coverage items were supplied.";
+  return required.map((obligation) => `- ${obligation.id} REQUIRED: ${obligation.statement}`).join("\n");
+}
+
 export function renderRecipeObligations(obligations: RecipeObligation[]): string {
   if (obligations.length === 0) return "No explicit recipe obligations were derived; preserve the supplied premise and use judgment without inventing mandatory requirements.";
   return obligations.map((obligation) => `- ${obligation.id} [${obligation.classification}]${obligation.required ? " REQUIRED" : " supporting"}: ${obligation.statement}`).join("\n");
