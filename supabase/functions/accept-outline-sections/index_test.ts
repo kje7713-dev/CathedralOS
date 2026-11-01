@@ -40,6 +40,12 @@ Deno.test("Accept All checks effective post-commit section replacements", () => 
   ]), []);
 });
 
+Deno.test("Accept All does not gate delivery on recipe ID metadata coverage", async () => {
+  const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  assertEquals(source.includes("if (missingRequired.length > 0) throw new MissingRecipeObligationsError"), false);
+  assertEquals(source.includes("provider metadata omission into a customer-visible failure"), true);
+});
+
 Deno.test("Accept All completes only after all sections and snapshot merge succeed", () => {
   assertEquals(acceptRunTerminalOutcome(0, null, null), {
     status: "completed",

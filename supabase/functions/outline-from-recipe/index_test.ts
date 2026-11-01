@@ -1625,6 +1625,19 @@ Deno.test("deterministic allocation budget constraints do not trigger a paid ret
   assertEquals(allocation.size, 2);
 });
 
+Deno.test("required recipe coverage ledger names relationship obligations explicitly", () => {
+  const request: any = { ...sparseRequest, recipe: {
+    ...sparseRequest.recipe,
+    selectedRelationships: [{ id: "ted-millie", name: "Ted / Millie", notes: "Mutual dependence drives the plot." }],
+  } };
+  const obligations = deriveRecipeObligations(request.recipe);
+  const prompt = buildPrompt(request, new Map(), obligations);
+  assertStringIncludes(prompt.system, "Every required obligation below must be materially realized");
+  assertStringIncludes(prompt.system, "REQUIRED:");
+  assertStringIncludes(prompt.system, "Ted / Millie");
+  assertStringIncludes(prompt.user, "Ted / Millie");
+});
+
 Deno.test("global buildPrompt includes the requested concrete-event guardrails", () => {
   const { system } = buildPrompt(sparseRequest as any, new Map());
   assertEquals(system.includes("Every section must commit to one canonical event."), true);

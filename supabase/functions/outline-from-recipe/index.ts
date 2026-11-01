@@ -37,6 +37,7 @@ import {
   deriveRecipeObligations,
   obligationCoverage,
   renderRecipeObligations,
+  renderRequiredRecipeCoverage,
   renderStoryNonNegotiableMustDos,
 } from "./_recipe_obligations.ts";
 import {
@@ -3101,6 +3102,10 @@ Before drafting sections, identify the intended reader experience from this reci
 ${storyArchitecture ? JSON.stringify(storyArchitecture) : "Legacy checkpoint: no prior story architecture was persisted. Choose a recipe-faithful causal story and definitive outcome before creating sections."}
 When present, carry forward these selected causal decisions, NOT merely the chapter counts. The decisiveClimax must complete the BOOK's central dramatic question through a specific irreversible event, not necessarily resolve every external threat, explain every mystery, complete an investigation, redeem the characters, or settle wider series stakes. The endingConsequence must inherit that achieved book-level result. Enact the chosen exceptional payoff as a specific high-stakes action, relationship decision, shattering discovery, sacrifice, or irreversible reversal, as appropriate to THIS arc; do not displace it with a report, explanation, or a chapter labeled "climax" after the consequential action is already over. Give the final image a powerful emotional or conceptual aftershock arising from that accomplished event, not just an itinerary of which threats remain. Do not convert the authored reader experience into a generic mission, investigation, technical solution, institutional showdown, forced reconciliation, or other familiar genre machinery merely to manufacture closure. Choose the event and outcome that the author's particular characters, relationships, tone, and genre genuinely support; if a procedural solution, external victory, or relationship milestone is authored and dramatically appropriate, deliver it. In a template with separate climax and resolution roles, the decisive BOOK-level outcome must be achieved in the climax role, and the resolution may only dramatize its consequences. Do not use later final-image chapters to start another primary rescue or restart a settled book-level conflict. Keep intentionally unresolved wider threats and mysteries open without leaving the BOOK's central dramatic question unanswered. This architecture is provisional ONLY relative to the authoritative recipe and already accepted story: it may not override authored facts, tone, relationships, world rules, or required Story Arc obligations. The per-beat planned dramatic movements below are causal commitments rather than detachable ideas or new authored mandates.
 
+## Required recipe coverage ledger
+Every required obligation below must be materially realized by at least one section's dramaticEvent, resultingChange, or terminalState. For each material realization, include that obligation's exact ID in recipeRequirementIDs. Do not omit an ID when the section advances the obligation, and do not attach an ID to unrelated material. Before returning this response, audit the complete section sequence against every ID below and redesign a section if any required ID is absent. This is a planner responsibility, not a later backend gate.
+${renderRequiredRecipeCoverage(obligations)}
+
 ## Recipe obligations
 The JSON planning context contains the authoritative obligations exactly once.
 
@@ -3633,6 +3638,10 @@ ${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
 ## Recipe realization priority
 Treat planningContext.premiseComponents as DISTINCT, authored commitments, not optional enrichment. Map them to the current book at the scale the author actually requested. Series-level consequences can be seeded, foreshadowed or advanced through character-driven choices; do not invent a forced national or humanity-saving operation to discharge them now. A chapter-level local victory is neither a substitute for a series promise nor grounds to claim that promise has already been fulfilled. Preserve each component without dictating its final-series payoff.
 Treat the supplied recipe as the governing creative brief. Required obligations must materially drive the events, escalation, relationships, tone, and ending; do not satisfy them by attaching IDs to otherwise generic sections. In each beat rationale, reserve appropriate, DISTINCT dramatic developments for recipe story non-negotiables, including recurring experiences and adult intensity where authored. Do not pack all story-wide obligations into the first beat or treat them as decorative labels; chapter generation will NOT have a narrative repair pass. Allocate enough distinct dramatic space for the recipe's premise and populated character/relationship material before adding generic scale. Do not let the arc's conventional genre associations dictate the kinds of scenes being allocated.
+
+## Required recipe coverage ledger
+Reserve concrete, distinct dramatic developments for every required obligation below. The final outline must assign each required obligation ID to at least one section whose event and resulting change materially realize it; relationship obligations are plot commitments, not decorative labels.
+${renderRequiredRecipeCoverage(obligations)}
 
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
