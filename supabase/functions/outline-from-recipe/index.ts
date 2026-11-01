@@ -3217,10 +3217,28 @@ const STORY_ARCHITECTURE_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-// A single strict response contains causal decisions AND chapter sizing.
+// The existing planning call must compare materially different outcomes before
+// committing to an architecture. Candidates are ephemeral; only the winner's
+// central question, climax and consequence enter the persisted architecture.
+const PAYOFF_CANDIDATE_SCHEMA = {
+  type: "object",
+  properties: {
+    centralQuestion: { type: "string", minLength: 1, maxLength: 500 },
+    decisiveClimax: { type: "string", minLength: 1, maxLength: 650 },
+    endingConsequence: { type: "string", minLength: 1, maxLength: 500 },
+    arcEffect: { type: "string", minLength: 1, maxLength: 350 },
+  },
+  required: ["centralQuestion", "decisiveClimax", "endingConsequence", "arcEffect"],
+  additionalProperties: false,
+} as const;
+
+// A single strict response contains competing payoffs, the chosen architecture
+// AND chapter sizing. The app's persisted architecture and outline schema stay unchanged.
 const ALLOCATION_SCHEMA = {
   type: "object",
   properties: {
+    payoffCandidates: { type: "array", minItems: 3, maxItems: 3, items: PAYOFF_CANDIDATE_SCHEMA },
+    selectedPayoffIndex: { type: "integer", minimum: 0, maximum: 2 },
     storyArchitecture: STORY_ARCHITECTURE_SCHEMA,
     allocations: {
       type: "array",
@@ -3249,7 +3267,7 @@ const ALLOCATION_SCHEMA = {
       },
     },
   },
-  required: ["storyArchitecture", "allocations"],
+  required: ["payoffCandidates", "selectedPayoffIndex", "storyArchitecture", "allocations"],
   additionalProperties: false,
 } as const;
 
@@ -3597,6 +3615,23 @@ export function parseAndValidateAllocation(
       }
       architecture[key] = value.trim();
     }
+    // The chosen payoff is authoritative. The model may duplicate it
+    // imperfectly in storyArchitecture; never allow a different climax to
+    // sneak into the handoff. Legacy persisted fixtures omit candidates.
+    const candidates = (parsed as Record<string, unknown>).payoffCandidates;
+    const selectedIndex = (parsed as Record<string, unknown>).selectedPayoffIndex;
+    if (Array.isArray(candidates) && Number.isInteger(selectedIndex) &&
+        Number(selectedIndex) >= 0 && Number(selectedIndex) < candidates.length) {
+      const chosen = candidates[Number(selectedIndex)] as Record<string, unknown> | null;
+      if (chosen && ["centralQuestion", "decisiveClimax", "endingConsequence"].every((key) =>
+        typeof chosen[key] === "string" && String(chosen[key]).trim().length > 0 &&
+        String(chosen[key]).length <= STORY_ARCHITECTURE_SCHEMA.properties[key].maxLength
+      )) {
+        architecture.centralQuestion = String(chosen.centralQuestion).trim();
+        architecture.decisiveClimax = String(chosen.decisiveClimax).trim();
+        architecture.endingConsequence = String(chosen.endingConsequence).trim();
+      }
+    }
     onArchitecture?.(architecture);
   }
   return new Map(beats.map((beat) => [beat.id, out.get(beat.id)!]));
@@ -3623,9 +3658,11 @@ First infer the specific READER EXPERIENCE promised by THIS recipe's genre, tone
 ## Choose an exceptional, arc-specific ending before building the central plot
 After interpreting the author’s recipe AND the selected arc’s complete progression, decide the TYPE of emotional and dramatic payoff that THIS arc promises. Invent a specific, exceptionally impactful book-level climax and its irreversible consequence BEFORE settling on a default external conflict or tactical objective. Aim for a bold, unforgettable outcome: a breathtaking earned reversal, monumental consequence, devastating sacrifice or loss, shattering revelation, surprising but retrospectively inevitable twist, or an emotionally overwhelming relationship decision. Select the form that genuinely fits the authored recipe and the selected Story Arc; do not mechanically include all of these, impose a tragic ending on a happy-ending contract, or inflate intimate drama with artificial explosions. Personal stakes can be as devastating as national stakes. Surprise must be prepared by causal setup and character choices, never an arbitrary shock, unearned death, or late invented explanation. The climax must actually dramatize the payoff; the ending must show what can never be restored.
 
+Before committing to one architecture, invent THREE materially different possible book endings, each grounded in the SAME authoritative recipe and selected arc. Each candidate needs its own central dramatic question, decisive event, irreversible ending consequence, and explanation of how it delivers the arc's specific promised effect. Different endings must have different causal engines and genuinely different outcomes: do NOT propose three variations of the same pursuit, roundup, escape, interrupted operation, rescue, or relationship conversation with only injuries or casualties changed. One may be intimate and another monumental; choose whatever forms the recipe and arc permit. Compare their emotional force, surprise, irreversible cost, causal plausibility, and faithfulness to the arc. Select the strongest earned option; discard the two others. This contrast is INTERNAL to the existing ONE planning call: no new stage, model call, or reader-facing options.
+
 Test the proposed ending against the author's characters and arc: Would a reader remember this as an extraordinary, specific consequence of THESE people following THIS arc? Would the ending be essentially unchanged if the same recipe used another dramatically different Story Arc? If so, reject it and invent a DIFFERENT primary dramatic question, conflict trajectory, decisive event, and outcome for the selected arc. Merely changing labels, tone, or which relationship gets a final conversation is insufficient. Survival, escape, staying together, a disrupted operation, continued travel, or an unresolved bigger threat may occur as secondary consequences, but are not by themselves an exceptional book-level payoff. An authored external victory is valid when it produces the distinctive high-impact experience required by the chosen arc. Respect any explicitly authored ending, guaranteed relationship outcome, or accepted prior chapters: deepen its impact rather than contradict it. Preserve wider series promises at their authored scope.
 
-After reconciling the recipe with the ordered arc movements, return a compact storyArchitecture: centralQuestion (the specific dramatic question this BOOK must answer, not automatically "can they stop the external threat?"), characterCausality (the specific protagonist/supporting-person decisions driving distinct reversals), decisiveClimax (the irreversible event that answers that BOOK question through an authored, character-caused change and delivers the climax beat's required effect, which may or may not settle an external conflict), endingConsequence (the definite changed characters/world AFTER the book-level climax and consistent with the final beat's description), and deliberatelyOpenThreads (external threats, relationships, mysteries, or series promises that can remain active without withholding the book's central outcome). Choose the reader experience and beat-level dramatic promises, THEN the exceptional arc-specific payoff, BEFORE finalizing the book-level question and causal plot. For a Story Arc with a required climax beat, commit the actual answer to the BOOK'S central question to that beat; final-image/aftermath beats must inherit the achieved outcome, not start another rescue, larger confrontation, or cliffhanger. An external conflict, personal contradiction, mystery, or longer arc may remain unsettled when the book's own outcome is definite. Do not substitute an unrelated local resolution for an authored long-range promise. Tragedy, ambiguity, partial victories, reconciliation, and morally compromised endings are all valid when supported by the author's genre and intent; if the author explicitly requires a particular resolution in this volume, honor it. If there are accepted existing sections, honor their established events and do not rewrite their history.
+After selecting the strongest of the three payoffCandidates (record its zero-based selectedPayoffIndex), return a compact storyArchitecture: centralQuestion (the specific dramatic question this BOOK must answer, not automatically "can they stop the external threat?"), characterCausality (the specific protagonist/supporting-person decisions driving distinct reversals), decisiveClimax (the irreversible event that answers that BOOK question through an authored, character-caused change and delivers the climax beat's required effect, which may or may not settle an external conflict), endingConsequence (the definite changed characters/world AFTER the book-level climax and consistent with the final beat's description), and deliberatelyOpenThreads (external threats, relationships, mysteries, or series promises that can remain active without withholding the book's central outcome). Choose the reader experience and beat-level dramatic promises, THEN the exceptional arc-specific payoff, BEFORE finalizing the book-level question and causal plot. For a Story Arc with a required climax beat, commit the actual answer to the BOOK'S central question to that beat; final-image/aftermath beats must inherit the achieved outcome, not start another rescue, larger confrontation, or cliffhanger. An external conflict, personal contradiction, mystery, or longer arc may remain unsettled when the book's own outcome is definite. Do not substitute an unrelated local resolution for an authored long-range promise. Tragedy, ambiguity, partial victories, reconciliation, and morally compromised endings are all valid when supported by the author's genre and intent; if the author explicitly requires a particular resolution in this volume, honor it. If there are accepted existing sections, honor their established events and do not rewrite their history.
 
 THEN work backward from that chosen payoff through the ordered arc beats and write the character-driven setup, promises, escalating costs, revelations, reversals, and consequences into each allocation rationale. Each rationale must explain BOTH the specific effect required by that beat's authored description AND the distinct event/choice/consequence that realizes it in this story; not merely label a plot step or justify a chapter count. Make the climax and ending rationales realize their respective arc requirements and the saved architecture's definite outcome. Only AFTER those story and arc decisions, budget and assign containerCounts and minSections. All reasoning and output belong to this ONE existing outline-plan response, not another stage or model call.
 
@@ -3646,7 +3683,7 @@ ${renderRequiredRecipeCoverage(obligations)}
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
 
-Output a single storyArchitecture FIRST (all five short text fields), THEN exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs in allocations. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Each allocation rationale records the selected beat's causal movement, especially the decisive clash and its later consequences. Do not output any other root key. ${isNovel ? "Provide all five containerCounts keys for every beat, including zeros." : "Do not return novel-only containerCounts."}
+Output exactly three payoffCandidates FIRST (each a different causal outcome with centralQuestion, decisiveClimax, endingConsequence, arcEffect), then selectedPayoffIndex, then a single storyArchitecture (all five short text fields) whose centralQuestion, decisiveClimax, and endingConsequence agree with the selected candidate, THEN exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs in allocations. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Each allocation rationale records the selected beat's causal movement, especially the decisive clash and its later consequences. Do not output any other root key. ${isNovel ? "Provide all five containerCounts keys for every beat, including zeros." : "Do not return novel-only containerCounts."}
 
 Output JSON only. No commentary, no prose.`;
 
@@ -3689,7 +3726,7 @@ function allocationSchemaForFormat(req: OutlineFromRecipeRequest) {
   const { containerCounts: _novelOnly, ...properties } = ALLOCATION_SCHEMA.properties.allocations.items.properties;
   return {
     ...ALLOCATION_SCHEMA,
-    properties: { allocations: {
+    properties: { ...ALLOCATION_SCHEMA.properties, allocations: {
       ...ALLOCATION_SCHEMA.properties.allocations,
       items: {
         ...ALLOCATION_SCHEMA.properties.allocations.items,
