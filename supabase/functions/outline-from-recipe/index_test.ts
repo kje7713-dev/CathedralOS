@@ -768,6 +768,111 @@ Deno.test("high-impact endings preserve existing architecture schema and one-cal
   assertEquals(result.size, 2);
 });
 
+Deno.test("planner must compare three distinct arc-grounded endings in the existing call", async () => {
+  const req = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const candidates = [
+    {
+      centralQuestion: "Will Mara expose the person she loves?",
+      decisiveClimax: "Mara reveals the betrayal and loses her family.",
+      endingConsequence: "She is exiled while the truth destroys her old home.",
+      arcEffect: "A devastating intimate betrayal.",
+    },
+    {
+      centralQuestion: "Does Mara's discovery destroy the town's account of its history?",
+      decisiveClimax: "The public revelation overturns the town's accepted origin.",
+      endingConsequence: "The institutions collapse and the community rebuilds around a new truth.",
+      arcEffect: "An earned monumental revelation.",
+    },
+    {
+      centralQuestion: "Will Mara accept a terrible sacrifice to protect her brother?",
+      decisiveClimax: "Mara sacrifices the only memory of her brother to save his life.",
+      endingConsequence: "He survives but never recognizes her again.",
+      arcEffect: "A surprising, gut-wrenching consequence earned by her choices.",
+    },
+  ];
+  let calls = 0;
+  let chosen: any;
+  const allocation = await planSectionAllocation(req, "unused", async (system: string, user: string, _maxTokens: number, format: any, action: string) => {
+    calls++;
+    assertEquals(action, "outline-plan");
+    assertStringIncludes(system, "invent THREE materially different possible book endings");
+    assertStringIncludes(system, "different causal engines and genuinely different outcomes");
+    assertStringIncludes(system, "no new stage, model call");
+    assertStringIncludes(system, "THEN work backward from that chosen payoff");
+    assertStringIncludes(system, "Output exactly three payoffCandidates FIRST");
+    assertEquals(JSON.parse(user).planningContext.arc.name, req.arcTemplate.name);
+    const schema = format.json_schema.schema;
+    assertOpenAIStrictSchema(schema);
+    assertEquals(schema.required, ["payoffCandidates", "selectedPayoffIndex", "storyArchitecture", "allocations"]);
+    assertEquals(schema.properties.payoffCandidates.minItems, 3);
+    assertEquals(schema.properties.payoffCandidates.maxItems, 3);
+    assertEquals(schema.properties.selectedPayoffIndex.maximum, 2);
+    return {
+      content: JSON.stringify({
+        payoffCandidates: candidates,
+        selectedPayoffIndex: 2,
+        // The model might leave its first idea in the duplicated architecture.
+        // The parser must pass the explicitly selected candidate downstream.
+        storyArchitecture: {
+          centralQuestion: candidates[0].centralQuestion,
+          characterCausality: "Mara's choices drive the cost.",
+          decisiveClimax: candidates[0].decisiveClimax,
+          endingConsequence: candidates[0].endingConsequence,
+          deliberatelyOpenThreads: "The broader conspiracy continues.",
+        },
+        allocations: [
+          { beatIndex: 0, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "Mara makes her first consequential choice." },
+          { beatIndex: 1, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "The selected sacrifice is prepared and realized." },
+        ],
+      }),
+      creditCostCharged: 1,
+      remainingCredits: 99,
+    } as any;
+  }, [], { onArchitecture: (architecture) => { chosen = architecture; } });
+  assertEquals(calls, 1);
+  assertEquals(allocation.size, 2);
+  assertEquals(chosen.centralQuestion, candidates[2].centralQuestion);
+  assertEquals(chosen.decisiveClimax, candidates[2].decisiveClimax);
+  assertEquals(chosen.endingConsequence, candidates[2].endingConsequence);
+  assertEquals(chosen.characterCausality, "Mara's choices drive the cost.");
+  assertEquals(chosen.deliberatelyOpenThreads, "The broader conspiracy continues.");
+  const handoff = buildPrompt(req, allocation, [], undefined, chosen);
+  assertStringIncludes(handoff.system, candidates[2].decisiveClimax);
+  assertEquals(handoff.system.includes(candidates[0].decisiveClimax), false);
+});
+
+Deno.test("payoff candidate comparison preserves legacy fixtures and non-novel planning schema", async () => {
+  const legacy = {
+    storyArchitecture: {
+      centralQuestion: "What does Mara choose?",
+      characterCausality: "Her loyalty forces a choice.",
+      decisiveClimax: "Mara chooses and accepts the consequences.",
+      endingConsequence: "Her old life ends.",
+      deliberatelyOpenThreads: "The wider story remains.",
+    },
+    allocations: [
+      { beatIndex: 0, minSections: 1, rationale: "The opening choice." },
+      { beatIndex: 1, minSections: 1, rationale: "A lasting consequence." },
+    ],
+  };
+  let architecture: any;
+  const parsed = parseAndValidateAllocation(JSON.stringify(legacy), sparseRequest.arcTemplate.beats, undefined, (value) => { architecture = value; });
+  assertEquals(parsed.size, 2);
+  assertEquals(architecture.decisiveClimax, legacy.storyArchitecture.decisiveClimax);
+  const req = { ...sparseRequest, requestedFormat: "shortStory" } as any;
+  let calls = 0;
+  await planSectionAllocation(req, "unused", async (_system: string, _user: string, _maxTokens: number, format: any) => {
+    calls++;
+    const schema = format.json_schema.schema;
+    assertOpenAIStrictSchema(schema);
+    assertEquals(schema.required.includes("payoffCandidates"), true);
+    assertEquals(schema.properties.storyArchitecture.required.length, 5);
+    assertEquals(schema.properties.allocations.items.properties.containerCounts, undefined);
+    return { content: JSON.stringify(legacy), creditCostCharged: 1, remainingCredits: 99 } as any;
+  });
+  assertEquals(calls, 1);
+});
+
 Deno.test("novel first-pass slot schema reserves required functions across arc templates", () => {
   const cases = [
     { name: "Horror / Escalating Dread", climaxRole: "survival_confrontation", resolutionRole: "final_image", requiresResolution: true },
