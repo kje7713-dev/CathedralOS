@@ -3690,17 +3690,26 @@ Output JSON only. No commentary, no prose.`;
 
 /** Non-novel allocations retain their existing three-field strict contract. */
 function allocationSchemaForFormat(req: OutlineFromRecipeRequest) {
-  if (requestedStoryMaterialFormat(req) === "novel") return ALLOCATION_SCHEMA;
-  const { containerCounts: _novelOnly, ...properties } = ALLOCATION_SCHEMA.properties.allocations.items.properties;
+  const allocations = requestedStoryMaterialFormat(req) === "novel"
+    ? ALLOCATION_SCHEMA.properties.allocations
+    : (() => {
+      const { containerCounts: _novelOnly, ...properties } = ALLOCATION_SCHEMA.properties.allocations.items.properties;
+      return {
+        ...ALLOCATION_SCHEMA.properties.allocations,
+        items: {
+          ...ALLOCATION_SCHEMA.properties.allocations.items,
+          properties,
+          required: ["beatIndex", "minSections", "rationale"],
+        },
+      };
+    })();
   return {
     ...ALLOCATION_SCHEMA,
-    properties: { allocations: {
-      ...ALLOCATION_SCHEMA.properties.allocations,
-      items: {
-        ...ALLOCATION_SCHEMA.properties.allocations.items,
-        properties,
-        required: ["beatIndex", "minSections", "rationale"],
-      },
+    properties: { ...ALLOCATION_SCHEMA.properties, allocations: {
+      ...allocations,
+      // The provider must return one allocation object for every supplied beat;
+      // parseAndValidateAllocation remains the defense-in-depth check.
+      minItems: req.arcTemplate.beats.length,
     } },
   };
 }
@@ -3723,9 +3732,10 @@ export async function planSectionAllocation(
     },
   };
 
+  let correctionReason = "";
   const call = async (correction: boolean): Promise<string> => {
     const callSystem = correction
-      ? `${system}\n\nThe previous allocation was invalid. Return a complete corrected allocation for every beat; never omit, duplicate, or invent a beat.`
+      ? `${system}\n\nThe previous allocation was invalid. The exact validation error was: ${correctionReason || "the response did not satisfy the complete allocation contract"}. Return a complete corrected allocation for every beatIndex from 0 through ${req.arcTemplate.beats.length - 1}; never omit, duplicate, or invent a beat. Re-check the count against the supplied ordered beat list before returning JSON.`
       : system;
     const rawResult = billableCall
       ? await billableCall(
@@ -3768,6 +3778,7 @@ export async function planSectionAllocation(
       if (isProviderBillingUnavailable(error)) throw error;
       if (!(error instanceof Error)) throw error;
       firstError = error;
+      correctionReason = error.message;
       if (!correction && options.deferRetry) throw new AllocationRetryRequired(error.message);
     }
   }
