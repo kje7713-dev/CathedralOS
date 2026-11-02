@@ -1043,6 +1043,29 @@ Deno.test("allocation prompt selects causal outcome before sizing chapters witho
   assertStringIncludes(original.system, "Legacy checkpoint");
 });
 
+Deno.test("allocation retry identifies omitted beats to the corrective planner", async () => {
+  const beats = [{ id: "beat-1" }, { id: "beat-2" }, { id: "beat-3" }];
+  const request = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  const systems: string[] = [];
+  let calls = 0;
+  const allocation = await planSectionAllocation(request, "unused", async (
+    system: string, _user: string, _max: number, format: any, action: string,
+  ) => {
+    systems.push(system);
+    calls++;
+    assertEquals(action, calls === 1 ? "outline-plan" : "outline-plan-retry");
+    assertEquals(format.json_schema.schema.properties.allocations.minItems, beats.length);
+    const allocations = calls === 1
+      ? [{ beatIndex: 0, minSections: 1, rationale: "opening" }]
+      : beats.map((_, beatIndex) => ({ beatIndex, minSections: 1, rationale: `beat ${beatIndex + 1}` }));
+    return { content: JSON.stringify({ allocations }), creditCostCharged: 0, remainingCredits: 0 };
+  });
+  assertEquals(calls, 2);
+  assertEquals(allocation.size, 3);
+  assertStringIncludes(systems[1], "allocation is missing beat(s): beat-2, beat-3");
+  assertStringIncludes(systems[1], "every beatIndex from 0 through 2");
+});
+
 Deno.test("non-novel allocation keeps its legacy strict planner schema and prompt", async () => {
   let schema: any;
   const req = { ...sparseRequest, requestedFormat: "shortStory" } as any;
