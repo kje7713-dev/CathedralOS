@@ -3025,7 +3025,12 @@ Deno.test("fully budgeted expansion addition stops without provider validation r
 });
 
 Deno.test("allocation repair dispatches only to still-deficient beats", async () => {
-  const initial = sceneOutline(115);
+  const initial = [
+    ...sceneOutline(114),
+    { ...sceneOutline(1)[0], storyArcBeatID: "beat-2", title: "Beat Two Existing" },
+  ];
+  const beatTwoCount = (sections: Array<{ storyArcBeatID?: string }>) =>
+    sections.filter((section) => section.storyArcBeatID === "beat-2").length;
   const calls: Array<string | undefined> = [];
   const result = await progressivelyExpandOutline(
     initial, new Set(["beat-1", "beat-2"]),
@@ -3036,9 +3041,8 @@ Deno.test("allocation repair dispatches only to still-deficient beats", async ()
     undefined,
     {
       beats: [{ id: "beat-1" }, { id: "beat-2" }],
-      coverageGate: (sections) => !sections.some((section) => section.storyArcBeatID === "beat-2"),
-      shouldExpandBeat: (sections, beatID) => beatID === "beat-2" &&
-        !sections.some((section) => section.storyArcBeatID === "beat-2"),
+      coverageGate: (sections) => beatTwoCount(sections) < 2,
+      shouldExpandBeat: (sections, beatID) => beatID === "beat-2" && beatTwoCount(sections) < 2,
     },
   );
   assertEquals(calls, ["beat-2"]);
