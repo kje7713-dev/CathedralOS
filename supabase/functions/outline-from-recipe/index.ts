@@ -479,6 +479,33 @@ function normalizedTemplateName(name: string): string {
   return name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[’']/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
+/**
+ * A Story Arc is a progression AND (when it promises a genre/experience) a
+ * reader-experience contract. Keep this separate from plot mechanisms: the
+ * same horror arc can be psychological, grotesque, supernatural, or social.
+ * Generic structural arcs must not invent genre requirements.
+ */
+export function arcReaderExperienceDirective(
+  template: Pick<ArcTemplateBlob, "name" | "beats">,
+): string {
+  const normalized = normalizedTemplateName(template.name);
+  const genrePromise = /horror|dread|terror/.test(normalized)
+    ? "HORROR: Sustained, escalating fear, vulnerability, and disturbing uncertainty must be caused by the characters' choices and the threat's manifestations. Horror is NOT satisfied by violent incidents, an ominous investigation, institutional surveillance, an impending disaster, or disabling a device at the last minute. The full manifestation and confrontation must actually terrify or devastate, and the final image must leave an earned horror-specific aftershock. Grotesque humor, social satire, and mysteries can coexist with this promise but cannot replace it."
+    : /romance|romantic|love-story/.test(normalized)
+    ? "ROMANCE: The primary dramatic experience must be attachment, desire, emotional jeopardy, and relationship transformation. The climactic decision and ending must resolve the central relationship at the level promised by this arc; a solved external problem with an incidental romantic conversation is not enough. Honor HEA/HFN only when promised by the authored arc or recipe."
+    : /mystery|whodunit|detective/.test(normalized)
+    ? "MYSTERY: Sustained curiosity, consequential clues, reversals of interpretation, and an earned revelation must define the experience. The climax must make the central mystery meaningfully different or answer it as promised; merely surviving a pursuit or uncovering a procedural document is not the same payoff."
+    : /comedy|comic|farce|satire/.test(normalized)
+    ? "COMEDY: Character contradictions, mistakes, absurd escalation, and consequences must create the promised comic experience; the final reversal must pay off the established comic machinery, not merely resolve an external threat with a few jokes."
+    : /thriller|suspense/.test(normalized)
+    ? "THRILLER/SUSPENSE: Immediate jeopardy, tightening options, consequential reversals, and urgent uncertainty must organize the experience. An investigative procedure alone is not tension; the climactic payoff must arise from the accumulating pressure and difficult choices."
+    : /tragedy|tragic/.test(normalized)
+    ? "TRAGEDY: Character choices and contradictions must make the irreversible loss or tragic recognition dramatically inevitable in hindsight. An incidental injury or sad epilogue cannot substitute for the decisive tragic reversal."
+    : "GENRE-NEUTRAL/OTHER: Honor the specific reader-facing dramatic effects promised by the beat descriptions and the author's recipe. A structural template alone must not impose an unrelated genre, conventional plot device, or default resolution.";
+  return "SELECTED ARC EXPERIENCE CONTRACT — " + template.name + ": " + genrePromise +
+    " Each beat's authored description is also a reader-facing dramatic promise, not simply a section label. Select the book-level question, character-caused escalation, decisive climax, and final consequence to DELIVER this experience before choosing any investigation, institution, operation, or other plot machinery. A different arc on the same recipe must change the defining reader experience and consequential payoff; never change only the chapter labels. The recipe remains authoritative for story facts, tone, explicit guarantees, and accepted prior events.";
+}
+
 function fallbackRoleFamily(role: string): string {
   const value = role.toLowerCase().replace(/[’']/g, "");
   if (/exposition|ordinary_world|opening_image|setup|theme_stated/.test(value)) return "setup";
@@ -1344,12 +1371,12 @@ Before inventing supporting developments, identify the particular experiences, t
 ## Keep enrichment genuinely exploratory
 The enrichment categories are ways to describe possible material, not a directive to construct one complete and coordinated plot apparatus. Antagonistic forces, institutions, locations, discoveries, reversals, and the escalation ladder do not all need to describe the same invented opposition or operation. Create room for independent characters, conflicting agendas, accidental encounters, intimate betrayals, self-inflicted catastrophes, and different kinds of consequences as warranted by the recipe. Some ideas may connect; others can be alternatives that the outliner will choose between. Do not prematurely make one invented device responsible for every danger, revelation, and climax. A planner-invented mechanism is an optional candidate, not a required plot path. Specifically, avoid defaulting to a government contractor, audit, custody transfer, compliance program, or surveillance apparatus merely as a convenient engine for a conspiracy or climax. Those mechanisms are valid when the author requests them or distinctive character decisions genuinely make them the strongest story choice; otherwise explore threats arising from character ambition, relationships, accidents, and independent agendas instead of a single procedural operation.
 
-Treat Story Arc templates as structural progression, not a source of genre conventions or an instruction to select a familiar causal storyline. Preserve the author's specific narrative experience, including when the author actually wants a meticulous investigation, institutional drama, or other specialized form. Causality and continuity matter; a mechanically complete operation is not a substitute for dramatic development.
+Treat each Story Arc as both dramatic progression AND any explicit reader-experience promise of its name and authored beat descriptions. Do not mistake honoring a genre for copying its stock plots: horror can be psychological or satirical, romance can be unconventional, and investigations remain valid when the authored recipe calls for them. Causality and continuity matter; a mechanically complete operation is not a substitute for the experience the arc promises.
 
 ## Package discipline without creative suppression
 Start with the author's premise, defining conflicts, supplied characters, relationships, themes, motifs, content requirements, and intended ending. Then create interconnected people, situations, escalation, reversals, consequences, relationships, discoveries, locations, and mechanisms in the order above. Sparse input still carries a larger invention burden; it does not mean a shorter or simpler story. For a novel, support the approximately 115,000-word planning target with connected conflicts, consequences, reversals, discoveries, relationships, and state changes: substantive connected dramatic material, not a large inventory of disconnected concepts, filler, fixed item counts, or unrelated subplots. Do not minimize candidate count as an objective. Instead, remove only interchangeable, redundant, purely explanatory, or non-dramatic entries; retain distinct people and situations when they create different choices, pressures, relationships, reversals, or consequences. The schema and existing sufficiency requirements remain authoritative, but they are not a reason to starve the supporting cast.
 
-The selected Story Arc describes dramatic progression, not a required sequence of plot devices. Interpret its beats through the author's characters, genre, and intended reader experience. Do not turn an invented institution, location, or conflict device into the inevitable explanation for every event.
+The selected Story Arc also has a binding reader-experience promise. ${arcReaderExperienceDirective(req.arcTemplate)} Interpret each beat through the authored characters and tone, not as a required sequence of plot devices. Do not turn an invented institution, location, or conflict device into the inevitable explanation for every event.
 
 Rich input means preserve, connect, and deepen supplied material before inventing replacements. Treat defining traits, behaviors, moral complexity, tonal intensity, absurdity, and narrative uncertainty as creative commitments. Do not soften, explain away, or replace them with a generic central conflict. Every planner-invented item is a replaceable development candidate, not a new authorial obligation or canon fact. Emit source=planner only for every returned item and always use null sourceReference. Do not reproduce or relabel authored recipe material; the server deterministically extracts canonical recipe-backed material. Return only JSON matching the existing enrichment schema.${repairInstruction}`,
     user: JSON.stringify({
@@ -2186,6 +2213,26 @@ export function evaluateNovelScale(
   };
 }
 
+
+/**
+ * Provider dispatch is never useful if no permitted novel section can fit the
+ * remaining accepted projection. The grace ceiling accommodates existing
+ * midpoint drift but does not authorize repeated attempts beyond it.
+ * Check before any paid expansion and again after every accepted addition.
+ */
+export function canFitNovelExpansion(
+  suggestions: PlannedSectionLike[],
+  existingSections: PlannedSectionLike[] = [],
+): boolean {
+  if (suggestions.length + existingSections.length >= MAX_PLANNED_SECTIONS) return false;
+  const remainingTokens = NOVEL_ACCEPTED_MAX_PROJECTED_TOKENS -
+    evaluateNovelScale(suggestions, existingSections).projectedTokens;
+  const smallestSectionTokens = Math.min(
+    ...NOVEL_LEAF_CONTAINERS.map((container) => projectedExpectedTokens([{ container }])),
+  );
+  return remainingTokens >= smallestSectionTokens;
+}
+
 export function needsNovelExpansion(
   suggestions: PlannedSectionLike[],
   existingSections: PlannedSectionLike[] = [],
@@ -2324,18 +2371,10 @@ export function fitExpansionAdditionsToBudget(
       error: `budget truncated ${rejectedCount} expansion addition${rejectedCount === 1 ? "" : "s"} at the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`,
     } : {}),
   };
-  if (accepted.length === 0 && additions.length > 0) {
-    const fullMerged = mergeExpansionAdditions(current, additions);
-    const error = fullMerged.length > MAX_PLANNED_SECTIONS
-      ? `global ${MAX_PLANNED_SECTIONS}-section safety cap reached`
-      : `projected novel scale exceeded ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`;
-    throw new ExpansionValidationError(error, {
-      ...attempt,
-      rejectedCount: additions.length,
-      projectedTokensAfter: evaluateNovelScale(fullMerged, existingSections).projectedTokens,
-      error,
-    });
-  }
+  // A well-formed addition that does not fit the novel budget is NOT a
+  // provider validation failure. Throwing here causes the billable caller to
+  // retry the same impossible budget dozens of times. Keep the rejected
+  // attempt in diagnostics and finish the expansion pass without another call.
   return { additions: accepted, attempt };
 }
 
@@ -2522,6 +2561,8 @@ export interface ProgressiveExpansionOptions {
   /** Required structural coverage is a hard gate, not optional quality work. */
   coverageGate?: (suggestions: Suggestion[]) => boolean;
   qualityGate?: (suggestions: Suggestion[]) => boolean;
+  /** In beat-local repair, skip beats that have no remaining deficit. */
+  shouldExpandBeat?: (suggestions: Suggestion[], beatID: string) => boolean;
   beats?: Array<{ id: string; label?: string; description?: string }>;
   onBeat?: (
     round: number,
@@ -2647,7 +2688,7 @@ export async function progressivelyExpandOutline(
   const startRound = Math.max(1, options.startRound ?? 1);
   const shouldContinueDevelopment = (current: Suggestion[]) => {
     const scale = evaluateNovelScale(current, existingSections);
-    return !scale.exceedsMaximum && (
+    return !scale.exceedsMaximum && canFitNovelExpansion(current, existingSections) && (
       needsNovelExpansion(current, existingSections) ||
       options.coverageGate?.(current) === true ||
       options.qualityGate?.(current) === true
@@ -2668,13 +2709,17 @@ export async function progressivelyExpandOutline(
     let hitCap = false;
     const attempts: ExpansionAttemptDiagnostic[] = [];
     try {
-      const targetBeats = options.beats?.length
+      // Once required coverage is satisfied, optional length development is
+      // global; it must not revisit every beat as if still missing coverage.
+      const targetBeats = options.beats?.length && options.coverageGate?.(roundSuggestions) !== false
         ? options.beats
         : [undefined];
       const firstBeatIndex = round === startRound ? Math.max(0, options.startBeatIndex ?? 0) : 0;
       for (let beatIndex = firstBeatIndex; beatIndex < targetBeats.length; beatIndex++) {
         const beat = targetBeats[beatIndex];
         if (!shouldContinueDevelopment(roundSuggestions)) break;
+        if (beat && options.coverageGate?.(roundSuggestions) === false) break;
+        if (beat && options.shouldExpandBeat?.(roundSuggestions, beat.id) === false) continue;
         const beatContext = beat
           ? {
             beatID: beat.id,
@@ -2993,6 +3038,13 @@ export function calculateRepairAllocation(
 export const SELECTED_INTIMACY_LEVEL_OBLIGATION = "selected_intimacy_level";
 export const CREATIVE_FIDELITY_OBLIGATION = "creative_fidelity";
 
+// Genre-labeled arcs independently promise a reader experience even when the
+// author supplied no separate tone or audience notes. Structural arcs alone do
+// not impose a genre that was never selected.
+function hasNamedArcExperiencePromise(template: Pick<ArcTemplateBlob, "name">): boolean {
+  return /(^|-)(horror|dread|terror|romance|romantic|love|mystery|whodunit|detective|comedy|comic|farce|satire|thriller|suspense|tragedy|tragic)(-|$)/.test(normalizedTemplateName(template.name));
+}
+
 function hasCreativeFidelityDirectives(recipe?: CanonicalRecipeEnvelope): boolean {
   const project = recipe?.project as Record<string, unknown> | undefined;
   const setting = recipe?.setting as Record<string, unknown> | undefined;
@@ -3100,6 +3152,10 @@ export function buildPrompt(
 
   const system =
     `You are an expert ${requestedStoryMaterialFormat(req)} outliner. Use the complete canonical recipe/project payload below, including its premise, selected characters and their populated fields, selected relationships, themes, motifs, story spark, aftertaste, recipe instructions, and included setting. Treat supplied facts as authoritative; do not infer personality traits from a character name alone. Given the story arc, produce one complete section-by-section outline in this single pass.
+
+## Mandatory Story Arc reader experience
+${arcReaderExperienceDirective(req.arcTemplate)}
+${storyArchitecture?.arcExperience ? `The allocation committed to this concrete reader experience: ${storyArchitecture.arcExperience}. Enact it through irreversible dramatic events and the actual climactic/final outcomes; it is not decorative metadata.` : "Legacy checkpoint: derive the arc's required experience from its authored beats and the recipe before writing."}
 
 ## Narrative-state continuity
 Before returning the outline, evaluate the complete proposed sequence in canonical order. Each section must begin from a state that plausibly follows the previous section's terminal state. Preserve established character locations, relationships, physical conditions, consequential object custody, deaths, departures, and irreversible events. When successive sections require materially different states, establish a credible transition; do not silently relocate principal characters, reverse completed events, resurrect the dead, or transfer a critical object without explanation. Apply the same continuity expectations across Story Arc boundaries: a new beat does not reset location, chronology, or established events. Prefer correcting the ordering, location, or dramatic sequence when successive sections establish incompatible narrative states. For example, if a character must participate in an event at one location but has already departed for another, establish a credible transition or reorder the events to preserve causality. Do not invent implausible explanations merely to preserve the original sequence. Legitimate offscreen travel, elapsed time, flashbacks, parallel action, perspective changes, and intentional ambiguity remain allowed; require plausible causality, not mechanical matching of location strings. Preserve recipe requirements, authored Story Arc obligations, necessary developments, and length constraints; do not delete essential material or add filler.
@@ -3270,6 +3326,7 @@ Respond with structured JSON matching the schema. This is the only provider call
 // architecture BEFORE sizing the chapters. The architecture survives the
 // allocator→outliner handoff; enrichment remains optional creative material.
 export type StoryArchitecture = {
+  arcExperience: string;
   centralQuestion: string;
   characterCausality: string;
   decisiveClimax: string;
@@ -3280,13 +3337,14 @@ export type StoryArchitecture = {
 const STORY_ARCHITECTURE_SCHEMA = {
   type: "object",
   properties: {
+    arcExperience: { type: "string", minLength: 1, maxLength: 850 },
     centralQuestion: { type: "string", minLength: 1, maxLength: 650 },
     characterCausality: { type: "string", minLength: 1, maxLength: 850 },
     decisiveClimax: { type: "string", minLength: 1, maxLength: 850 },
     endingConsequence: { type: "string", minLength: 1, maxLength: 650 },
     deliberatelyOpenThreads: { type: "string", minLength: 1, maxLength: 650 },
   },
-  required: ["centralQuestion", "characterCausality", "decisiveClimax", "endingConsequence", "deliberatelyOpenThreads"],
+  required: ["arcExperience", "centralQuestion", "characterCausality", "decisiveClimax", "endingConsequence", "deliberatelyOpenThreads"],
   additionalProperties: false,
 } as const;
 
@@ -3687,6 +3745,9 @@ export function buildAllocationPrompt(
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
 
+## Binding experience of the selected Story Arc (same model call)
+${arcReaderExperienceDirective(req.arcTemplate)}
+
 ## Interpret the recipe AND selected Story Arc BEFORE choosing the story (same model call)
 First read the AUTHOR'S RECIPE and the selected Story Arc as one creative brief. The recipe governs premise, genre, intended experience, characters, relationships, tone, world rules, and authored promises. The selected arc governs the progression of dramatic functions and the specific effect each ordered beat must achieve. BEFORE choosing a central problem, antagonist apparatus, or climax, mentally map every beat's authored description to a distinct, character-caused dramatic movement that delivers that effect for THIS recipe. Do not substitute an escalation of investigative or tactical knowledge for a beat's authored dramatic experience. Use that recipe-and-arc map to identify the promised type of exceptional ending, then invent its specific payoff as directed below BEFORE committing to a central plot. Build the causal story backward from that payoff and its required beat movements, revising provisional movements until they form one credible, original story. The context deliberately withholds planner-invented institutional apparatus, tactical escalation ladders, and ready-made event locations until that choice. Treat enrichment as optional people, reversals, antagonists, and places, never as canon or as a preassembled plot. An invented institution, operation, investigation, or technical solution is not implied by the mere presence of a wider conflict; such choices remain valid when the author actually calls for them.
 
@@ -3700,7 +3761,7 @@ Test the proposed ending against the author's characters and arc: Would a reader
 
 Before finalizing the payoff, perform a COUNTERFACTUAL ARC CHECK mentally: if a different Story Arc were selected for the identical recipe, could this exact central question, climactic event, relationship outcome and final consequence be reused unchanged? If yes, the proposed climax is a generic premise resolution, not an arc-specific payoff. Reimagine the book-level conflict and outcome until the selected arc materially determines what is at stake, who faces the decisive choice, what shocks or moves the reader, and what cannot be undone. Do not invent new author requirements to pass this check. Having chosen the payoff, WORK BACKWARD to the prior character decisions, costs, reversals, and arc beats that make it surprising but inevitable in hindsight; THEN choose the concrete plot apparatus that serves those movements.
 
-After reconciling the recipe with the ordered arc movements, return a compact storyArchitecture: centralQuestion (the specific dramatic question this BOOK must answer, not automatically "can they stop the external threat?"), characterCausality (the specific protagonist/supporting-person decisions driving distinct reversals), decisiveClimax (the irreversible event that answers that BOOK question through an authored, character-caused change and delivers the climax beat's required effect, which may or may not settle an external conflict), endingConsequence (the definite changed characters/world AFTER the book-level climax and consistent with the final beat's description), and deliberatelyOpenThreads (external threats, relationships, mysteries, or series promises that can remain active without withholding the book's central outcome). Choose the reader experience and beat-level dramatic promises, THEN the exceptional arc-specific payoff, BEFORE finalizing the book-level question and causal plot. For a Story Arc with a required climax beat, commit the actual answer to the BOOK'S central question to that beat; final-image/aftermath beats must inherit the achieved outcome, not start another rescue, larger confrontation, or cliffhanger. An external conflict, personal contradiction, mystery, or longer arc may remain unsettled when the book's own outcome is definite. Do not substitute an unrelated local resolution for an authored long-range promise. Tragedy, ambiguity, partial victories, reconciliation, and morally compromised endings are all valid when supported by the author's genre and intent; if the author explicitly requires a particular resolution in this volume, honor it. If there are accepted existing sections, honor their established events and do not rewrite their history.
+After reconciling the recipe with the ordered arc movements, return a compact storyArchitecture: arcExperience (a CONCRETE account of the specific reader-facing experience promised by THIS selected arc, how it escalates through these characters, and the kind of emotional/genre-specific aftershock its climax must produce; no generic labels or plot mechanics), centralQuestion (the specific dramatic question this BOOK must answer, not automatically "can they stop the external threat?"), characterCausality (the specific protagonist/supporting-person decisions driving distinct reversals), decisiveClimax (the irreversible event that answers that BOOK question through an authored, character-caused change and delivers the climax beat's required effect, which may or may not settle an external conflict), endingConsequence (the definite changed characters/world AFTER the book-level climax and consistent with the final beat's description), and deliberatelyOpenThreads (external threats, relationships, mysteries, or series promises that can remain active without withholding the book's central outcome). Choose the reader experience and beat-level dramatic promises, THEN the exceptional arc-specific payoff, BEFORE finalizing the book-level question and causal plot. For a Story Arc with a required climax beat, commit the actual answer to the BOOK'S central question to that beat; final-image/aftermath beats must inherit the achieved outcome, not start another rescue, larger confrontation, or cliffhanger. An external conflict, personal contradiction, mystery, or longer arc may remain unsettled when the book's own outcome is definite. Do not substitute an unrelated local resolution for an authored long-range promise. Tragedy, ambiguity, partial victories, reconciliation, and morally compromised endings are all valid when supported by the author's genre and intent; if the author explicitly requires a particular resolution in this volume, honor it. If there are accepted existing sections, honor their established events and do not rewrite their history.
 
 THEN work backward from that chosen payoff through the ordered arc beats and write the character-driven setup, promises, escalating costs, revelations, reversals, and consequences into each allocation rationale. Each rationale must explain BOTH the specific effect required by that beat's authored description AND the distinct event/choice/consequence that realizes it in this story; not merely label a plot step or justify a chapter count. Make the climax and ending rationales realize their respective arc requirements and the saved architecture's definite outcome. Only AFTER those story and arc decisions, budget and assign containerCounts and minSections. All reasoning and output belong to this ONE existing outline-plan response, not another stage or model call.
 
@@ -3721,7 +3782,7 @@ ${renderRequiredRecipeCoverage(obligations)}
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
 
-Output a single storyArchitecture FIRST (all five short text fields), THEN exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs in allocations. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Each allocation rationale records the selected beat's causal movement, especially the decisive clash and its later consequences. Do not output any other root key. ${isNovel ? "Provide all five containerCounts keys for every beat, including zeros." : "Do not return novel-only containerCounts."}
+Output a single storyArchitecture FIRST (all six short text fields, including required arcExperience), THEN exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs in allocations. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Each allocation rationale records the selected beat's causal movement, especially the decisive clash and its later consequences. Do not output any other root key. ${isNovel ? "Provide all five containerCounts keys for every beat, including zeros." : "Do not return novel-only containerCounts."}
 
 Output JSON only. No commentary, no prose.`;
 
@@ -4550,12 +4611,15 @@ export function semanticVerificationInput(
   template: Pick<ArcTemplateBlob, "name" | "beats" | "relationshipFocus" | "intimacyMilestoneRoles">,
   recipe?: CanonicalRecipeEnvelope,
   premiseComponents: PremiseComponent[] = [],
+  storyArchitecture?: StoryArchitecture,
 ): Record<string, unknown> {
   const requirement = intimacyRequirement({ arcTemplate: template as ArcTemplateBlob, recipe: recipe as CanonicalRecipeEnvelope });
   const eligible = new Set((template.intimacyMilestoneRoles ?? []));
   return {
     recipe: recipe ?? null,
     storyArcName: template.name,
+    arcReaderExperienceContract: arcReaderExperienceDirective(template),
+    committedArcExperience: storyArchitecture?.arcExperience ?? null,
     relationshipFocus: template.relationshipFocus ?? "none",
     intimacyMilestoneRoles: template.intimacyMilestoneRoles ?? [],
     selectedIntimacyLevel: requirement?.level ?? "unspecified",
@@ -4579,9 +4643,9 @@ export function semanticVerificationInput(
         resultingChange: section.resultingChange ?? "",
         terminalState: section.terminalState ?? "",
       })),
-    })), ...(hasCreativeFidelityDirectives(recipe) ? [{
+    })), ...((hasCreativeFidelityDirectives(recipe) || hasNamedArcExperiencePromise(template)) ? [{
       obligationID: CREATIVE_FIDELITY_OBLIGATION,
-      instruction: "Assess the whole outline's creative fidelity to the canonical recipe. Decide whether the sequence of actual dramatic events delivers the author's specified premise, character behavior, relationships, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience, rather than merely mentioning those ingredients. Treat planner-generated enrichment as provisional: reject only when it materially redirects the story into a different narrative experience, and accept unusual, destructive, morally compromised, or mixed-genre events when they remain faithful to the recipe. If rejecting, identify a concrete section and quote the field that demonstrates the drift.",
+      instruction: "Assess the whole outline's creative fidelity to the canonical recipe AND the selected Story Arc's binding reader experience. Decide whether the sequence of actual dramatic events, escalating beat effects, climax, and final image deliver the required genre-specific experience, as well as the author's premise, character behavior, relationships, tone, intensity, absurdity, world rules, and contradictions. An outline can satisfy every structural beat yet fail this assessment if it tells a different kind of story; do not accept horror labels paired with procedural danger and a mechanical solution as horror. Treat planner-generated enrichment as provisional: reject only when it materially redirects the story into a different narrative experience, and accept unusual, destructive, morally compromised, or mixed-genre events when they remain faithful to the recipe. If rejecting, identify a concrete section and quote the field that demonstrates the drift.",
       sections: suggestions.map((section, sectionIndex) => ({
         sectionIndex,
         beatID: section.storyArcBeatID,
@@ -4623,10 +4687,11 @@ export async function verifyStoryArcSemantics(
   recipe?: CanonicalRecipeEnvelope,
   action = "outline-semantic-verification",
   premiseComponents: PremiseComponent[] = [],
+  storyArchitecture?: StoryArchitecture,
 ): Promise<SemanticVerificationResult> {
-  const input = semanticVerificationInput(suggestions, template, recipe, premiseComponents);
+  const input = semanticVerificationInput(suggestions, template, recipe, premiseComponents, storyArchitecture);
   const raw = await billableCall(
-    "You are an independent semantic verifier. First assess EVERY independently extracted authored premise component across the full outline. A local success cannot be declared fulfillment of a different larger promise. For a multi-book premise, an organically established credible thread or foreshadowed long-range stake can be satisfactory without a premature national or humanity-saving climax. Do not invent a required current-volume outcome when the author supplied only a series premise. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and the required whole-outline creative_fidelity assessment, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. For creative_fidelity, evaluate the sequence of dramatic events against the complete canonical recipe's premise, populated character and relationship directives, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience; do not pass merely because names or keywords appear. This is a material-drift review, not a perfection or style score: a coherent, usable outline with minor weaknesses, uneven emphasis, legitimate mixed-genre scenes, or editorial opportunities is satisfied. Planner-generated candidates are provisional and may be discarded. Accept procedural or institutional material when the recipe makes it central, and reject it only when it fundamentally redirects the authored story or omits essential creative commitments needed for a usable outline. If rejecting, provide a grounded quote from the section that demonstrates the material drift. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
+    "You are an independent semantic verifier. First assess EVERY independently extracted authored premise component across the full outline. A local success cannot be declared fulfillment of a different larger promise. For a multi-book premise, an organically established credible thread or foreshadowed long-range stake can be satisfactory without a premature national or humanity-saving climax. Do not invent a required current-volume outcome when the author supplied only a series premise. Decide whether the actual Section Contract fields materially satisfy each authored Story Arc obligation and the required whole-outline creative_fidelity assessment, including whether required-resolution beats achieve a definite recipe-consistent outcome from resultingChange and terminalState. Independently assess the selected arcReaderExperienceContract and committedArcExperience against the ACTUAL sequence, climax and final image: a structurally correct horror arc that only delivers procedural danger and a technical fix is not a satisfactory horror experience; other arcs must deliver their own declared experiences. Do not accept arc names, labels, violence alone, or generic climactic victories as proof that the genre experience occurred. For creative_fidelity, evaluate the sequence of dramatic events against the complete canonical recipe's premise, populated character and relationship directives, tone, genre, intensity, absurdity, world rules, contradictions, and intended reader experience; do not pass merely because names or keywords appear. This is a material-drift review, not a perfection or style score: a coherent, usable outline with minor weaknesses, uneven emphasis, legitimate mixed-genre scenes, or editorial opportunities is satisfied. Planner-generated candidates are provisional and may be discarded. Accept procedural or institutional material when the recipe makes it central, and reject it only when it fundamentally redirects the authored story or omits essential creative commitments needed for a usable outline. If rejecting, provide a grounded quote from the section that demonstrates the material drift. An attempted action, incidental loss, atmospheric aftermath, or postponed confrontation is not resolution; do not accept dramaticEvent alone. Do not inspect or accept arcObligationEvidence; it is not provided. Return only the required JSON.",
     JSON.stringify(input),
     5000,
     { type: "json_schema", json_schema: { name: "story_arc_semantic_verification", strict: true, schema: SEMANTIC_VERIFICATION_SCHEMA } },
@@ -4634,7 +4699,7 @@ export async function verifyStoryArcSemantics(
   );
   const expectedObligationIDs = [
     ...premiseComponents.map((_, i) => `arc-wide:premise_component_${i}`),
-    ...(hasCreativeFidelityDirectives(recipe) ? ["arc-wide:" + CREATIVE_FIDELITY_OBLIGATION] : []),
+    ...((hasCreativeFidelityDirectives(recipe) || hasNamedArcExperiencePromise(template)) ? ["arc-wide:" + CREATIVE_FIDELITY_OBLIGATION] : []),
     ...template.beats.flatMap((beat) =>
     verificationObligationsForBeat(beat, template.name).map((obligation) => `${beat.id}:${obligation.id}`))];
   const recordValidationError = async (error: unknown, extra: Record<string, unknown> = {}) => {
@@ -4692,7 +4757,7 @@ export async function verifyStoryArcSemantics(
       });
     }
   }
-  if (hasCreativeFidelityDirectives(recipe)) {
+  if (hasCreativeFidelityDirectives(recipe) || hasNamedArcExperiencePromise(template)) {
     const creativeRaw = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === CREATIVE_FIDELITY_OBLIGATION);
     const creativeSectionIndex = Number(creativeRaw?.sectionIndex);
     const creativeSection = suggestions[creativeSectionIndex];
@@ -6127,6 +6192,7 @@ export async function runSuggestionJob(
           // has no canonical beat assignment, so the provider must choose the
           // beat where it belongs instead of being forced into beat zero.
           beats: allocationRepairRequired ? body.arcTemplate.beats : undefined,
+          shouldExpandBeat: (current, beatID) => sectionAllocationDeficits(current).some((entry) => entry.beatID === beatID),
           coverageGate: (current) => requestedStoryMaterialFormat(body) === "novel" && sectionAllocationDeficits(current).length > 0,
           qualityGate: (current) => {
             if (requestedStoryMaterialFormat(body) !== "novel") return false;
@@ -6217,8 +6283,23 @@ export async function runSuggestionJob(
       );
       const allocationShortfallReport = allocationShortfalls(completedSuggestions, effectiveAllocation);
       diagnostics = { ...diagnostics, allocationShortfalls: allocationShortfallReport };
-      if (remainingAllocationDeficits.length > 0) {
-        const checkpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? []);
+      const expansionHistory = diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [];
+      const lastExpansionRound = expansionHistory.at(-1);
+      const allocationCannotAdvance =
+        !canFitNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
+        (lastExpansionRound !== undefined && lastExpansionRound.additionsReturned === 0);
+      if (remainingAllocationDeficits.length > 0 && allocationCannotAdvance) {
+        // Preserve a useful book-length outline, but report the true shortfall
+        // internally. A budget-blocked or zero-progress allocation must never
+        // be rescheduled as another paid expansion or advertised as repaired.
+        diagnostics = {
+          ...diagnostics,
+          allocationRepairStatus: canFitNovelExpansion(completedSuggestions, body.existingSections ?? [])
+            ? "no_progress" : "budget_exhausted",
+          allocationDeficits: remainingAllocationDeficits,
+        };
+      } else if (remainingAllocationDeficits.length > 0) {
+        const checkpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], expansionHistory);
         const expansionRounds = diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [];
         if (allocationRepairExhausted(remainingAllocationDeficits, expansionRounds)) {
           // A resumed checkpoint can start at round four. Do not yield the
@@ -6300,6 +6381,7 @@ export async function runSuggestionJob(
         body.arcTemplate,
       );
       const outlineNeedsExpansion = requestedStoryMaterialFormat(body) === "novel" &&
+        canFitNovelExpansion(completedSuggestions, body.existingSections ?? []) &&
         (sectionAllocationDeficits(completedSuggestions).length > 0 ||
           needsNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
           initialQuality.causalScaleIssues.length > 0);
@@ -6409,6 +6491,7 @@ export async function runSuggestionJob(
         verification = await verifyStoryArcSemantics(
           persistedSemanticSuggestions, body.arcTemplate, billableCall, body.recipe,
           "outline-semantic-verification", body.storyMaterialEnrichment?.premiseComponents ?? [],
+          planningState.storyArchitecture as StoryArchitecture | undefined,
         );
       } catch (error) {
         recordSemanticWarning(`Semantic verification was unavailable; continuing with the best structural outline: ${error instanceof Error ? error.message : String(error)}`);
@@ -6920,7 +7003,7 @@ export async function runSuggestionJob(
     };
 
     const authoredSemanticBeatCount = body.arcTemplate.beats.filter((beat) => arcRoleContract(beat, body.arcTemplate.name).semanticObligations.length > 0).length;
-    if ((authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null) && sectionAllocationDeficits(result.suggestions).length === 0) {
+    if ((authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null || hasNamedArcExperiencePromise(body.arcTemplate)) && sectionAllocationDeficits(result.suggestions).length === 0) {
       // Semantic verification is its own durable provider stage. Persist the
       // validated outline before yielding so a one-dispatch worker slice never
       // replays the paid outline call or loses the verifier checkpoint.

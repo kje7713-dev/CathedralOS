@@ -36,6 +36,7 @@ Deno.test("outline suggestion polling contract preserves structured failures and
 
 import {
   buildAllocationPrompt,
+  arcReaderExperienceDirective,
   buildExpansionPrompt,
   isRetryableInsufficientCreditFailure,
   fitAllocationToNovelBudget,
@@ -64,6 +65,7 @@ import {
   calculateRepairAllocation,
   ExpansionValidationError,
   fitExpansionAdditionsToBudget,
+  canFitNovelExpansion,
   NovelScalePlanningError,
   MAX_EXPANSION_ROUNDS,
   progressivelyExpandOutline,
@@ -704,11 +706,12 @@ Deno.test("exceptional payoff changes with the selected arc, not just beat label
       ],
     },
   ];
-  let baselineSystem: string | undefined;
+  const arcSpecificSystems = new Set<string>();
   for (const arc of arcs) {
     const request: any = { ...sparseRequest, recipe: sameRecipe, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, ...arc } };
     const architecture = buildAllocationPrompt(request);
     const outline = buildPrompt(request, new Map(), [], undefined, {
+      arcExperience: "Escalation and payoff must realize the experience promised by the selected arc.",
       centralQuestion: "Which truth must the protagonists confront?",
       characterCausality: "The companions' conflicting decisions cause an irreversible confrontation.",
       decisiveClimax: "One protagonist makes a decisive and costly choice.",
@@ -731,11 +734,52 @@ Deno.test("exceptional payoff changes with the selected arc, not just beat label
     assertStringIncludes(outline.system, "do not displace it with a report, explanation");
     assertStringIncludes(outline.system, "procedural storytelling are entirely valid");
     assertStringIncludes(outline.system, "a mere narrow escape, surviving together, stopping a routine operation");
-    // The same rules apply to every genre, while each distinct authored arc
-    // is actually passed to the planner to shape its generated ending.
-    if (baselineSystem === undefined) baselineSystem = architecture.system;
-    else assertEquals(architecture.system, baselineSystem);
+    // The selected arc changes the actual creative commitment, not just beat IDs.
+    assertStringIncludes(architecture.system, "SELECTED ARC EXPERIENCE CONTRACT");
+    assertStringIncludes(architecture.system, arc.name);
+    arcSpecificSystems.add(architecture.system);
   }
+  assertEquals(arcSpecificSystems.size, arcs.length);
+});
+
+Deno.test("selected arc imposes its own reader experience before any plot machinery", () => {
+  const beats = [{ id: "one", role: "setup", label: "Opening", description: "Begin an escalating choice." }];
+  const horror = arcReaderExperienceDirective({ name: "Horror / Escalating Dread", beats });
+  const romance = arcReaderExperienceDirective({ name: "Romance / HEA", beats });
+  const mystery = arcReaderExperienceDirective({ name: "Mystery / Reveal", beats });
+  const generic = arcReaderExperienceDirective({ name: "Three-Act", beats });
+  assertStringIncludes(horror, "Sustained, escalating fear");
+  assertStringIncludes(horror, "NOT satisfied by violent incidents");
+  assertStringIncludes(romance, "relationship transformation");
+  assertStringIncludes(mystery, "consequential clues");
+  assertStringIncludes(generic, "must not impose an unrelated genre");
+  assertEquals(new Set([horror, romance, mystery, generic]).size, 4);
+});
+
+Deno.test("arc experience survives strict allocation, outline handoff, and semantic review input", () => {
+  const req: any = { ...sparseRequest, arcTemplate: { ...sparseRequest.arcTemplate, name: "Horror / Escalating Dread" } };
+  const planning = buildAllocationPrompt(req);
+  assertStringIncludes(planning.system, "HORROR: Sustained, escalating fear");
+  assertEquals((planning.system.match(/## Binding experience of the selected Story Arc/g) ?? []).length, 1);
+  const architecture = {
+    arcExperience: "Fred's impossible visions escalate vulnerability and dread, ending in a devastating recognition.",
+    centralQuestion: "How can the friends live with Fred's visions?",
+    characterCausality: "Ted's choices worsen a threat they do not understand.",
+    decisiveClimax: "Fred's recognition makes the nightmare irreversible.",
+    endingConsequence: "They are alive but their understanding of reality is destroyed.",
+    deliberatelyOpenThreads: "The origin of the visions remains hidden.",
+  };
+  const outline = buildPrompt(req, new Map(), [], undefined, architecture);
+  assertStringIncludes(outline.system, "HORROR: Sustained, escalating fear");
+  assertStringIncludes(outline.system, architecture.arcExperience);
+  assertStringIncludes(outline.system, "Enact it through irreversible dramatic events");
+  const verification: any = semanticVerificationInput([], req.arcTemplate, req.recipe, [], architecture);
+  assertStringIncludes(verification.arcReaderExperienceContract, "HORROR: Sustained, escalating fear");
+  assertEquals(verification.committedArcExperience, architecture.arcExperience);
+  assertStringIncludes(
+    verification.arcWideObligations.find((o: any) => o.obligationID === "creative_fidelity")?.instruction ?? "",
+    "selected Story Arc's binding reader experience",
+  );
 });
 
 Deno.test("high-impact endings preserve existing architecture schema and one-call planning", async () => {
@@ -746,10 +790,11 @@ Deno.test("high-impact endings preserve existing architecture schema and one-cal
     assertEquals(action, "outline-plan");
     assertStringIncludes(system, "Choose an exceptional, arc-specific ending before building the central plot");
     assertEquals(Object.keys(format.json_schema.schema.properties.storyArchitecture.properties).sort(),
-      ["centralQuestion", "characterCausality", "decisiveClimax", "deliberatelyOpenThreads", "endingConsequence"].sort());
+      ["arcExperience", "centralQuestion", "characterCausality", "decisiveClimax", "deliberatelyOpenThreads", "endingConsequence"].sort());
     return {
       content: JSON.stringify({
         storyArchitecture: {
+          arcExperience: "The decisive emotional consequences must fulfill the chosen arc.",
           centralQuestion: "Will Mara tell the truth despite the irreversible consequences?",
           characterCausality: "Her betrayal sets off the final reckoning.",
           decisiveClimax: "Mara exposes her part in the betrayal and loses the person she most wanted to protect.",
@@ -779,7 +824,7 @@ Deno.test("same authored recipe with different arcs reaches the payoff handoff",
     { name: "Revelatory Mystery", ending: "A consequential discovery reinterprets the central question and requires a painful answer." },
     { name: "Bitter Comedy", ending: "An accumulated series of comic reversals causes an outrageous and consequential last reversal." },
   ];
-  let sharedPrompt: string | undefined;
+  const arcPrompts = new Set<string>();
   for (const arc of arcs) {
     const request: any = { ...sparseRequest, recipe: constantRecipe, arcTemplate: {
       id: "arbitrary-template", name: arc.name,
@@ -797,10 +842,11 @@ Deno.test("same authored recipe with different arcs reaches the payoff handoff",
     assertStringIncludes(system, "COUNTERFACTUAL ARC CHECK");
     assertStringIncludes(system, "WORK BACKWARD");
     assertStringIncludes(system, "Select any investigation, mission, tactical operation, technical solution");
-    if (sharedPrompt === undefined) sharedPrompt = system;
-    else assertEquals(system, sharedPrompt);
+    assertStringIncludes(system, "SELECTED ARC EXPERIENCE CONTRACT");
+    arcPrompts.add(system);
 
     const outline = buildPrompt(request, new Map([["b", { minSections: 1, rationale: arc.ending }]]), [], undefined, {
+      arcExperience: "The selected arc determines the escalating reader experience and earned final payoff.",
       centralQuestion: "Will they choose each other?",
       characterCausality: "The two make costly, conflicting decisions.",
       decisiveClimax: arc.ending,
@@ -810,6 +856,7 @@ Deno.test("same authored recipe with different arcs reaches the payoff handoff",
     assertStringIncludes(outline.system, arc.ending);
     assertStringIncludes(outline.system, "Final-payoff realization across the Story Arc");
   }
+  assertEquals(arcPrompts.size, arcs.length);
 });
 
 Deno.test("compact novel schemas reserve mandatory dramatic functions without per-slot duplication", () => {
@@ -973,6 +1020,7 @@ Deno.test("novel final schema stays compact for the production-scale 10-beat pla
 Deno.test("architecture + allocation share one provider response, with recipe authority and optional enrichment", async () => {
   const req = { ...sparseRequest, requestedFormat: "novel" } as any;
   const architecture = {
+    arcExperience: "The chosen arc creates increasing emotional jeopardy and an irreversible payoff.",
     centralQuestion: "Can Mara rescue the family she betrayed?",
     characterCausality: "Mara's deception drives her brother to protect the wrong person, forcing a personal reckoning.",
     decisiveClimax: "Mara confronts the threat and saves her family at an irreversible personal cost.",
@@ -987,7 +1035,7 @@ Deno.test("architecture + allocation share one provider response, with recipe au
     assertEquals(maxTokens >= 3500, true);
     const schema = format.json_schema.schema;
     assertEquals(schema.required.includes("storyArchitecture"), true);
-    assertEquals(schema.properties.storyArchitecture.required.length, 5);
+    assertEquals(schema.properties.storyArchitecture.required.length, 6);
     return {
       content: JSON.stringify({
         storyArchitecture: architecture,
@@ -1016,6 +1064,7 @@ Deno.test("architecture + allocation share one provider response, with recipe au
 
 Deno.test("allocation rejects malformed architecture instead of passing it to prose generation", () => {
   const good = {
+    arcExperience: "The selected arc must change the emotional stakes and ending.",
     centralQuestion: "Who survives?",
     characterCausality: "Mara's betrayal forces her brother to fight.",
     decisiveClimax: "The siblings stop the threat together.",
@@ -1029,7 +1078,7 @@ Deno.test("allocation rejects malformed architecture instead of passing it to pr
   const beats = sparseRequest.arcTemplate.beats;
   const parsed = parseAndValidateAllocation(JSON.stringify({ storyArchitecture: good, allocations }), beats);
   assertEquals(parsed.size, 2);
-  for (const bad of [{ ...good, decisiveClimax: "" }, { ...good, unapprovedCanon: "A new authorial mandate" }, { ...good, endingConsequence: 5 }, []]) {
+  for (const bad of [{ ...good, arcExperience: "" }, { ...good, decisiveClimax: "" }, { ...good, unapprovedCanon: "A new authorial mandate" }, { ...good, endingConsequence: 5 }, []]) {
     assertThrows(() => parseAndValidateAllocation(JSON.stringify({ storyArchitecture: bad, allocations }), beats), Error);
   }
   // A persisted pre-upgrade allocation can still be replayed without a new
@@ -1066,7 +1115,7 @@ Deno.test("reader-experience-first architecture applies equally across genres wi
       audienceNotes: "Quiet moral ambiguity and painful family relationships.",
     },
   ];
-  let genreNeutralSystem: string | undefined;
+  const genreSystems = new Set<string>();
   for (const genre of recipes) {
     const request: any = {
       ...sparseRequest,
@@ -1089,10 +1138,11 @@ Deno.test("reader-experience-first architecture applies equally across genres wi
     assertStringIncludes(outlinePrompt.system, "relationship milestone is authored and dramatically appropriate");
     assertEquals(JSON.parse(architecturePrompt.user).planningContext.recipe.project.summary, genre.summary);
     assertEquals(JSON.parse(architecturePrompt.user).planningContext.arc.name, genre.name);
-    // The rule itself is shared: no code-level special treatment for the example horror recipe.
-    if (genreNeutralSystem === undefined) genreNeutralSystem = architecturePrompt.system;
-    else assertEquals(architecturePrompt.system, genreNeutralSystem);
+    // General structural arcs do not impose a genre; named experiential arcs do.
+    assertStringIncludes(architecturePrompt.system, genre.name);
+    genreSystems.add(architecturePrompt.system);
   }
+  assertEquals(genreSystems.size, recipes.length);
 });
 
 Deno.test("selected book-level climax persists into outline without forcing the wider threat to be defeated", () => {
@@ -2916,6 +2966,88 @@ Deno.test("budget fitting records partial acceptance and discarded candidates", 
   assertEquals(fitted.attempt.acceptedCount, 10);
   assertEquals(fitted.attempt.rejectedCount, 1);
   assertEquals(fitted.attempt.budgetTruncated, true);
+});
+
+Deno.test("a 129K-word projected novel cannot dispatch paid expansion when no section fits", async () => {
+  // 30 chapter midpoints + three scenes = 168,900 tokens (129,923 words).
+  // The accepted 130K ceiling leaves only 100 tokens: no novel leaf fits.
+  const nearCap = [
+    ...Array.from({ length: 30 }, (_, i) => expansionSection(`Chapter ${i}`, "chapter")),
+    ...Array.from({ length: 3 }, (_, i) => expansionSection(`Scene ${i}`, "scene")),
+  ];
+  assertEquals(Math.round(evaluateNovelScale(nearCap).projectedWords), 129923);
+  assertEquals(canFitNovelExpansion(nearCap), false);
+  let providerCalls = 0;
+  const result = await progressivelyExpandOutline(
+    nearCap, new Set(["beat-1"]),
+    async () => { providerCalls++; return [expansionSection("Impossible addition", "scene")]; },
+    undefined,
+    { beats: [{ id: "beat-1" }], coverageGate: () => true, qualityGate: () => true },
+  );
+  assertEquals(providerCalls, 0);
+  assertEquals(result.suggestions.length, nearCap.length);
+  assertEquals(result.diagnostics.length, 0);
+});
+
+Deno.test("fully budgeted expansion addition stops without provider validation retry", async () => {
+  const nearCap = [
+    ...Array.from({ length: 30 }, (_, i) => expansionSection(`Chapter ${i}`, "chapter")),
+    ...Array.from({ length: 2 }, (_, i) => expansionSection(`Scene ${i}`, "scene")),
+  ];
+  assertEquals(canFitNovelExpansion(nearCap), true); // 1,400 tokens remain
+  const proposals = [expansionSection("Last fitting scene", "scene"), expansionSection("Over budget scene", "scene")];
+  const fitting = fitExpansionAdditionsToBudget(nearCap, proposals, [], { round: 1 });
+  assertEquals(fitting.additions.length, 1);
+  assertEquals(fitting.attempt.acceptedCount, 1);
+  assertEquals(fitting.attempt.rejectedCount, 1);
+  assertEquals(fitting.attempt.budgetTruncated, true);
+  let providerCalls = 0;
+  const result = await progressivelyExpandOutline(
+    nearCap, new Set(["beat-1"]),
+    async (current) => {
+      providerCalls++;
+      return fitExpansionAdditionsToBudget(current, proposals, [], { round: 1 });
+    },
+    undefined,
+    { qualityGate: () => true },
+  );
+  assertEquals(providerCalls, 1);
+  assertEquals(result.suggestions.length, nearCap.length + 1);
+  assertEquals(result.diagnostics[0].attempts?.[0].rejectedCount, 1);
+  assertEquals(canFitNovelExpansion(result.suggestions), false);
+  // A cap-rejected addition is a normal completed attempt, never an exception
+  // that the charged provider boundary can mistake for invalid JSON.
+  const rejected = fitExpansionAdditionsToBudget(
+    result.suggestions, [expansionSection("Cannot fit", "chapter")], [], { round: 2 },
+  );
+  assertEquals(rejected.additions, []);
+  assertEquals(rejected.attempt.status, "rejected");
+});
+
+Deno.test("allocation repair dispatches only to still-deficient beats", async () => {
+  const initial = [
+    ...sceneOutline(114),
+    { ...sceneOutline(1)[0], storyArcBeatID: "beat-2", title: "Beat Two Existing" },
+  ];
+  const beatTwoCount = (sections: Array<{ storyArcBeatID?: string }>) =>
+    sections.filter((section) => section.storyArcBeatID === "beat-2").length;
+  const calls: Array<string | undefined> = [];
+  const result = await progressivelyExpandOutline(
+    initial, new Set(["beat-1", "beat-2"]),
+    async (_current, _context, beat) => {
+      calls.push(beat?.beatID);
+      return [expansionSection("Missing second beat", "scene", "beat-2")];
+    },
+    undefined,
+    {
+      beats: [{ id: "beat-1" }, { id: "beat-2" }],
+      coverageGate: (sections) => beatTwoCount(sections) < 2,
+      shouldExpandBeat: (sections, beatID) => beatID === "beat-2" && beatTwoCount(sections) < 2,
+    },
+  );
+  assertEquals(calls, ["beat-2"]);
+  assertEquals(result.suggestions.length, 116);
+  assertEquals(result.suggestions.at(-1)?.storyArcBeatID, "beat-2");
 });
 
 Deno.test("later-beat expansion failure preserves earlier accepted additions", async () => {
@@ -8069,9 +8201,11 @@ Deno.test("explicit intimacy is a whole-arc verifier obligation and generic arcs
   const recipe = { project: { intimacyRating: "explicit" } } as any;
   const suggestions = [{ storyArcBeatID: "e", dramaticEvent: "Mira reaches for Julian's hand and closes the distance.", resultingChange: "Their intimacy becomes chosen rather than engineered.", terminalState: "They remain together." }];
   const input = semanticVerificationInput(suggestions as any, template, recipe);
-  assertEquals((input.arcWideObligations as any[])[0].obligationID, SELECTED_INTIMACY_LEVEL_OBLIGATION);
-  assertEquals((input.arcWideObligations as any[])[0].sections.length, 1);
-  const generic = { name: "Mystery", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "m", role: "the_crime", label: "The Crime", description: "" }] } as any;
+  const obligations = input.arcWideObligations as any[];
+  assertEquals(obligations.map((o) => o.obligationID), [CREATIVE_FIDELITY_OBLIGATION, SELECTED_INTIMACY_LEVEL_OBLIGATION]);
+  assertEquals(obligations.find((o) => o.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION).sections.length, 1);
+  // A genre-neutral structural arc must not manufacture a genre obligation.
+  const generic = { name: "Three-Act", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "m", role: "setup", label: "Setup", description: "" }] } as any;
   assertEquals((semanticVerificationInput(suggestions as any, generic, recipe).arcWideObligations as any[]).length, 0);
 });
 
@@ -8282,9 +8416,11 @@ Deno.test("ungrounded intimacy verifier evidence enters semantic repair instead 
     }) as any,
     recipe,
   );
-  assertEquals(result.arcWideObligations[0].satisfied, false);
-  assertEquals(result.unsatisfied[0].obligationID, SELECTED_INTIMACY_LEVEL_OBLIGATION);
-  assertStringIncludes(result.unsatisfied[0].reason, "not grounded");
+  const intimacy = result.arcWideObligations.find((o) => o.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION);
+  assertEquals(intimacy?.satisfied, false);
+  const failure = result.unsatisfied.find((o) => o.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION);
+  assertEquals(failure?.obligationID, SELECTED_INTIMACY_LEVEL_OBLIGATION);
+  assertStringIncludes(failure?.reason ?? "", "not grounded");
 });
 
 Deno.test("whole-arc intimacy evidence is accepted on eligible beat sections", () => {
