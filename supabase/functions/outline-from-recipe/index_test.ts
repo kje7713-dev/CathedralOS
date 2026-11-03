@@ -2027,7 +2027,7 @@ Deno.test("terminalBeat replaces UUID and END with the existing closing action",
     dramaticEvent: "Mara slams the freezer door and locks the ratcoon inside.",
     resultingChange: "The freezer becomes a temporary containment point.",
     terminalState: "The ratcoon scratches behind the sealed door.",
-    dramaticFunction: "escalation",
+    dramaticFunction: "escalation" as const,
     storyArcBeatID: "beat-1",
     recipeRequirementIDs: [],
   };
@@ -7989,7 +7989,7 @@ Deno.test("semantic verifier adds resolution outcome only to required-resolution
   const ids = beat.obligations.map((obligation: any) => obligation.obligationID);
   assertEquals(ids, ["authored_beat_requirement", REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id]);
   assertEquals(input.recipe, recipe);
-  assertEquals(verificationObligationsForBeat({ id: "setup", role: "setup", label: "Setup" }, "Save the Cat!").some((obligation) => obligation.id === REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id), false);
+  assertEquals(verificationObligationsForBeat({ id: "setup", role: "setup", label: "Setup" } as any, "Save the Cat!").some((obligation) => obligation.id === REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id), false);
   assertEquals(verificationObligationsForBeat(template.beats[0], template.name).filter((obligation) => obligation.id === REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id).length, 1);
 });
 
