@@ -65,6 +65,7 @@ import {
   calculateRepairAllocation,
   ExpansionValidationError,
   fitExpansionAdditionsToBudget,
+  canFitNovelExpansion,
   NovelScalePlanningError,
   MAX_EXPANSION_ROUNDS,
   progressivelyExpandOutline,
@@ -2965,6 +2966,84 @@ Deno.test("budget fitting records partial acceptance and discarded candidates", 
   assertEquals(fitted.attempt.acceptedCount, 10);
   assertEquals(fitted.attempt.rejectedCount, 1);
   assertEquals(fitted.attempt.budgetTruncated, true);
+});
+
+Deno.test("a 129K-word projected novel cannot dispatch paid expansion when no section fits", async () => {
+  // 30 chapter midpoints + three scenes = 168,900 tokens (129,923 words).
+  // The accepted 130K ceiling leaves only 100 tokens: no novel leaf fits.
+  const nearCap = [
+    ...Array.from({ length: 30 }, (_, i) => expansionSection(`Chapter ${i}`, "chapter")),
+    ...Array.from({ length: 3 }, (_, i) => expansionSection(`Scene ${i}`, "scene")),
+  ];
+  assertEquals(Math.round(evaluateNovelScale(nearCap).projectedWords), 129923);
+  assertEquals(canFitNovelExpansion(nearCap), false);
+  let providerCalls = 0;
+  const result = await progressivelyExpandOutline(
+    nearCap, new Set(["beat-1"]),
+    async () => { providerCalls++; return [expansionSection("Impossible addition", "scene")]; },
+    undefined,
+    { beats: [{ id: "beat-1" }], coverageGate: () => true, qualityGate: () => true },
+  );
+  assertEquals(providerCalls, 0);
+  assertEquals(result.suggestions.length, nearCap.length);
+  assertEquals(result.diagnostics.length, 0);
+});
+
+Deno.test("fully budgeted expansion addition stops without provider validation retry", async () => {
+  const nearCap = [
+    ...Array.from({ length: 30 }, (_, i) => expansionSection(`Chapter ${i}`, "chapter")),
+    ...Array.from({ length: 2 }, (_, i) => expansionSection(`Scene ${i}`, "scene")),
+  ];
+  assertEquals(canFitNovelExpansion(nearCap), true); // 1,400 tokens remain
+  const proposals = [expansionSection("Last fitting scene", "scene"), expansionSection("Over budget scene", "scene")];
+  const fitting = fitExpansionAdditionsToBudget(nearCap, proposals, [], { round: 1 });
+  assertEquals(fitting.additions.length, 1);
+  assertEquals(fitting.attempt.acceptedCount, 1);
+  assertEquals(fitting.attempt.rejectedCount, 1);
+  assertEquals(fitting.attempt.budgetTruncated, true);
+  let providerCalls = 0;
+  const result = await progressivelyExpandOutline(
+    nearCap, new Set(["beat-1"]),
+    async (current) => {
+      providerCalls++;
+      return fitExpansionAdditionsToBudget(current, proposals, [], { round: 1 });
+    },
+    undefined,
+    { qualityGate: () => true },
+  );
+  assertEquals(providerCalls, 1);
+  assertEquals(result.suggestions.length, nearCap.length + 1);
+  assertEquals(result.diagnostics[0].attempts?.[0].rejectedCount, 1);
+  assertEquals(canFitNovelExpansion(result.suggestions), false);
+  // A cap-rejected addition is a normal completed attempt, never an exception
+  // that the charged provider boundary can mistake for invalid JSON.
+  const rejected = fitExpansionAdditionsToBudget(
+    result.suggestions, [expansionSection("Cannot fit", "chapter")], [], { round: 2 },
+  );
+  assertEquals(rejected.additions, []);
+  assertEquals(rejected.attempt.status, "rejected");
+});
+
+Deno.test("allocation repair dispatches only to still-deficient beats", async () => {
+  const initial = sceneOutline(115);
+  const calls: Array<string | undefined> = [];
+  const result = await progressivelyExpandOutline(
+    initial, new Set(["beat-1", "beat-2"]),
+    async (_current, _context, beat) => {
+      calls.push(beat?.beatID);
+      return [expansionSection("Missing second beat", "scene", "beat-2")];
+    },
+    undefined,
+    {
+      beats: [{ id: "beat-1" }, { id: "beat-2" }],
+      coverageGate: (sections) => !sections.some((section) => section.storyArcBeatID === "beat-2"),
+      shouldExpandBeat: (sections, beatID) => beatID === "beat-2" &&
+        !sections.some((section) => section.storyArcBeatID === "beat-2"),
+    },
+  );
+  assertEquals(calls, ["beat-2"]);
+  assertEquals(result.suggestions.length, 116);
+  assertEquals(result.suggestions.at(-1)?.storyArcBeatID, "beat-2");
 });
 
 Deno.test("later-beat expansion failure preserves earlier accepted additions", async () => {
