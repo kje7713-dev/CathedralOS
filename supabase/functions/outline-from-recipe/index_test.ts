@@ -55,6 +55,7 @@ import {
   assertDistinctOutlineTitles,
   buildSuggestionResponseSchema,
   plannedNovelContainerSlots,
+  outstandingRequiredFunctionsByBeat,
   buildObligationRepairPrompt,
   mergeObligationRepairOperations,
   buildObligationRepairResponseSchema,
@@ -884,7 +885,8 @@ Deno.test("required slots preserve climax, resolution, section order and planned
     decisive: { sections: [section("Crisis", "crisis")], required: { climax: section("Showdown", "climax") } },
     last: { sections: [section("Consequences", "aftermath")], required: { resolution: section("Outcome", "resolution") } },
   } };
-  const flattened = flattenSuggestionResponse(response, beats, allocation);
+  const requiredOrder = outstandingRequiredFunctionsByBeat(beats, "Save the Cat!");
+  const flattened = flattenSuggestionResponse(response, beats, allocation, requiredOrder);
   assertEquals(flattened.suggestions.map((s) => s.title), ["Crisis", "Showdown", "Consequences", "Outcome"]);
   assertEquals(flattened.suggestions.map((s) => s.container), [
     ...plannedNovelContainerSlots(plan.containerCounts), ...plannedNovelContainerSlots(plan.containerCounts),
@@ -892,7 +894,59 @@ Deno.test("required slots preserve climax, resolution, section order and planned
   assertEquals(validateRequiredStoryArcFunctions(flattened.suggestions, { name: "Save the Cat!", beats }), []);
   const wrong = structuredClone(response);
   wrong.beats.decisive.required.climax.dramaticFunction = "crisis";
-  assertThrows(() => flattenSuggestionResponse(wrong, beats, allocation), Error, "required dramatic slot climax is not satisfied");
+  assertThrows(
+    () => flattenSuggestionResponse(wrong, beats, allocation, requiredOrder),
+    Error, "required dramatic slot climax is not satisfied",
+  );
+});
+
+Deno.test("reversed required-function JSON keys never change canonical container slots", () => {
+  const beats = [{ id: "finale", role: "climax", label: "Finale" }];
+  const plan = {
+    minSections: 3,
+    rationale: "two independent mandatory dramatic functions",
+    containerCounts: { scene: 1, developedScene: 1, setPiece: 0, sceneSequence: 0, chapter: 1 },
+  };
+  const allocation = new Map([["finale", plan]]);
+  // Synthetic two-function order checks the multi-slot case, which most
+  // current templates do not exercise (they reserve one function per beat).
+  const requiredOrder = new Map([["finale", ["climax", "resolution"] as Array<"climax" | "resolution">]]);
+  const section = (title: string, dramaticFunction: string) => ({
+    title, summary: title, pov: "thirdPersonLimited", terminalBeat: title,
+    dramaticEvent: title, resultingChange: title, terminalState: title, entryState: title, dramaticFunction,
+  });
+  const reversed = { beats: { finale: {
+    sections: [section("Ordinary scene", "crisis")],
+    required: {
+      resolution: section("Definite ending", "resolution"),
+      climax: section("Decisive confrontation", "climax"),
+    },
+  } } };
+  assertEquals(Object.keys(reversed.beats.finale.required), ["resolution", "climax"]);
+  const flattened = flattenSuggestionResponse(reversed, beats, allocation, requiredOrder);
+  assertEquals(flattened.suggestions.map((s) => s.title), [
+    "Ordinary scene", "Decisive confrontation", "Definite ending",
+  ]);
+  assertEquals(flattened.suggestions.map((s) => s.container), plannedNovelContainerSlots(plan.containerCounts));
+  const forward = structuredClone(reversed);
+  forward.beats.finale.required = {
+    climax: section("Decisive confrontation", "climax"),
+    resolution: section("Definite ending", "resolution"),
+  };
+  assertEquals(
+    flattenSuggestionResponse(forward, beats, allocation, requiredOrder).suggestions,
+    flattened.suggestions,
+  );
+  assertThrows(
+    () => flattenSuggestionResponse(reversed, beats, allocation),
+    Error, "required dramatic slots differ from the planned functions",
+  );
+  const unexpected = structuredClone(reversed) as any;
+  unexpected.beats.finale.required.aftermath = section("Unplanned", "aftermath");
+  assertThrows(
+    () => flattenSuggestionResponse(unexpected, beats, allocation, requiredOrder),
+    Error, "required dramatic slots differ from the planned functions",
+  );
 });
 
 Deno.test("novel final schema stays compact for the production-scale 10-beat plan", () => {
