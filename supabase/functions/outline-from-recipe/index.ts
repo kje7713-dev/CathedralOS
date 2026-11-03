@@ -2711,7 +2711,7 @@ export async function progressivelyExpandOutline(
     try {
       // Once required coverage is satisfied, optional length development is
       // global; it must not revisit every beat as if still missing coverage.
-      const targetBeats = options.beats?.length && options.coverageGate?.(roundSuggestions) === true
+      const targetBeats = options.beats?.length && options.coverageGate?.(roundSuggestions) !== false
         ? options.beats
         : [undefined];
       const firstBeatIndex = round === startRound ? Math.max(0, options.startBeatIndex ?? 0) : 0;
