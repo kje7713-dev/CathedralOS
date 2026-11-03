@@ -2213,6 +2213,26 @@ export function evaluateNovelScale(
   };
 }
 
+
+/**
+ * Provider dispatch is never useful if no permitted novel section can fit the
+ * remaining accepted projection. The grace ceiling accommodates existing
+ * midpoint drift but does not authorize repeated attempts beyond it.
+ * Check before any paid expansion and again after every accepted addition.
+ */
+export function canFitNovelExpansion(
+  suggestions: PlannedSectionLike[],
+  existingSections: PlannedSectionLike[] = [],
+): boolean {
+  if (suggestions.length + existingSections.length >= MAX_PLANNED_SECTIONS) return false;
+  const remainingTokens = NOVEL_ACCEPTED_MAX_PROJECTED_TOKENS -
+    evaluateNovelScale(suggestions, existingSections).projectedTokens;
+  const smallestSectionTokens = Math.min(
+    ...NOVEL_LEAF_CONTAINERS.map((container) => projectedExpectedTokens([{ container }])),
+  );
+  return remainingTokens >= smallestSectionTokens;
+}
+
 export function needsNovelExpansion(
   suggestions: PlannedSectionLike[],
   existingSections: PlannedSectionLike[] = [],
@@ -2351,18 +2371,10 @@ export function fitExpansionAdditionsToBudget(
       error: `budget truncated ${rejectedCount} expansion addition${rejectedCount === 1 ? "" : "s"} at the ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`,
     } : {}),
   };
-  if (accepted.length === 0 && additions.length > 0) {
-    const fullMerged = mergeExpansionAdditions(current, additions);
-    const error = fullMerged.length > MAX_PLANNED_SECTIONS
-      ? `global ${MAX_PLANNED_SECTIONS}-section safety cap reached`
-      : `projected novel scale exceeded ${NOVEL_MAX_WORDS.toLocaleString()}-word hard cap`;
-    throw new ExpansionValidationError(error, {
-      ...attempt,
-      rejectedCount: additions.length,
-      projectedTokensAfter: evaluateNovelScale(fullMerged, existingSections).projectedTokens,
-      error,
-    });
-  }
+  // A well-formed addition that does not fit the novel budget is NOT a
+  // provider validation failure. Throwing here causes the billable caller to
+  // retry the same impossible budget dozens of times. Keep the rejected
+  // attempt in diagnostics and finish the expansion pass without another call.
   return { additions: accepted, attempt };
 }
 
@@ -2549,6 +2561,8 @@ export interface ProgressiveExpansionOptions {
   /** Required structural coverage is a hard gate, not optional quality work. */
   coverageGate?: (suggestions: Suggestion[]) => boolean;
   qualityGate?: (suggestions: Suggestion[]) => boolean;
+  /** In beat-local repair, skip beats that have no remaining deficit. */
+  shouldExpandBeat?: (suggestions: Suggestion[], beatID: string) => boolean;
   beats?: Array<{ id: string; label?: string; description?: string }>;
   onBeat?: (
     round: number,
@@ -2674,7 +2688,7 @@ export async function progressivelyExpandOutline(
   const startRound = Math.max(1, options.startRound ?? 1);
   const shouldContinueDevelopment = (current: Suggestion[]) => {
     const scale = evaluateNovelScale(current, existingSections);
-    return !scale.exceedsMaximum && (
+    return !scale.exceedsMaximum && canFitNovelExpansion(current, existingSections) && (
       needsNovelExpansion(current, existingSections) ||
       options.coverageGate?.(current) === true ||
       options.qualityGate?.(current) === true
@@ -2695,13 +2709,17 @@ export async function progressivelyExpandOutline(
     let hitCap = false;
     const attempts: ExpansionAttemptDiagnostic[] = [];
     try {
-      const targetBeats = options.beats?.length
+      // Once required coverage is satisfied, optional length development is
+      // global; it must not revisit every beat as if still missing coverage.
+      const targetBeats = options.beats?.length && options.coverageGate?.(roundSuggestions) === true
         ? options.beats
         : [undefined];
       const firstBeatIndex = round === startRound ? Math.max(0, options.startBeatIndex ?? 0) : 0;
       for (let beatIndex = firstBeatIndex; beatIndex < targetBeats.length; beatIndex++) {
         const beat = targetBeats[beatIndex];
         if (!shouldContinueDevelopment(roundSuggestions)) break;
+        if (beat && options.coverageGate?.(roundSuggestions) === false) break;
+        if (beat && options.shouldExpandBeat?.(roundSuggestions, beat.id) === false) continue;
         const beatContext = beat
           ? {
             beatID: beat.id,
@@ -6174,6 +6192,7 @@ export async function runSuggestionJob(
           // has no canonical beat assignment, so the provider must choose the
           // beat where it belongs instead of being forced into beat zero.
           beats: allocationRepairRequired ? body.arcTemplate.beats : undefined,
+          shouldExpandBeat: (current, beatID) => sectionAllocationDeficits(current).some((entry) => entry.beatID === beatID),
           coverageGate: (current) => requestedStoryMaterialFormat(body) === "novel" && sectionAllocationDeficits(current).length > 0,
           qualityGate: (current) => {
             if (requestedStoryMaterialFormat(body) !== "novel") return false;
@@ -6264,8 +6283,23 @@ export async function runSuggestionJob(
       );
       const allocationShortfallReport = allocationShortfalls(completedSuggestions, effectiveAllocation);
       diagnostics = { ...diagnostics, allocationShortfalls: allocationShortfallReport };
-      if (remainingAllocationDeficits.length > 0) {
-        const checkpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? []);
+      const expansionHistory = diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [];
+      const lastExpansionRound = expansionHistory.at(-1);
+      const allocationCannotAdvance =
+        !canFitNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
+        (lastExpansionRound !== undefined && lastExpansionRound.additionsReturned === 0);
+      if (remainingAllocationDeficits.length > 0 && allocationCannotAdvance) {
+        // Preserve a useful book-length outline, but report the true shortfall
+        // internally. A budget-blocked or zero-progress allocation must never
+        // be rescheduled as another paid expansion or advertised as repaired.
+        diagnostics = {
+          ...diagnostics,
+          allocationRepairStatus: canFitNovelExpansion(completedSuggestions, body.existingSections ?? [])
+            ? "no_progress" : "budget_exhausted",
+          allocationDeficits: remainingAllocationDeficits,
+        };
+      } else if (remainingAllocationDeficits.length > 0) {
+        const checkpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], expansionHistory);
         const expansionRounds = diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [];
         if (allocationRepairExhausted(remainingAllocationDeficits, expansionRounds)) {
           // A resumed checkpoint can start at round four. Do not yield the
@@ -6347,6 +6381,7 @@ export async function runSuggestionJob(
         body.arcTemplate,
       );
       const outlineNeedsExpansion = requestedStoryMaterialFormat(body) === "novel" &&
+        canFitNovelExpansion(completedSuggestions, body.existingSections ?? []) &&
         (sectionAllocationDeficits(completedSuggestions).length > 0 ||
           needsNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
           initialQuality.causalScaleIssues.length > 0);
