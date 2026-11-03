@@ -36,6 +36,7 @@ Deno.test("outline suggestion polling contract preserves structured failures and
 
 import {
   buildAllocationPrompt,
+  arcReaderExperienceDirective,
   buildExpansionPrompt,
   isRetryableInsufficientCreditFailure,
   fitAllocationToNovelBudget,
@@ -704,11 +705,12 @@ Deno.test("exceptional payoff changes with the selected arc, not just beat label
       ],
     },
   ];
-  let baselineSystem: string | undefined;
+  const arcSpecificSystems = new Set<string>();
   for (const arc of arcs) {
     const request: any = { ...sparseRequest, recipe: sameRecipe, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, ...arc } };
     const architecture = buildAllocationPrompt(request);
     const outline = buildPrompt(request, new Map(), [], undefined, {
+      arcExperience: "Escalation and payoff must realize the experience promised by the selected arc.",
       centralQuestion: "Which truth must the protagonists confront?",
       characterCausality: "The companions' conflicting decisions cause an irreversible confrontation.",
       decisiveClimax: "One protagonist makes a decisive and costly choice.",
@@ -731,11 +733,52 @@ Deno.test("exceptional payoff changes with the selected arc, not just beat label
     assertStringIncludes(outline.system, "do not displace it with a report, explanation");
     assertStringIncludes(outline.system, "procedural storytelling are entirely valid");
     assertStringIncludes(outline.system, "a mere narrow escape, surviving together, stopping a routine operation");
-    // The same rules apply to every genre, while each distinct authored arc
-    // is actually passed to the planner to shape its generated ending.
-    if (baselineSystem === undefined) baselineSystem = architecture.system;
-    else assertEquals(architecture.system, baselineSystem);
+    // The selected arc changes the actual creative commitment, not just beat IDs.
+    assertStringIncludes(architecture.system, "SELECTED ARC EXPERIENCE CONTRACT");
+    assertStringIncludes(architecture.system, arc.name);
+    arcSpecificSystems.add(architecture.system);
   }
+  assertEquals(arcSpecificSystems.size, arcs.length);
+});
+
+Deno.test("selected arc imposes its own reader experience before any plot machinery", () => {
+  const beats = [{ id: "one", role: "setup", label: "Opening", description: "Begin an escalating choice." }];
+  const horror = arcReaderExperienceDirective({ name: "Horror / Escalating Dread", beats });
+  const romance = arcReaderExperienceDirective({ name: "Romance / HEA", beats });
+  const mystery = arcReaderExperienceDirective({ name: "Mystery / Reveal", beats });
+  const generic = arcReaderExperienceDirective({ name: "Three-Act", beats });
+  assertStringIncludes(horror, "Sustained, escalating fear");
+  assertStringIncludes(horror, "NOT satisfied by violent incidents");
+  assertStringIncludes(romance, "relationship transformation");
+  assertStringIncludes(mystery, "consequential clues");
+  assertStringIncludes(generic, "must not impose an unrelated genre");
+  assertEquals(new Set([horror, romance, mystery, generic]).size, 4);
+});
+
+Deno.test("arc experience survives strict allocation, outline handoff, and semantic review input", () => {
+  const req: any = { ...sparseRequest, arcTemplate: { ...sparseRequest.arcTemplate, name: "Horror / Escalating Dread" } };
+  const planning = buildAllocationPrompt(req);
+  assertStringIncludes(planning.system, "HORROR: Sustained, escalating fear");
+  assertEquals((planning.system.match(/## Binding experience of the selected Story Arc/g) ?? []).length, 1);
+  const architecture = {
+    arcExperience: "Fred's impossible visions escalate vulnerability and dread, ending in a devastating recognition.",
+    centralQuestion: "How can the friends live with Fred's visions?",
+    characterCausality: "Ted's choices worsen a threat they do not understand.",
+    decisiveClimax: "Fred's recognition makes the nightmare irreversible.",
+    endingConsequence: "They are alive but their understanding of reality is destroyed.",
+    deliberatelyOpenThreads: "The origin of the visions remains hidden.",
+  };
+  const outline = buildPrompt(req, new Map(), [], undefined, architecture);
+  assertStringIncludes(outline.system, "HORROR: Sustained, escalating fear");
+  assertStringIncludes(outline.system, architecture.arcExperience);
+  assertStringIncludes(outline.system, "Enact it through irreversible dramatic events");
+  const verification: any = semanticVerificationInput([], req.arcTemplate, req.recipe, [], architecture);
+  assertStringIncludes(verification.arcReaderExperienceContract, "HORROR: Sustained, escalating fear");
+  assertEquals(verification.committedArcExperience, architecture.arcExperience);
+  assertStringIncludes(
+    verification.arcWideObligations.find((o: any) => o.obligationID === "creative_fidelity")?.instruction ?? "",
+    "selected Story Arc's binding reader experience",
+  );
 });
 
 Deno.test("high-impact endings preserve existing architecture schema and one-call planning", async () => {
@@ -746,10 +789,11 @@ Deno.test("high-impact endings preserve existing architecture schema and one-cal
     assertEquals(action, "outline-plan");
     assertStringIncludes(system, "Choose an exceptional, arc-specific ending before building the central plot");
     assertEquals(Object.keys(format.json_schema.schema.properties.storyArchitecture.properties).sort(),
-      ["centralQuestion", "characterCausality", "decisiveClimax", "deliberatelyOpenThreads", "endingConsequence"].sort());
+      ["arcExperience", "centralQuestion", "characterCausality", "decisiveClimax", "deliberatelyOpenThreads", "endingConsequence"].sort());
     return {
       content: JSON.stringify({
         storyArchitecture: {
+          arcExperience: "The decisive emotional consequences must fulfill the chosen arc.",
           centralQuestion: "Will Mara tell the truth despite the irreversible consequences?",
           characterCausality: "Her betrayal sets off the final reckoning.",
           decisiveClimax: "Mara exposes her part in the betrayal and loses the person she most wanted to protect.",
@@ -779,7 +823,7 @@ Deno.test("same authored recipe with different arcs reaches the payoff handoff",
     { name: "Revelatory Mystery", ending: "A consequential discovery reinterprets the central question and requires a painful answer." },
     { name: "Bitter Comedy", ending: "An accumulated series of comic reversals causes an outrageous and consequential last reversal." },
   ];
-  let sharedPrompt: string | undefined;
+  const arcPrompts = new Set<string>();
   for (const arc of arcs) {
     const request: any = { ...sparseRequest, recipe: constantRecipe, arcTemplate: {
       id: "arbitrary-template", name: arc.name,
@@ -797,10 +841,11 @@ Deno.test("same authored recipe with different arcs reaches the payoff handoff",
     assertStringIncludes(system, "COUNTERFACTUAL ARC CHECK");
     assertStringIncludes(system, "WORK BACKWARD");
     assertStringIncludes(system, "Select any investigation, mission, tactical operation, technical solution");
-    if (sharedPrompt === undefined) sharedPrompt = system;
-    else assertEquals(system, sharedPrompt);
+    assertStringIncludes(system, "SELECTED ARC EXPERIENCE CONTRACT");
+    arcPrompts.add(system);
 
     const outline = buildPrompt(request, new Map([["b", { minSections: 1, rationale: arc.ending }]]), [], undefined, {
+      arcExperience: "The selected arc determines the escalating reader experience and earned final payoff.",
       centralQuestion: "Will they choose each other?",
       characterCausality: "The two make costly, conflicting decisions.",
       decisiveClimax: arc.ending,
@@ -810,6 +855,7 @@ Deno.test("same authored recipe with different arcs reaches the payoff handoff",
     assertStringIncludes(outline.system, arc.ending);
     assertStringIncludes(outline.system, "Final-payoff realization across the Story Arc");
   }
+  assertEquals(arcPrompts.size, arcs.length);
 });
 
 Deno.test("compact novel schemas reserve mandatory dramatic functions without per-slot duplication", () => {
@@ -973,6 +1019,7 @@ Deno.test("novel final schema stays compact for the production-scale 10-beat pla
 Deno.test("architecture + allocation share one provider response, with recipe authority and optional enrichment", async () => {
   const req = { ...sparseRequest, requestedFormat: "novel" } as any;
   const architecture = {
+    arcExperience: "The chosen arc creates increasing emotional jeopardy and an irreversible payoff.",
     centralQuestion: "Can Mara rescue the family she betrayed?",
     characterCausality: "Mara's deception drives her brother to protect the wrong person, forcing a personal reckoning.",
     decisiveClimax: "Mara confronts the threat and saves her family at an irreversible personal cost.",
@@ -987,7 +1034,7 @@ Deno.test("architecture + allocation share one provider response, with recipe au
     assertEquals(maxTokens >= 3500, true);
     const schema = format.json_schema.schema;
     assertEquals(schema.required.includes("storyArchitecture"), true);
-    assertEquals(schema.properties.storyArchitecture.required.length, 5);
+    assertEquals(schema.properties.storyArchitecture.required.length, 6);
     return {
       content: JSON.stringify({
         storyArchitecture: architecture,
@@ -1016,6 +1063,7 @@ Deno.test("architecture + allocation share one provider response, with recipe au
 
 Deno.test("allocation rejects malformed architecture instead of passing it to prose generation", () => {
   const good = {
+    arcExperience: "The selected arc must change the emotional stakes and ending.",
     centralQuestion: "Who survives?",
     characterCausality: "Mara's betrayal forces her brother to fight.",
     decisiveClimax: "The siblings stop the threat together.",
@@ -1029,7 +1077,7 @@ Deno.test("allocation rejects malformed architecture instead of passing it to pr
   const beats = sparseRequest.arcTemplate.beats;
   const parsed = parseAndValidateAllocation(JSON.stringify({ storyArchitecture: good, allocations }), beats);
   assertEquals(parsed.size, 2);
-  for (const bad of [{ ...good, decisiveClimax: "" }, { ...good, unapprovedCanon: "A new authorial mandate" }, { ...good, endingConsequence: 5 }, []]) {
+  for (const bad of [{ ...good, arcExperience: "" }, { ...good, decisiveClimax: "" }, { ...good, unapprovedCanon: "A new authorial mandate" }, { ...good, endingConsequence: 5 }, []]) {
     assertThrows(() => parseAndValidateAllocation(JSON.stringify({ storyArchitecture: bad, allocations }), beats), Error);
   }
   // A persisted pre-upgrade allocation can still be replayed without a new
@@ -1066,7 +1114,7 @@ Deno.test("reader-experience-first architecture applies equally across genres wi
       audienceNotes: "Quiet moral ambiguity and painful family relationships.",
     },
   ];
-  let genreNeutralSystem: string | undefined;
+  const genreSystems = new Set<string>();
   for (const genre of recipes) {
     const request: any = {
       ...sparseRequest,
@@ -1089,10 +1137,11 @@ Deno.test("reader-experience-first architecture applies equally across genres wi
     assertStringIncludes(outlinePrompt.system, "relationship milestone is authored and dramatically appropriate");
     assertEquals(JSON.parse(architecturePrompt.user).planningContext.recipe.project.summary, genre.summary);
     assertEquals(JSON.parse(architecturePrompt.user).planningContext.arc.name, genre.name);
-    // The rule itself is shared: no code-level special treatment for the example horror recipe.
-    if (genreNeutralSystem === undefined) genreNeutralSystem = architecturePrompt.system;
-    else assertEquals(architecturePrompt.system, genreNeutralSystem);
+    // General structural arcs do not impose a genre; named experiential arcs do.
+    assertStringIncludes(architecturePrompt.system, genre.name);
+    genreSystems.add(architecturePrompt.system);
   }
+  assertEquals(genreSystems.size, recipes.length);
 });
 
 Deno.test("selected book-level climax persists into outline without forcing the wider threat to be defeated", () => {
