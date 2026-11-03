@@ -638,44 +638,26 @@ export function buildSuggestionResponseSchema(
         ? [...sectionSchema.required, "arcObligationEvidence"]
         : sectionSchema.required,
     };
+    // OpenAI strict objects must require every declared property. Evidence is
+    // only declared when this beat has semantic obligations.
+    const providerSectionSchema = contract.semanticObligations.length === 0
+      ? {
+        ...beatSectionSchema,
+        properties: Object.fromEntries(Object.entries(beatSectionSchema.properties).filter(([key]) => key !== "arcObligationEvidence")),
+      }
+      : beatSectionSchema;
     const planned = requestedFormat === "novel" ? allocation.get(beat.id)?.containerCounts : undefined;
     if (planned) {
-      // A per-beat array can restrict the allowed types but CANNOT enforce
-      // their quantities. Fixed named slots give each section its own strict
-      // container enum, so first-pass size is priced BEFORE the provider call.
-      // The flattened app payload remains the same ordered Suggestion[].
-      const slots = plannedNovelContainerSlots(planned);
-      // Reserve the last slot(s) for any still-missing required functions.
-      // Typed novel slots guarantee the declaration of any outstanding
-      // template-required functions without a retry or repair.
-      // Previously accepted sections may already satisfy those functions.
-      const outstandingFunctions = contract.requiredFunctions.filter((required) =>
-        !existingSections.some((section) => section.storyArcBeatID === beat.id && section.dramaticFunction === required)
-      );
-      const requiredSlotOffset = slots.length - outstandingFunctions.length;
-      const slotProperties = Object.fromEntries(slots.map((container, index) => {
-        const key = plannedNovelSlotKey(index);
-        const propertiesForSlot = { ...beatSectionSchema.properties };
-        // OpenAI strict objects must require every declared property. Omit
-        // optional evidence metadata when this arc beat has no obligation.
-        if (contract.semanticObligations.length === 0) {
-          delete (propertiesForSlot as Record<string, unknown>).arcObligationEvidence;
-        }
-        return [key, {
-          ...beatSectionSchema,
-          properties: {
-            ...propertiesForSlot,
-            container: { type: "string", enum: [container] },
-            ...(index >= requiredSlotOffset && outstandingFunctions.length > 0
-              ? { dramaticFunction: { type: "string", enum: [outstandingFunctions[index - requiredSlotOffset]] } }
-              : {}),
-          },
-        }];
-      }));
+      // Keep the provider schema compact: duplicating the full section object
+      // once per planned slot makes realistic 30-40 section novels exceed
+      // structured-output schema limits. The allocation remains authoritative;
+      // flattenSuggestionResponse applies the exact planned container mix after
+      // the provider response is parsed.
       properties[beat.id] = {
-        type: "object", properties: slotProperties,
-        required: Object.keys(slotProperties),
-        additionalProperties: false,
+        type: "array",
+        minItems: minimum,
+        maxItems: minimum,
+        items: providerSectionSchema,
       };
     } else {
       // Legacy persisted allocations and non-novel formats use their original
@@ -684,7 +666,7 @@ export function buildSuggestionResponseSchema(
         type: "array",
         minItems: minimum,
         maxItems: requestedFormat === "novel" ? minimum : MAX_PLANNED_SECTIONS,
-        items: beatSectionSchema,
+        items: providerSectionSchema,
       };
     }
     required.push(beat.id);
@@ -702,6 +684,7 @@ export function buildSuggestionResponseSchema(
 export function flattenSuggestionResponse(
   parsed: unknown,
   beats: Array<{ id: string }>,
+  allocation?: Map<string, Allocation>,
 ): { suggestions: Suggestion[] } {
   if (!parsed || typeof parsed !== "object") throw new Error("response missing beats object");
   const beatObject = (parsed as { beats?: unknown }).beats;
@@ -709,8 +692,8 @@ export function flattenSuggestionResponse(
   const suggestions: Suggestion[] = [];
   for (const beat of beats) {
     const rawSections = (beatObject as Record<string, unknown>)[beat.id];
-    // New novel plans use named, container-typed slots. Legacy persisted
-    // checkpoints and all non-novel plans still return arrays.
+    // Accept both compact arrays and legacy named-slot checkpoints while the
+    // server owns beat identity and, for novel allocations, container order.
     const sections = Array.isArray(rawSections)
       ? rawSections
       : rawSections && typeof rawSections === "object"
@@ -720,10 +703,17 @@ export function flattenSuggestionResponse(
         .map(([, value]) => value)
       : null;
     if (!sections) throw new Error(`response missing beat ${beat.id}`);
-    for (const raw of sections) {
+    const plannedContainers = allocation?.get(beat.id)?.containerCounts
+      ? plannedNovelContainerSlots(allocation.get(beat.id)!.containerCounts!)
+      : null;
+    for (const [index, raw] of sections.entries()) {
       if (!raw || typeof raw !== "object") throw new Error(`beat ${beat.id} contains an invalid section`);
       const { storyArcBeatID: _ignored, ...section } = raw as Partial<Suggestion>;
-      suggestions.push({ ...(section as Omit<Suggestion, "storyArcBeatID">), storyArcBeatID: beat.id });
+      suggestions.push({
+        ...(section as Omit<Suggestion, "storyArcBeatID">),
+        ...(plannedContainers ? { container: plannedContainers[index] } : {}),
+        storyArcBeatID: beat.id,
+      });
     }
   }
   return { suggestions };
@@ -3012,7 +3002,7 @@ export function buildPrompt(
     })
     .join("\n");
   const allocationDirective = isNovel
-    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Match the planned section container and narrative scale for each ordered named slot. When typed slots are present, return a JSON object of sections per beat keyed by those slot names; every slot has exactly one allowed container type. The allocator already priced each planned section at its actual midpoint. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
+    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections; write each section for the corresponding ordered container slot listed above. The server assigns the canonical container mix after parsing, so do not change the planned scale or use a smaller container to evade the allocation. The allocator already priced each planned section at its actual midpoint. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
     : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
@@ -6772,7 +6762,7 @@ export async function runSuggestionJob(
         responseFormat,
         "outline-suggestions",
         async (content, finishReason) => {
-          const flattened = flattenSuggestionResponse(parseOutlineJSON(content, finishReason), body.arcTemplate.beats);
+          const flattened = flattenSuggestionResponse(parseOutlineJSON(content, finishReason), body.arcTemplate.beats, allocation);
           latestProviderCandidate = flattened.suggestions as Suggestion[];
           // Persist before validation: a recoverable structural defect must
           // not discard a paid provider response or force completed stages to
@@ -6798,6 +6788,7 @@ export async function runSuggestionJob(
       const flattened = flattenSuggestionResponse(
         parseOutlineJSON(rawResponse.content, rawResponse.finishReason),
         body.arcTemplate.beats,
+        allocation,
       );
       const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
       const deduped = removeDuplicateOutlineSections(validated.suggestions);

@@ -578,26 +578,22 @@ Deno.test("container-aware planner can allocate a mixed 120k-word first pass bey
   assertEquals(Math.round(scale.projectedWords), 120769);
   const schema: any = buildSuggestionResponseSchema(beats, fitted, [], "", "novel");
   const beatSchema = schema.properties.beats.properties["beat-1"];
-  assertEquals(beatSchema.type, "object");
-  assertEquals(Object.keys(beatSchema.properties).length, 20);
-  assertEquals(beatSchema.required.length, 20);
+  assertEquals(beatSchema.type, "array");
+  assertEquals(beatSchema.minItems, 20);
+  assertEquals(beatSchema.maxItems, 20);
+  assertEquals(beatSchema.items.properties.container.enum, ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"]);
   assertOpenAIStrictSchema(schema);
   const slots = plannedNovelContainerSlots(counts);
-  for (let index = 0; index < slots.length; index++) {
-    const key = `section_${String(index + 1).padStart(3, "0")}`;
-    assertEquals(beatSchema.properties[key].properties.container.enum, [slots[index]]);
-  }
   assertEquals(slots.filter((type) => type === "scene").length, 0);
   assertEquals(slots.filter((type) => type === "chapter").length, 5);
   // This exact mix projects >115k without depending on expansion. No new provider call.
-  const typedResponse = { beats: Object.fromEntries(beats.map((beat, beatIndex) => [
-    beat.id, Object.fromEntries(slots.map((container, index) => [
-      `section_${String(index + 1).padStart(3, "0")}`,
-      { title: `Section ${beatIndex * 20 + index + 1}`, summary: "Distinct event.", container, pov: "thirdPersonLimited", terminalBeat: "Mara shuts the door." },
-    ])),
+  const compactResponse = { beats: Object.fromEntries(beats.map((beat, beatIndex) => [
+    beat.id, slots.map((container, index) => ({ title: `Section ${beatIndex * 20 + index + 1}`, summary: "Distinct event.", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Mara shuts the door." })),
   ])) };
-  const flattened = flattenSuggestionResponse(typedResponse, beats);
+  const flattened = flattenSuggestionResponse(compactResponse, beats, fitted);
   assertEquals(flattened.suggestions.length, 40);
+  assertEquals(flattened.suggestions.slice(0, 20).map((section) => section.container), slots);
+  assertEquals(flattened.suggestions.slice(20).map((section) => section.container), slots);
   assertEquals(evaluateNovelScale(flattened.suggestions).meetsPreferredMinimum, true);
   assertEquals(evaluateNovelScale(flattened.suggestions).exceedsMaximum, false);
   assertEquals(flattened.suggestions[20].storyArcBeatID, "beat-2");
@@ -811,7 +807,7 @@ Deno.test("same authored recipe with different arcs reaches the payoff handoff",
   }
 });
 
-Deno.test("novel first-pass slot schema reserves required functions across arc templates", () => {
+Deno.test("novel first-pass compact schema preserves required function choices across arc templates", () => {
   const cases = [
     { name: "Horror / Escalating Dread", climaxRole: "survival_confrontation", resolutionRole: "final_image", requiresResolution: true },
     { name: "Romance / HEA", climaxRole: "grand_choice", resolutionRole: "hea_hfn", requiresResolution: true },
@@ -831,30 +827,44 @@ Deno.test("novel first-pass slot schema reserves required functions across arc t
     }]));
     const schema: any = buildSuggestionResponseSchema(beats, allocation, [], sample.name, "novel");
     assertOpenAIStrictSchema(schema);
-    const climax = schema.properties.beats.properties.decisive.properties;
-    const resolution = schema.properties.beats.properties.last.properties;
-    assertEquals(climax.section_003.properties.dramaticFunction.enum, ["climax"], sample.name);
-    if (sample.requiresResolution) {
-      assertEquals(resolution.section_003.properties.dramaticFunction.enum, ["resolution"], sample.name);
-    } else {
-      // Don't invent requirements that the template's own contract lacks.
-      assertEquals(resolution.section_003.properties.dramaticFunction.enum.includes("aftermath"), true);
-    }
-    assertEquals(climax.section_001.properties.dramaticFunction.enum.includes("climax"), true);
-    assertEquals(resolution.section_001.properties.dramaticFunction.enum.includes("resolution"), true);
-    assertEquals(climax.section_003.properties.container.enum, ["chapter"]);
-    assertEquals(schema.properties.beats.properties.decisive.required.length, 3);
-    assertEquals(schema.properties.beats.properties.last.required.length, 3);
+    const climax = schema.properties.beats.properties.decisive;
+    const resolution = schema.properties.beats.properties.last;
+    assertEquals(climax.type, "array", sample.name);
+    assertEquals(climax.items.properties.dramaticFunction.enum.includes("climax"), true, sample.name);
+    assertEquals(resolution.items.properties.dramaticFunction.enum.includes("resolution"), true, sample.name);
+    assertEquals(climax.items.properties.container.enum, ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"]);
+    assertEquals(climax.minItems, 3);
+    assertEquals(resolution.minItems, 3);
     const withAccepted = buildSuggestionResponseSchema(beats, allocation, [], sample.name, "novel", [
       { storyArcBeatID: "decisive", dramaticFunction: "climax" },
       { storyArcBeatID: "last", dramaticFunction: "resolution" },
     ]) as any;
-    assertEquals(withAccepted.properties.beats.properties.decisive.properties.section_003.properties.dramaticFunction.enum.includes("crisis"), true);
-    assertEquals(withAccepted.properties.beats.properties.last.properties.section_003.properties.dramaticFunction.enum.includes("aftermath"), true);
+    assertEquals(withAccepted.properties.beats.properties.decisive.items.properties.dramaticFunction.enum.includes("crisis"), true);
+    assertEquals(withAccepted.properties.beats.properties.last.items.properties.dramaticFunction.enum.includes("aftermath"), true);
     // No extra required field or rerun is introduced for non-novels and older array allocations.
     const legacy = buildSuggestionResponseSchema(beats, new Map(beats.map((beat) => [beat.id, { minSections: 2, rationale: "legacy" }])), [], sample.name, "novel") as any;
     assertEquals(legacy.properties.beats.properties.decisive.type, "array");
   }
+});
+
+Deno.test("novel final schema stays compact for the production-scale 10-beat plan", () => {
+  const beats = Array.from({ length: 10 }, (_, index) => ({
+    id: `beat-${index + 1}`,
+    role: index === 8 ? "climax" : index === 9 ? "final_image" : "escalation",
+    label: `Beat ${index + 1}`,
+    description: "A distinct authored dramatic movement.",
+  }));
+  const allocation = new Map(beats.map((beat) => [beat.id, {
+    minSections: 4,
+    rationale: "Four distinct planned developments.",
+    containerCounts: { scene: 1, developedScene: 1, setPiece: 1, sceneSequence: 0, chapter: 1 },
+  }]));
+  const schema: any = buildSuggestionResponseSchema(beats, allocation, [], "Horror / Escalating Dread", "novel");
+  const schemaBytes = new TextEncoder().encode(JSON.stringify(schema)).byteLength;
+  assertEquals(schemaBytes < 30_000, true, `schema grew to ${schemaBytes} bytes`);
+  assertEquals(Object.values(schema.properties.beats.properties).every((beat: any) => beat.type === "array"), true);
+  assertEquals(Object.values(schema.properties.beats.properties).some((beat: any) => "section_001" in beat.items.properties), false);
+  assertOpenAIStrictSchema(schema);
 });
 
 Deno.test("architecture + allocation share one provider response, with recipe authority and optional enrichment", async () => {
