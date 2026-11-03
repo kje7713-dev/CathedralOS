@@ -3020,6 +3020,13 @@ export function calculateRepairAllocation(
 export const SELECTED_INTIMACY_LEVEL_OBLIGATION = "selected_intimacy_level";
 export const CREATIVE_FIDELITY_OBLIGATION = "creative_fidelity";
 
+// Genre-labeled arcs independently promise a reader experience even when the
+// author supplied no separate tone or audience notes. Structural arcs alone do
+// not impose a genre that was never selected.
+function hasNamedArcExperiencePromise(template: Pick<ArcTemplateBlob, "name">): boolean {
+  return /(^|-)(horror|dread|terror|romance|romantic|love|mystery|whodunit|detective|comedy|comic|farce|satire|thriller|suspense|tragedy|tragic)(-|$)/.test(normalizedTemplateName(template.name));
+}
+
 function hasCreativeFidelityDirectives(recipe?: CanonicalRecipeEnvelope): boolean {
   const project = recipe?.project as Record<string, unknown> | undefined;
   const setting = recipe?.setting as Record<string, unknown> | undefined;
@@ -4618,7 +4625,7 @@ export function semanticVerificationInput(
         resultingChange: section.resultingChange ?? "",
         terminalState: section.terminalState ?? "",
       })),
-    })), ...(hasCreativeFidelityDirectives(recipe) ? [{
+    })), ...((hasCreativeFidelityDirectives(recipe) || hasNamedArcExperiencePromise(template)) ? [{
       obligationID: CREATIVE_FIDELITY_OBLIGATION,
       instruction: "Assess the whole outline's creative fidelity to the canonical recipe AND the selected Story Arc's binding reader experience. Decide whether the sequence of actual dramatic events, escalating beat effects, climax, and final image deliver the required genre-specific experience, as well as the author's premise, character behavior, relationships, tone, intensity, absurdity, world rules, and contradictions. An outline can satisfy every structural beat yet fail this assessment if it tells a different kind of story; do not accept horror labels paired with procedural danger and a mechanical solution as horror. Treat planner-generated enrichment as provisional: reject only when it materially redirects the story into a different narrative experience, and accept unusual, destructive, morally compromised, or mixed-genre events when they remain faithful to the recipe. If rejecting, identify a concrete section and quote the field that demonstrates the drift.",
       sections: suggestions.map((section, sectionIndex) => ({
@@ -4674,7 +4681,7 @@ export async function verifyStoryArcSemantics(
   );
   const expectedObligationIDs = [
     ...premiseComponents.map((_, i) => `arc-wide:premise_component_${i}`),
-    ...(hasCreativeFidelityDirectives(recipe) ? ["arc-wide:" + CREATIVE_FIDELITY_OBLIGATION] : []),
+    ...((hasCreativeFidelityDirectives(recipe) || hasNamedArcExperiencePromise(template)) ? ["arc-wide:" + CREATIVE_FIDELITY_OBLIGATION] : []),
     ...template.beats.flatMap((beat) =>
     verificationObligationsForBeat(beat, template.name).map((obligation) => `${beat.id}:${obligation.id}`))];
   const recordValidationError = async (error: unknown, extra: Record<string, unknown> = {}) => {
@@ -4732,7 +4739,7 @@ export async function verifyStoryArcSemantics(
       });
     }
   }
-  if (hasCreativeFidelityDirectives(recipe)) {
+  if (hasCreativeFidelityDirectives(recipe) || hasNamedArcExperiencePromise(template)) {
     const creativeRaw = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === CREATIVE_FIDELITY_OBLIGATION);
     const creativeSectionIndex = Number(creativeRaw?.sectionIndex);
     const creativeSection = suggestions[creativeSectionIndex];
@@ -6961,7 +6968,7 @@ export async function runSuggestionJob(
     };
 
     const authoredSemanticBeatCount = body.arcTemplate.beats.filter((beat) => arcRoleContract(beat, body.arcTemplate.name).semanticObligations.length > 0).length;
-    if ((authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null) && sectionAllocationDeficits(result.suggestions).length === 0) {
+    if ((authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null || hasNamedArcExperiencePromise(body.arcTemplate)) && sectionAllocationDeficits(result.suggestions).length === 0) {
       // Semantic verification is its own durable provider stage. Persist the
       // validated outline before yielding so a one-dispatch worker slice never
       // replays the paid outline call or loses the verifier checkpoint.
