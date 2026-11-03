@@ -55,6 +55,7 @@ import {
   assertDistinctOutlineTitles,
   buildSuggestionResponseSchema,
   plannedNovelContainerSlots,
+  outstandingRequiredFunctionsByBeat,
   buildObligationRepairPrompt,
   mergeObligationRepairOperations,
   buildObligationRepairResponseSchema,
@@ -578,26 +579,26 @@ Deno.test("container-aware planner can allocate a mixed 120k-word first pass bey
   assertEquals(Math.round(scale.projectedWords), 120769);
   const schema: any = buildSuggestionResponseSchema(beats, fitted, [], "", "novel");
   const beatSchema = schema.properties.beats.properties["beat-1"];
-  assertEquals(beatSchema.type, "object");
-  assertEquals(Object.keys(beatSchema.properties).length, 20);
-  assertEquals(beatSchema.required.length, 20);
+  assertEquals(beatSchema.type, "array");
+  assertEquals(beatSchema.minItems, 20);
+  assertEquals(beatSchema.maxItems, 20);
+  assertEquals(beatSchema.items.properties.container, undefined);
+  assertEquals(beatSchema.items.required.includes("container"), false);
   assertOpenAIStrictSchema(schema);
   const slots = plannedNovelContainerSlots(counts);
-  for (let index = 0; index < slots.length; index++) {
-    const key = `section_${String(index + 1).padStart(3, "0")}`;
-    assertEquals(beatSchema.properties[key].properties.container.enum, [slots[index]]);
-  }
   assertEquals(slots.filter((type) => type === "scene").length, 0);
   assertEquals(slots.filter((type) => type === "chapter").length, 5);
   // This exact mix projects >115k without depending on expansion. No new provider call.
-  const typedResponse = { beats: Object.fromEntries(beats.map((beat, beatIndex) => [
-    beat.id, Object.fromEntries(slots.map((container, index) => [
-      `section_${String(index + 1).padStart(3, "0")}`,
-      { title: `Section ${beatIndex * 20 + index + 1}`, summary: "Distinct event.", container, pov: "thirdPersonLimited", terminalBeat: "Mara shuts the door." },
-    ])),
+  const compactResponse = { beats: Object.fromEntries(beats.map((beat, beatIndex) => [
+    beat.id, slots.map((_container, index) => ({ title: `Section ${beatIndex * 20 + index + 1}`, summary: "Distinct event.", pov: "thirdPersonLimited", terminalBeat: "Mara shuts the door." })),
   ])) };
-  const flattened = flattenSuggestionResponse(typedResponse, beats);
+  const flattened = flattenSuggestionResponse(compactResponse, beats, fitted);
+  const mismatched: any = structuredClone(compactResponse);
+  mismatched.beats["beat-1"][0].container = slots[0] === "scene" ? "chapter" : "scene";
+  assertThrows(() => flattenSuggestionResponse(mismatched, beats, fitted), Error, "declared a container that disagrees");
   assertEquals(flattened.suggestions.length, 40);
+  assertEquals(flattened.suggestions.slice(0, 20).map((section) => section.container), slots);
+  assertEquals(flattened.suggestions.slice(20).map((section) => section.container), slots);
   assertEquals(evaluateNovelScale(flattened.suggestions).meetsPreferredMinimum, true);
   assertEquals(evaluateNovelScale(flattened.suggestions).exceedsMaximum, false);
   assertEquals(flattened.suggestions[20].storyArcBeatID, "beat-2");
@@ -811,50 +812,162 @@ Deno.test("same authored recipe with different arcs reaches the payoff handoff",
   }
 });
 
-Deno.test("novel first-pass slot schema reserves required functions across arc templates", () => {
-  const cases = [
-    { name: "Horror / Escalating Dread", climaxRole: "survival_confrontation", resolutionRole: "final_image", requiresResolution: true },
-    { name: "Romance / HEA", climaxRole: "grand_choice", resolutionRole: "hea_hfn", requiresResolution: true },
-    { name: "Mystery", climaxRole: "confrontation", resolutionRole: "resolution", requiresResolution: true },
-    { name: "Three-Act", climaxRole: "climax", resolutionRole: "resolution", requiresResolution: false },
-    { name: "Custom Experimental Arc", climaxRole: "confrontation", resolutionRole: "final_image", requiresResolution: false },
+Deno.test("compact novel schemas reserve mandatory dramatic functions without per-slot duplication", () => {
+  const samples = [
+    { name: "Horror / Escalating Dread", roles: ["survival_confrontation", "final_image"] },
+    { name: "Romance / HEA", roles: ["grand_choice", "hea_hfn"] },
+    { name: "Mystery", roles: ["confrontation", "resolution"] },
+    { name: "Three-Act", roles: ["climax", "resolution"] },
+    { name: "Custom Experimental Arc", roles: ["confrontation", "final_image"] },
   ];
-  for (const sample of cases) {
-    const beats = [
-      { id: "decisive", role: sample.climaxRole, label: "Decisive", description: "Achieve the beat's distinct dramatic change." },
-      { id: "last", role: sample.resolutionRole, label: "Last", description: "Carry that change into the final image." },
-    ];
+  for (const sample of samples) {
+    const beats = sample.roles.map((role, index) => ({
+      id: index === 0 ? "decisive" : "last", role,
+      label: index === 0 ? "Decisive" : "Last",
+      description: "Achieve the beat's distinct dramatic change.",
+    }));
     const allocation = new Map(beats.map((beat) => [beat.id, {
-      minSections: 3,
-      rationale: "A distinct authored dramatic development.",
+      minSections: 3, rationale: "A distinct authored dramatic development.",
       containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 3 },
     }]));
     const schema: any = buildSuggestionResponseSchema(beats, allocation, [], sample.name, "novel");
     assertOpenAIStrictSchema(schema);
-    const climax = schema.properties.beats.properties.decisive.properties;
-    const resolution = schema.properties.beats.properties.last.properties;
-    assertEquals(climax.section_003.properties.dramaticFunction.enum, ["climax"], sample.name);
-    if (sample.requiresResolution) {
-      assertEquals(resolution.section_003.properties.dramaticFunction.enum, ["resolution"], sample.name);
-    } else {
-      // Don't invent requirements that the template's own contract lacks.
-      assertEquals(resolution.section_003.properties.dramaticFunction.enum.includes("aftermath"), true);
+    for (const beat of beats) {
+      const required = arcRoleContract(beat, sample.name).requiredFunctions;
+      const shape = schema.properties.beats.properties[beat.id];
+      if (required.length === 0) {
+        assertEquals(shape.type, "array", sample.name);
+        assertEquals(shape.minItems, 3);
+        assertEquals(shape.items.properties.container, undefined);
+      } else {
+        assertEquals(shape.type, "object", sample.name);
+        assertEquals(shape.properties.sections.minItems, 3 - required.length);
+        assertEquals(shape.properties.sections.items.properties.container, undefined);
+        assertEquals(Object.keys(shape.properties.required.properties), required);
+        for (const fn of required) {
+          assertEquals(shape.properties.required.properties[fn].properties.dramaticFunction.enum, [fn]);
+          assertEquals(shape.properties.required.properties[fn].properties.container, undefined);
+        }
+      }
     }
-    assertEquals(climax.section_001.properties.dramaticFunction.enum.includes("climax"), true);
-    assertEquals(resolution.section_001.properties.dramaticFunction.enum.includes("resolution"), true);
-    assertEquals(climax.section_003.properties.container.enum, ["chapter"]);
-    assertEquals(schema.properties.beats.properties.decisive.required.length, 3);
-    assertEquals(schema.properties.beats.properties.last.required.length, 3);
     const withAccepted = buildSuggestionResponseSchema(beats, allocation, [], sample.name, "novel", [
       { storyArcBeatID: "decisive", dramaticFunction: "climax" },
       { storyArcBeatID: "last", dramaticFunction: "resolution" },
     ]) as any;
-    assertEquals(withAccepted.properties.beats.properties.decisive.properties.section_003.properties.dramaticFunction.enum.includes("crisis"), true);
-    assertEquals(withAccepted.properties.beats.properties.last.properties.section_003.properties.dramaticFunction.enum.includes("aftermath"), true);
-    // No extra required field or rerun is introduced for non-novels and older array allocations.
-    const legacy = buildSuggestionResponseSchema(beats, new Map(beats.map((beat) => [beat.id, { minSections: 2, rationale: "legacy" }])), [], sample.name, "novel") as any;
+    for (const beat of beats) {
+      const outstanding = arcRoleContract(beat, sample.name).requiredFunctions.filter((fn) =>
+        !(beat.id === "decisive" && fn === "climax") && !(beat.id === "last" && fn === "resolution")
+      );
+      assertEquals(withAccepted.properties.beats.properties[beat.id].type, outstanding.length ? "object" : "array");
+    }
+    const legacy = buildSuggestionResponseSchema(beats, new Map(beats.map((beat) => [
+      beat.id, { minSections: 2, rationale: "legacy" },
+    ])), [], sample.name, "novel") as any;
     assertEquals(legacy.properties.beats.properties.decisive.type, "array");
+    assertEquals(legacy.properties.beats.properties.decisive.items.properties.container !== undefined, true);
   }
+});
+
+Deno.test("required slots preserve climax, resolution, section order and planned scale", () => {
+  const beats = [
+    { id: "decisive", role: "climax", label: "Climax" },
+    { id: "last", role: "final_image", label: "Final Image" },
+  ];
+  const plan = { minSections: 2, rationale: "complete beat", containerCounts: {
+    scene: 0, developedScene: 1, setPiece: 0, sceneSequence: 0, chapter: 1,
+  } };
+  const allocation = new Map(beats.map((beat) => [beat.id, plan]));
+  const section = (title: string, dramaticFunction: string) => ({
+    title, summary: title, pov: "thirdPersonLimited", terminalBeat: title,
+    entryState: title, dramaticEvent: title, resultingChange: title, terminalState: title, dramaticFunction,
+  });
+  const response = { beats: {
+    decisive: { sections: [section("Crisis", "crisis")], required: { climax: section("Showdown", "climax") } },
+    last: { sections: [section("Consequences", "aftermath")], required: { resolution: section("Outcome", "resolution") } },
+  } };
+  const requiredOrder = outstandingRequiredFunctionsByBeat(beats, "Save the Cat!");
+  const flattened = flattenSuggestionResponse(response, beats, allocation, requiredOrder);
+  assertEquals(flattened.suggestions.map((s) => s.title), ["Crisis", "Showdown", "Consequences", "Outcome"]);
+  assertEquals(flattened.suggestions.map((s) => s.container), [
+    ...plannedNovelContainerSlots(plan.containerCounts), ...plannedNovelContainerSlots(plan.containerCounts),
+  ]);
+  assertEquals(validateRequiredStoryArcFunctions(flattened.suggestions, { name: "Save the Cat!", beats }), []);
+  const wrong = structuredClone(response);
+  wrong.beats.decisive.required.climax.dramaticFunction = "crisis";
+  assertThrows(
+    () => flattenSuggestionResponse(wrong, beats, allocation, requiredOrder),
+    Error, "required dramatic slot climax is not satisfied",
+  );
+});
+
+Deno.test("reversed required-function JSON keys never change canonical container slots", () => {
+  const beats = [{ id: "finale", role: "climax", label: "Finale" }];
+  const plan = {
+    minSections: 3,
+    rationale: "two independent mandatory dramatic functions",
+    containerCounts: { scene: 1, developedScene: 1, setPiece: 0, sceneSequence: 0, chapter: 1 },
+  };
+  const allocation = new Map([["finale", plan]]);
+  // Synthetic two-function order checks the multi-slot case, which most
+  // current templates do not exercise (they reserve one function per beat).
+  const requiredOrder = new Map([["finale", ["climax", "resolution"] as Array<"climax" | "resolution">]]);
+  const section = (title: string, dramaticFunction: string) => ({
+    title, summary: title, pov: "thirdPersonLimited", terminalBeat: title,
+    dramaticEvent: title, resultingChange: title, terminalState: title, entryState: title, dramaticFunction,
+  });
+  const reversed = { beats: { finale: {
+    sections: [section("Ordinary scene", "crisis")],
+    required: {
+      resolution: section("Definite ending", "resolution"),
+      climax: section("Decisive confrontation", "climax"),
+    },
+  } } };
+  assertEquals(Object.keys(reversed.beats.finale.required), ["resolution", "climax"]);
+  const flattened = flattenSuggestionResponse(reversed, beats, allocation, requiredOrder);
+  assertEquals(flattened.suggestions.map((s) => s.title), [
+    "Ordinary scene", "Decisive confrontation", "Definite ending",
+  ]);
+  assertEquals(flattened.suggestions.map((s) => s.container), plannedNovelContainerSlots(plan.containerCounts));
+  const forward = structuredClone(reversed);
+  forward.beats.finale.required = {
+    climax: section("Decisive confrontation", "climax"),
+    resolution: section("Definite ending", "resolution"),
+  };
+  assertEquals(
+    flattenSuggestionResponse(forward, beats, allocation, requiredOrder).suggestions,
+    flattened.suggestions,
+  );
+  assertThrows(
+    () => flattenSuggestionResponse(reversed, beats, allocation),
+    Error, "required dramatic slots differ from the planned functions",
+  );
+  const unexpected = structuredClone(reversed) as any;
+  unexpected.beats.finale.required.aftermath = section("Unplanned", "aftermath");
+  assertThrows(
+    () => flattenSuggestionResponse(unexpected, beats, allocation, requiredOrder),
+    Error, "required dramatic slots differ from the planned functions",
+  );
+});
+
+Deno.test("novel final schema stays compact for the production-scale 10-beat plan", () => {
+  const beats = Array.from({ length: 10 }, (_, index) => ({
+    id: `beat-${index + 1}`,
+    role: index === 8 ? "climax" : index === 9 ? "final_image" : "escalation",
+    label: `Beat ${index + 1}`,
+    description: "A distinct authored dramatic movement.",
+  }));
+  const allocation = new Map(beats.map((beat) => [beat.id, {
+    minSections: 4,
+    rationale: "Four distinct planned developments.",
+    containerCounts: { scene: 1, developedScene: 1, setPiece: 1, sceneSequence: 0, chapter: 1 },
+  }]));
+  const schema: any = buildSuggestionResponseSchema(beats, allocation, [], "Horror / Escalating Dread", "novel");
+  const schemaBytes = new TextEncoder().encode(JSON.stringify(schema)).byteLength;
+  assertEquals(schemaBytes < 30_000, true, `schema grew to ${schemaBytes} bytes`);
+  assertEquals(Object.values(schema.properties.beats.properties).every((beat: any) => beat.type === "array" || beat.type === "object"), true);
+  assertEquals(Object.values(schema.properties.beats.properties).some((beat: any) => beat.type === "object"), true);
+  assertEquals(Object.values(schema.properties.beats.properties).some((beat: any) => beat.properties?.section_001 !== undefined), false);
+  assertOpenAIStrictSchema(schema);
 });
 
 Deno.test("architecture + allocation share one provider response, with recipe authority and optional enrichment", async () => {
@@ -2017,7 +2130,7 @@ Deno.test("terminalBeat replaces UUID and END with the existing closing action",
     dramaticEvent: "Mara slams the freezer door and locks the ratcoon inside.",
     resultingChange: "The freezer becomes a temporary containment point.",
     terminalState: "The ratcoon scratches behind the sealed door.",
-    dramaticFunction: "escalation",
+    dramaticFunction: "escalation" as const,
     storyArcBeatID: "beat-1",
     recipeRequirementIDs: [],
   };
@@ -7979,7 +8092,7 @@ Deno.test("semantic verifier adds resolution outcome only to required-resolution
   const ids = beat.obligations.map((obligation: any) => obligation.obligationID);
   assertEquals(ids, ["authored_beat_requirement", REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id]);
   assertEquals(input.recipe, recipe);
-  assertEquals(verificationObligationsForBeat({ id: "setup", role: "setup", label: "Setup" }, "Save the Cat!").some((obligation) => obligation.id === REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id), false);
+  assertEquals(verificationObligationsForBeat({ id: "setup", role: "setup", label: "Setup" } as any, "Save the Cat!").some((obligation) => obligation.id === REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id), false);
   assertEquals(verificationObligationsForBeat(template.beats[0], template.name).filter((obligation) => obligation.id === REQUIRED_RESOLUTION_OUTCOME_OBLIGATION.id).length, 1);
 });
 
