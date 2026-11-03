@@ -8118,9 +8118,11 @@ Deno.test("explicit intimacy is a whole-arc verifier obligation and generic arcs
   const recipe = { project: { intimacyRating: "explicit" } } as any;
   const suggestions = [{ storyArcBeatID: "e", dramaticEvent: "Mira reaches for Julian's hand and closes the distance.", resultingChange: "Their intimacy becomes chosen rather than engineered.", terminalState: "They remain together." }];
   const input = semanticVerificationInput(suggestions as any, template, recipe);
-  assertEquals((input.arcWideObligations as any[])[0].obligationID, SELECTED_INTIMACY_LEVEL_OBLIGATION);
-  assertEquals((input.arcWideObligations as any[])[0].sections.length, 1);
-  const generic = { name: "Mystery", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "m", role: "the_crime", label: "The Crime", description: "" }] } as any;
+  const obligations = input.arcWideObligations as any[];
+  assertEquals(obligations.map((o) => o.obligationID), [CREATIVE_FIDELITY_OBLIGATION, SELECTED_INTIMACY_LEVEL_OBLIGATION]);
+  assertEquals(obligations.find((o) => o.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION).sections.length, 1);
+  // A genre-neutral structural arc must not manufacture a genre obligation.
+  const generic = { name: "Three-Act", relationshipFocus: "none", intimacyMilestoneRoles: [], beats: [{ id: "m", role: "setup", label: "Setup", description: "" }] } as any;
   assertEquals((semanticVerificationInput(suggestions as any, generic, recipe).arcWideObligations as any[]).length, 0);
 });
 
@@ -8331,9 +8333,11 @@ Deno.test("ungrounded intimacy verifier evidence enters semantic repair instead 
     }) as any,
     recipe,
   );
-  assertEquals(result.arcWideObligations[0].satisfied, false);
-  assertEquals(result.unsatisfied[0].obligationID, SELECTED_INTIMACY_LEVEL_OBLIGATION);
-  assertStringIncludes(result.unsatisfied[0].reason, "not grounded");
+  const intimacy = result.arcWideObligations.find((o) => o.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION);
+  assertEquals(intimacy?.satisfied, false);
+  const failure = result.unsatisfied.find((o) => o.obligationID === SELECTED_INTIMACY_LEVEL_OBLIGATION);
+  assertEquals(failure?.obligationID, SELECTED_INTIMACY_LEVEL_OBLIGATION);
+  assertStringIncludes(failure?.reason ?? "", "not grounded");
 });
 
 Deno.test("whole-arc intimacy evidence is accepted on eligible beat sections", () => {
