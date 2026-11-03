@@ -754,7 +754,7 @@ export function flattenSuggestionResponse(
     const requiredOrder = requiredFunctionOrderByBeat?.get(beat.id);
     if (reservedEntries && (!requiredOrder ||
       reservedEntries.length !== requiredOrder.length ||
-      reservedEntries.some(([fn]) => !requiredOrder.includes(fn)))) {
+      reservedEntries.some(([fn]) => !requiredOrder.some((planned) => planned === fn)))) {
       throw new Error(`beat ${beat.id} required dramatic slots differ from the planned functions`);
     }
     const sections = Array.isArray(rawSections)
