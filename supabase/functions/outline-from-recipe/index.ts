@@ -590,6 +590,23 @@ function plannedNovelSlotKey(index: number): string {
   return `section_${String(index + 1).padStart(3, "0")}`;
 }
 
+/** The one canonical order shared by the provider schema and response flattening.
+ * Accepted sections remove only satisfied functions, never reorder the rest. */
+export function outstandingRequiredFunctionsByBeat(
+  beats: Array<{ id: string; role?: string; label?: string; description?: string }>,
+  templateName: string,
+  existingSections: Array<{ storyArcBeatID?: string; dramaticFunction?: DramaticFunction }> = [],
+): Map<string, DramaticFunction[]> {
+  return new Map(beats.map((beat) => [
+    beat.id,
+    arcRoleContract(beat, templateName).requiredFunctions.filter((required) =>
+      !existingSections.some((section) =>
+        section.storyArcBeatID === beat.id && section.dramaticFunction === required
+      )
+    ),
+  ]));
+}
+
 export function buildSuggestionResponseSchema(
   beats: Array<{ id: string; role?: string; label?: string; description?: string }>,
   allocation: Map<string, Allocation>,
@@ -600,6 +617,7 @@ export function buildSuggestionResponseSchema(
 ) {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
+  const requiredFunctionOrderByBeat = outstandingRequiredFunctionsByBeat(beats, templateName, existingSections);
   const allowedContainers = requestedFormat === "novel" ? [...NOVEL_LEAF_CONTAINERS] : SECTION_SCHEMA.properties.container.enum;
   const sectionSchema = obligations.length > 0
     ? {
@@ -654,9 +672,7 @@ export function buildSuggestionResponseSchema(
       // Reserve only outstanding required functions as typed, named sections.
       // All other sections share one compact array schema. The required
       // sections fill the last container slots in the canonical order.
-      const outstanding = contract.requiredFunctions.filter((required) =>
-        !existingSections.some((section) => section.storyArcBeatID === beat.id && section.dramaticFunction === required)
-      );
+      const outstanding = requiredFunctionOrderByBeat.get(beat.id) ?? [];
       if (outstanding.length > minimum) {
         throw new Error(`beat ${beat.id} has ${minimum} allocated sections but ${outstanding.length} outstanding required dramatic functions`);
       }
@@ -714,6 +730,7 @@ export function flattenSuggestionResponse(
   parsed: unknown,
   beats: Array<{ id: string }>,
   allocation?: Map<string, Allocation>,
+  requiredFunctionOrderByBeat?: Map<string, DramaticFunction[]>,
 ): { suggestions: Suggestion[] } {
   if (!parsed || typeof parsed !== "object") throw new Error("response missing beats object");
   const beatObject = (parsed as { beats?: unknown }).beats;
@@ -732,10 +749,19 @@ export function flattenSuggestionResponse(
       ? Object.entries(required)
       : null;
     if (reservedShape && !reservedEntries) throw new Error(`beat ${beat.id} has invalid required dramatic slots`);
+    // Only the schema's outstanding function order is authoritative; JSON
+    // object key order can differ and would change allocated container sizes.
+    const requiredOrder = requiredFunctionOrderByBeat?.get(beat.id);
+    if (reservedEntries && (!requiredOrder ||
+      reservedEntries.length !== requiredOrder.length ||
+      reservedEntries.some(([fn]) => !requiredOrder.includes(fn)))) {
+      throw new Error(`beat ${beat.id} required dramatic slots differ from the planned functions`);
+    }
     const sections = Array.isArray(rawSections)
       ? rawSections
       : reservedEntries
-      ? [...(rawSections as { sections: unknown[] }).sections, ...reservedEntries.map(([fn, raw]) => {
+      ? [...(rawSections as { sections: unknown[] }).sections, ...requiredOrder!.map((fn) => {
+        const raw = required![fn];
         if (!raw || typeof raw !== "object" || (raw as { dramaticFunction?: unknown }).dramaticFunction !== fn) {
           throw new Error(`beat ${beat.id} required dramatic slot ${fn} is not satisfied`);
         }
@@ -6800,6 +6826,9 @@ export async function runSuggestionJob(
     };
     const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial, storyArchitecture);
     const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations, body.arcTemplate.name, requestedStoryMaterialFormat(body), body.existingSections ?? []);
+    const requiredFunctionOrderByBeat = outstandingRequiredFunctionsByBeat(
+      body.arcTemplate.beats, body.arcTemplate.name, body.existingSections ?? [],
+    );
     const responseFormat = {
       type: "json_schema",
       json_schema: { name: "outline_suggestions_by_beat", strict: true, schema: responseSchema },
@@ -6816,7 +6845,9 @@ export async function runSuggestionJob(
         responseFormat,
         "outline-suggestions",
         async (content, finishReason) => {
-          const flattened = flattenSuggestionResponse(parseOutlineJSON(content, finishReason), body.arcTemplate.beats, allocation);
+          const flattened = flattenSuggestionResponse(
+            parseOutlineJSON(content, finishReason), body.arcTemplate.beats, allocation, requiredFunctionOrderByBeat,
+          );
           latestProviderCandidate = flattened.suggestions as Suggestion[];
           // Persist before validation: a recoverable structural defect must
           // not discard a paid provider response or force completed stages to
@@ -6843,6 +6874,7 @@ export async function runSuggestionJob(
         parseOutlineJSON(rawResponse.content, rawResponse.finishReason),
         body.arcTemplate.beats,
         allocation,
+        requiredFunctionOrderByBeat,
       );
       const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
       const deduped = removeDuplicateOutlineSections(validated.suggestions);
