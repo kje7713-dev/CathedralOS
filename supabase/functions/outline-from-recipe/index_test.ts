@@ -444,12 +444,30 @@ Deno.test("outline prompts distinguish substantial dramatic developments from fr
   const allocationPrompt = buildAllocationPrompt(request).system;
   assertStringIncludes(allocationPrompt, "Allocate sections according to distinct dramatic developments, not the number of steps, conversations, or locations involved in one development.");
   assertStringIncludes(allocationPrompt, "Consecutive preparations for the same confrontation");
-  assertStringIncludes(allocationPrompt, "Prefer appropriately substantial containers over fragmenting a single causal unit");
+  assertStringIncludes(allocationPrompt, "Select dramatic shape BEFORE doing container arithmetic");
+  assertStringIncludes(allocationPrompt, "A chapter is not merely a 4,200-word slot.");
+  assertStringIncludes(allocationPrompt, "Do not select chapters just because they make the 115,000–125,000-WORD arithmetic easy.");
+  assertStringIncludes(allocationPrompt, "do not force artificial variety or fixed percentages");
   assertStringIncludes(allocationPrompt, "minimum objective of 115,000 WORDS");
   assertStringIncludes(allocationPrompt, "hard maximum of 125,000 words");
   assertStringIncludes(allocationPrompt, "container");
   assertStringIncludes(allocationPrompt, "Story Arc");
   assertStringIncludes(allocationPrompt, "Recipe obligations");
+});
+
+Deno.test("novel container planning avoids 29-chapter word-budget shortcut without imposing a mix", () => {
+  const request = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const allocation = buildAllocationPrompt(request).system;
+  const outlining = buildPrompt(request, new Map()).system;
+  assertStringIncludes(allocation, "Select dramatic shape BEFORE doing container arithmetic");
+  assertStringIncludes(allocation, "Each planned chapter must contain enough connected-but-distinct developments");
+  assertStringIncludes(allocation, "Do not force artificial variety or fixed percentages");
+  assertStringIncludes(allocation, "If the resulting material cannot sustain the full novel, deepen the actual causal story");
+  assertStringIncludes(outlining, "do NOT default to the chapter container merely because it has the largest finished-prose WORD budget");
+  assertStringIncludes(outlining, "Choose the format of each distinct dramatic unit from the material");
+  assertEquals(outlining.includes("For a new novel, prefer the chapter container"), false);
+  assertStringIncludes(allocation, "115,000");
+  assertStringIncludes(allocation, "125,000");
 });
 
 Deno.test("existing accepted sections satisfy obligation coverage", () => {
