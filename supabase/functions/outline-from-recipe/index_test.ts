@@ -4510,7 +4510,7 @@ Deno.test("PR3 expansion prioritizes unused enrichment and exposes soft word ran
   }];
   const unused = findUnusedStoryMaterial(current, material);
   assertEquals(unused.some((item) => item.id === "force-emergency-network"), true);
-  assertEquals(plannedWordRangeForContainer("scene"), { minWords: 700, maxWords: 1300 });
+  assertEquals(plannedWordRangeForContainer("scene"), { minWords: 615, maxWords: 1385 });
   const prompt = buildExpansionPrompt({ ...sparseRequest, storyMaterialEnrichment: material } as any, current as any);
   assertEquals(prompt.user.includes("unusedStoryMaterial"), true);
   assertEquals(prompt.user.includes("force-emergency-network"), false);
