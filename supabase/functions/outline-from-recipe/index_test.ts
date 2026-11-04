@@ -523,7 +523,10 @@ Deno.test("allocator floors are normalized into bounded container slots", () => 
   }]));
   const fitted = fitAllocationToNovelBudget(allocation, req);
   const total = Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0);
-  assertEquals(total, 121);
+  assertEquals(total <= 200 && total > 0, true);
+  assertEquals(projectedExpectedWords(Array.from(fitted.values()).flatMap((plan) =>
+    Object.entries(plan.containerCounts!).flatMap(([container,count]) => Array.from({length:count},()=>({container})))) <= 125000, true,
+    "budget normalization must use the nominal word ceiling");
   assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
   assertEquals(maximumBudgetedNewSections(req), 46);
 });
@@ -1337,7 +1340,7 @@ Deno.test("non-novel allocation keeps its legacy strict planner schema and promp
   assertEquals(allocation.get("beat-2")?.minSections, 1);
 });
 
-Deno.test("container-aware allocation preserves typed slots inside the grace ceiling", () => {
+Deno.test("first-pass allocations trim to the nominal WORD ceiling rather than grace", () => {
   const beats = [{ id: "beat-1" }, { id: "beat-2" }];
   const counts = { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 15 };
   const allocation = parseAndValidateAllocation(JSON.stringify({
@@ -1354,8 +1357,11 @@ Deno.test("container-aware allocation preserves typed slots inside the grace cei
   assertEquals(projectedWords > 125000, true);
   assertEquals(projectedWords < NOVEL_ACCEPTED_MAX_WORDS, true);
   const fitted = fitAllocationToNovelBudget(allocation, req);
-  assertEquals(fitted.get("beat-1")?.containerCounts, counts);
-  assertEquals(Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0), 30);
+  assertEquals(Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0), 29);
+  assertEquals(fitted.get("beat-1")?.containerCounts?.chapter, 14);
+  assertEquals(allocation.get("beat-1")?.containerCounts?.chapter, 15,
+    "fitter must not mutate the model response");
+  assertEquals(projectedExpectedWords(Array.from({length:29},()=>({container:"chapter"}))) <= 125000, true);
 });
 
 Deno.test("malformed mixes recover first-pass novel length without changing valid beats or slot counts", () => {
@@ -1928,7 +1934,7 @@ Deno.test("allocation handoff preserves section budgets without importing plot r
     assertEquals(prompt.system.includes(`minimum 3 sections`), !novel, format);
     if (novel) {
       assertStringIncludes(prompt.system, "planned containers: developedScene=1, chapter=1");
-      assertStringIncludes(prompt.system, "ordered slots: section_001=developedScene, section_002=chapter");
+      assertStringIncludes(prompt.system, "ordered slots: section_001=developedScene (~1,750 words), section_002=chapter (~4,200 words)");
       assertStringIncludes(prompt.system, "section counts, ordered container types, and Story Arc beat placement");
     }
     // This experiment removes only the creative instructions, not the stored
@@ -2690,7 +2696,7 @@ Deno.test("novel outline handoff treats allocation as complete and projects mixe
   assertEquals(novelPrompt.includes("## Complete first-pass allocation"), true);
   assertEquals(novelPrompt.includes("not a minimum-only Story Arc coverage floor"), true);
   assertEquals(novelPrompt.includes("complete first-pass allocation: 15 sections"), true);
-  assertEquals(novelPrompt.includes("The allocator already priced each planned section at its actual midpoint"), true);
+  assertEquals(novelPrompt.includes("The allocator already assigned an explicit WORD budget to every section"), true);
   assertEquals(novelPrompt.includes("Routine book-length development belongs in the first pass"), true);
   assertEquals(novelPrompt.includes("## Use the minimum-only allocation"), false);
 
@@ -2714,7 +2720,7 @@ Deno.test("novel outline handoff treats allocation as complete and projects mixe
 Deno.test("novel planning exposes explicit word budgets and projected-size expansion", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
-  assertEquals(allocationPrompt.includes("complete first-pass book at approximately 121,000 finished-prose words"), true);
+  assertEquals(allocationPrompt.includes("complete book at approximately 121,000 finished-prose words"), true);
   assertEquals(allocationPrompt.includes("Budget in finished-prose WORDS"), true);
   assertEquals(allocationPrompt.includes("never API output tokens"), true);
   assertEquals(allocationPrompt.includes("3,500-token mixed-section planning estimate"), false);
@@ -3277,9 +3283,9 @@ Deno.test("a 129K-word projected novel cannot dispatch paid expansion when no se
 Deno.test("fully budgeted expansion addition stops without provider validation retry", async () => {
   const nearCap = [
     ...Array.from({ length: 30 }, (_, i) => expansionSection(`Chapter ${i}`, "chapter")),
-    ...Array.from({ length: 2 }, (_, i) => expansionSection(`Scene ${i}`, "scene")),
+    ...Array.from({ length: 3 }, (_, i) => expansionSection(`Scene ${i}`, "scene")),
   ];
-  assertEquals(canFitNovelExpansion(nearCap), true); // 1,400 tokens remain
+  assertEquals(canFitNovelExpansion(nearCap), true); // 1,000 planned WORDS remain
   const proposals = [expansionSection("Last fitting scene", "scene"), expansionSection("Over budget scene", "scene")];
   const fitting = fitExpansionAdditionsToBudget(nearCap, proposals, [], { round: 1 });
   assertEquals(fitting.additions.length, 1);
