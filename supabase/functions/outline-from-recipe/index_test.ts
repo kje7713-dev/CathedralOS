@@ -1343,6 +1343,14 @@ Deno.test("malformed mixes recover first-pass novel length without changing vali
   }
   const req = { ...sparseRequest, requestedFormat: "novel",
     arcTemplate: { ...sparseRequest.arcTemplate, beats }, existingSections: [] } as any;
+  const legacyFallback = fixture.flatMap(({ min, mix }, beatIndex) =>
+    names.flatMap((container, index) => Array.from({
+      length: invalid.includes(beatIndex)
+        ? container === "scene" ? Math.ceil(min / 2) : container === "developedScene" ? Math.floor(min / 2) : 0
+        : mix[index],
+    }, () => ({ container }))));
+  assertEquals(Math.round(evaluateNovelScale(legacyFallback).projectedWords), 85962,
+    "reproduce the observed 85,962-word under-allocation before correcting it");
   const fitted = fitAllocationToNovelBudget(parsed, req);
   const allContainers = Array.from(fitted.values()).flatMap((plan) =>
     names.flatMap((container) =>
