@@ -1323,6 +1323,34 @@ Deno.test("selected book-level climax persists into outline without forcing the 
   assertStringIncludes(outlinePrompt.system, "the decisive BOOK-level outcome must be DRAMATIZED as the climax section's dramaticEvent");
 });
 
+Deno.test("climax causality is carried through existing planning, first pass, and semantic review", async () => {
+  const request = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const architecture = {
+    arcExperience: "A consequential choice changes how the protagonists see themselves.",
+    centralQuestion: "Will a protagonist take a personal risk for someone else?",
+    characterCausality: "Earlier choices make the later risk meaningful and possible.",
+    decisiveClimax: "The protagonist chooses to act, removing a concrete danger at real cost.",
+    endingConsequence: "The immediate danger is gone, but the larger mystery remains.",
+    deliberatelyOpenThreads: "The source of the wider threat remains unknown.",
+  };
+  const allocation = buildAllocationPrompt(request);
+  const outline = buildPrompt(request, new Map(), [], undefined, architecture);
+  const verification = semanticVerificationInput([], request.arcTemplate, request.recipe, [], architecture) as any;
+  assertStringIncludes(allocation.system, "Establish the climax's causal chain inside the EXISTING story architecture");
+  assertStringIncludes(allocation.system, "the concrete mechanism by which that action changes what would otherwise happen");
+  assertStringIncludes(allocation.system, "Allocate the specific earlier developments that establish the stakes");
+  assertStringIncludes(outline.system, "Causal payoff realized in the first-pass Section Contracts");
+  assertStringIncludes(outline.system, "show the protagonist's specific action and its *observable* effect");
+  assertEquals(verification.committedDecisiveClimax, architecture.decisiveClimax);
+  assertEquals(verification.committedEndingConsequence, architecture.endingConsequence);
+  const creative = verification.arcWideObligations.find((item: any) => item.obligationID === "creative_fidelity");
+  assertEquals(Boolean(creative), true);
+  assertStringIncludes(creative.instruction, "claimed climax payoff is actually caused by earlier established stakes");
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertStringIncludes(source, "Independently assess committedDecisiveClimax and committedEndingConsequence against the actual Section Contracts");
+  assertStringIncludes(source, "do not require an external victory, over-explained mechanism, or a new failure path");
+});
+
 Deno.test("explicitly authored external victory and relationship resolution remain permitted in all genres", () => {
   for (const summary of [
     "An investigator must expose the named conspiracy and stop its planned raid before the book ends.",
