@@ -825,6 +825,47 @@ Deno.test("first-pass event ownership is arc-neutral and does not create repair 
   }
 });
 
+Deno.test("arc controls whole causal spine through the same planner and first-pass outline for any template", () => {
+  const sameRecipe = sparseRequest.recipe;
+  const architecture = {
+    arcExperience: "The beats govern the reader-facing experience.",
+    centralQuestion: "Which conflict must these characters resolve?",
+    characterCausality: "One character's choice forces the next irreversible turn.",
+    decisiveClimax: "Their defining choice produces an irreversible outcome.",
+    endingConsequence: "The consequences permanently change their options.",
+    deliberatelyOpenThreads: "The longer-running story retains open questions.",
+  };
+  for (const arc of [
+    { name: "Horror / Escalating Dread", first: "Their safety becomes an illusion", second: "A terrible irreversible confrontation" },
+    { name: "Romantasy", first: "Their trust is broken", second: "A binding relationship choice" },
+    { name: "Unclassified Custom Arc", first: "Their worldview is overturned", second: "A surprising self-authored consequence" },
+  ]) {
+    const req: any = { ...sparseRequest, recipe: sameRecipe, arcTemplate: {
+      ...sparseRequest.arcTemplate,
+      name: arc.name,
+      beats: [
+        { id: "a", role: "opening", label: "Disruption", description: arc.first },
+        { id: "b", role: "resolution", label: "Transformation", description: arc.second },
+      ],
+    } };
+    const planning = buildAllocationPrompt(req);
+    const outline = buildPrompt(req, new Map(), [], undefined, architecture);
+    assertStringIncludes(planning.system, "## Story Arc selection governs the book's causal conflict");
+    assertStringIncludes(planning.system, "the kinds of problems and consequential choices that arise");
+    assertStringIncludes(planning.system, "COUNTERFACTUAL ARC CHECK mentally across the WHOLE dramatic spine");
+    assertStringIncludes(planning.system, "initial disruption, primary conflict, defining reversal, decisive climax, and irreversible aftermath");
+    assertStringIncludes(planning.system, "connect neighboring beats causally");
+    assertStringIncludes(planning.system, "Preserve every explicit recipe promise");
+    assertStringIncludes(outline.system, "## Selected Story Arc drives events across the first pass");
+    assertStringIncludes(outline.system, "what new choice, constraint, or reversal follows into the next movement");
+    assertStringIncludes(outline.system, "within the EXISTING allocation");
+    assertStringIncludes(outline.system, architecture.centralQuestion);
+    assertStringIncludes(outline.system, architecture.decisiveClimax);
+    assertEquals(JSON.parse(planning.user).planningContext.arc.beats.map((b: any) => b.description), [arc.first, arc.second]);
+    assertEquals(JSON.parse(outline.user).planningContext.arc.beats.map((b: any) => b.description), [arc.first, arc.second]);
+  }
+});
+
 Deno.test("high-impact endings preserve existing architecture schema and one-call planning", async () => {
   const req = { ...sparseRequest, requestedFormat: "novel" } as any;
   let calls = 0;
