@@ -825,6 +825,47 @@ Deno.test("first-pass event ownership is arc-neutral and does not create repair 
   }
 });
 
+Deno.test("arc controls whole causal spine through the same planner and first-pass outline for any template", () => {
+  const sameRecipe = sparseRequest.recipe;
+  const architecture = {
+    arcExperience: "The beats govern the reader-facing experience.",
+    centralQuestion: "Which conflict must these characters resolve?",
+    characterCausality: "One character's choice forces the next irreversible turn.",
+    decisiveClimax: "Their defining choice produces an irreversible outcome.",
+    endingConsequence: "The consequences permanently change their options.",
+    deliberatelyOpenThreads: "The longer-running story retains open questions.",
+  };
+  for (const arc of [
+    { name: "Horror / Escalating Dread", first: "Their safety becomes an illusion", second: "A terrible irreversible confrontation" },
+    { name: "Romantasy", first: "Their trust is broken", second: "A binding relationship choice" },
+    { name: "Unclassified Custom Arc", first: "Their worldview is overturned", second: "A surprising self-authored consequence" },
+  ]) {
+    const req: any = { ...sparseRequest, recipe: sameRecipe, arcTemplate: {
+      ...sparseRequest.arcTemplate,
+      name: arc.name,
+      beats: [
+        { id: "a", role: "opening", label: "Disruption", description: arc.first },
+        { id: "b", role: "resolution", label: "Transformation", description: arc.second },
+      ],
+    } };
+    const planning = buildAllocationPrompt(req);
+    const outline = buildPrompt(req, new Map(), [], undefined, architecture);
+    assertStringIncludes(planning.system, "## Story Arc selection governs the book's causal conflict");
+    assertStringIncludes(planning.system, "the kinds of problems and consequential choices that arise");
+    assertStringIncludes(planning.system, "COUNTERFACTUAL ARC CHECK mentally across the WHOLE dramatic spine");
+    assertStringIncludes(planning.system, "initial disruption, primary conflict, defining reversal, decisive climax, and irreversible aftermath");
+    assertStringIncludes(planning.system, "connect neighboring beats causally");
+    assertStringIncludes(planning.system, "Preserve every explicit recipe promise");
+    assertStringIncludes(outline.system, "## Selected Story Arc drives events across the first pass");
+    assertStringIncludes(outline.system, "what new choice, constraint, or reversal follows into the next movement");
+    assertStringIncludes(outline.system, "within the EXISTING allocation");
+    assertStringIncludes(outline.system, architecture.centralQuestion);
+    assertStringIncludes(outline.system, architecture.decisiveClimax);
+    assertEquals(JSON.parse(planning.user).planningContext.arc.beats.map((b: any) => b.description), [arc.first, arc.second]);
+    assertEquals(JSON.parse(outline.user).planningContext.arc.beats.map((b: any) => b.description), [arc.first, arc.second]);
+  }
+});
+
 Deno.test("high-impact endings preserve existing architecture schema and one-call planning", async () => {
   const req = { ...sparseRequest, requestedFormat: "novel" } as any;
   let calls = 0;
@@ -1310,6 +1351,81 @@ Deno.test("container-aware allocation preserves typed slots inside the grace cei
   const fitted = fitAllocationToNovelBudget(allocation, req);
   assertEquals(fitted.get("beat-1")?.containerCounts, counts);
   assertEquals(Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0), 30);
+});
+
+Deno.test("malformed mixes recover first-pass novel length without changing valid beats or slot counts", () => {
+  // Production-shaped Coming-of-Age regression: 42 planned sections across ten
+  // beats. The old placeholder fallback made three malformed mixes 14 tiny
+  // sections, shrinking the initial budget to 85,962 words.
+  const fixture = [
+    { min: 3, mix: [0, 1, 2, 0, 0] },
+    { min: 3, mix: [0, 1, 2, 0, 0] },
+    { min: 5, mix: [1, 1, 3, 0, 0] },
+    { min: 6, mix: [3, 2, 0, 0, 0] }, // malformed: sums to 5
+    { min: 5, mix: [1, 1, 3, 0, 0] },
+    { min: 5, mix: [1, 1, 3, 0, 0] },
+    { min: 4, mix: [2, 1, 0, 0, 0] }, // malformed: sums to 3
+    { min: 4, mix: [2, 1, 0, 0, 0] }, // malformed: sums to 3
+    { min: 3, mix: [0, 0, 2, 1, 0] },
+    { min: 4, mix: [0, 1, 2, 1, 0] },
+  ];
+  const names = ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"] as const;
+  const beats = fixture.map((_, index) => ({ id: `beat-${index + 1}` }));
+  const raw = JSON.stringify({ allocations: fixture.map(({ min, mix }, beatIndex) => ({
+    beatIndex,
+    minSections: min,
+    containerCounts: Object.fromEntries(names.map((name, index) => [name, mix[index]])),
+    rationale: `Distinct development for beat ${beatIndex + 1}`,
+  })) });
+  const parsed = parseAndValidateAllocation(raw, beats);
+  const invalid = [3, 6, 7];
+  for (const index of invalid) {
+    assertEquals(parsed.get(beats[index].id)?.containerCounts, undefined);
+  }
+  const req = { ...sparseRequest, requestedFormat: "novel",
+    arcTemplate: { ...sparseRequest.arcTemplate, beats }, existingSections: [] } as any;
+  const legacyFallback = fixture.flatMap(({ min, mix }, beatIndex) =>
+    names.flatMap((container, index) => Array.from({
+      length: invalid.includes(beatIndex)
+        ? container === "scene" ? Math.ceil(min / 2) : container === "developedScene" ? Math.floor(min / 2) : 0
+        : mix[index],
+    }, () => ({ container }))));
+  assertEquals(Math.round(evaluateNovelScale(legacyFallback).projectedWords), 85962,
+    "reproduce the observed 85,962-word under-allocation before correcting it");
+  const fitted = fitAllocationToNovelBudget(parsed, req);
+  const allContainers = Array.from(fitted.values()).flatMap((plan) =>
+    names.flatMap((container) =>
+      Array.from({ length: plan.containerCounts?.[container] ?? 0 }, () => ({ container }))
+    ));
+  assertEquals(allContainers.length, 42, "recover the word budget without adding sections");
+  const scale = evaluateNovelScale(allContainers);
+  assertEquals(scale.meetsMinimum, true, "the first pass should reach 115k without expansion");
+  assertEquals(scale.projectedWords <= 125000, true, "keep the nominal cap");
+  assertEquals(names.reduce((sum, name) => sum +
+    invalid.reduce((inner, index) => inner + (fitted.get(beats[index].id)?.containerCounts?.[name] ?? 0), 0), 0), 14);
+  assertEquals(invalid.some((index) => (fitted.get(beats[index].id)?.containerCounts?.chapter ?? 0) > 0), true);
+  for (const [index, beat] of beats.entries()) {
+    assertEquals(fitted.get(beat.id)?.minSections, fixture[index].min);
+    if (!invalid.includes(index)) {
+      assertEquals(fitted.get(beat.id)?.containerCounts, parsed.get(beat.id)?.containerCounts,
+        "never alter an already valid model-authored container mix");
+    }
+  }
+});
+
+Deno.test("valid short plans remain untouched and unrecoverable fallback stays usable", () => {
+  const counts = { scene: 1, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 };
+  const valid = new Map([["beat-1", { minSections: 1, containerCounts: counts, rationale: "intentionally short" }]]);
+  const req = { ...sparseRequest, requestedFormat: "novel", existingSections: [] } as any;
+  const unchanged = fitAllocationToNovelBudget(valid, req);
+  assertEquals(unchanged.get("beat-1")?.containerCounts, counts);
+  assertEquals(unchanged.get("beat-1")?.minSections, 1);
+
+  const missing = new Map([["beat-1", { minSections: 1, rationale: "only one slot available" }]]);
+  const recovered = fitAllocationToNovelBudget(missing, req);
+  assertEquals(recovered.get("beat-1")?.minSections, 1);
+  assertEquals(recovered.get("beat-1")?.containerCounts?.chapter, 1);
+  assertEquals(evaluateNovelScale([{ container: "chapter" }]).meetsMinimum, false);
 });
 
 Deno.test("container-aware allocation completes and trims incomplete or oversized mixes", () => {
