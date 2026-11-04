@@ -2869,6 +2869,11 @@ export interface ExpansionPromptContext {
 
 
 export function plannedWordRangeForContainer(container: string): { minWords: number; maxWords: number } {
+  if (Object.hasOwn(NOVEL_CONTAINER_WORD_TARGETS, container)) {
+    const target = NOVEL_CONTAINER_WORD_TARGETS[container as typeof NOVEL_LEAF_CONTAINERS[number]];
+    return { minWords: Math.round(target * 0.7), maxWords: Math.round(target * 1.3) };
+  }
+  // Non-novel legacy containers keep their established literary range.
   const [minTokens, maxTokens] = CONTAINER_EXPECTED_RANGES[container] ?? [800, 1800];
   return {
     minWords: Math.max(1, Math.round(minTokens / TOKENS_PER_WORD)),
