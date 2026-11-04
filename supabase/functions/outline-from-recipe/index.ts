@@ -485,11 +485,38 @@ function normalizedTemplateName(name: string): string {
  * same horror arc can be psychological, grotesque, supernatural, or social.
  * Generic structural arcs must not invent genre requirements.
  */
+// The Story Arc's genre/reader-experience contract is separate from its beat
+// structure. Explicit promises are vital for hybrid and identity-driven arcs:
+// their beat order alone cannot tell a novelist what the reading EXPERIENCE
+// and decisive climax must deliver. Pure structural arcs intentionally have
+// no assigned genre; their genre comes from the author's recipe.
+const BUILTIN_ARC_READER_PROMISES: Record<string, string> = {
+  "romantasy": "ROMANTASY: Deliver both emotionally central romance AND the sense of wonder, supernatural stakes, and consequential world rules promised by the arc. Desire, intimacy, trust, and the fantastical crisis must causally transform one another; neither a fantasy battle with a token kiss nor a standalone courtship with magical scenery fulfills this experience. The climax must settle the book's defining romantic choice through an irreversible decision entwined with the primary fantastical stakes.",
+  "dark-romance": "DARK ROMANCE: Deliver psychologically charged desire, agency, danger, power imbalance, boundaries, and morally difficult relationship choices within the author's content and intimacy limits. Do not replace the central relationship with a tactical external plot, or assume coercion is desirable. The climax must force a consequential reckoning over the relationship's defining harm or fear and establish the characters' actual chosen terms.",
+  "sports-romance": "SPORTS ROMANCE: Athletic ambition, training, rivalry, and public/private competition pressure must meaningfully shape attachment, vulnerability, and the central relationship. Neither a routine game recap nor an incidental kiss fulfills the arc. The climax must make the defining sporting stakes and the couple's consequential relationship choice affect one another, then deliver the promised romantic future.",
+  "romantic-suspense": "ROMANTIC SUSPENSE: Sustain genuine danger and mounting suspense while attraction, earned trust, and emotional commitment are the core relationship experience. Do not solve the external threat and then append an unrelated love declaration. The climax must resolve the central danger through an outcome causally inseparable from the protagonists' risky trust and relationship decision.",
+  "psychological-domestic-thriller": "PSYCHOLOGICAL/DOMESTIC THRILLER: Create felt uncertainty, manipulation, escalating intimate jeopardy, and reversals of what the characters believe is real or safe. An investigation or document trail is not a substitute for psychological suspense. The climax must force the protagonist to confront the decisive personal truth and act despite an irreversible threat or betrayal.",
+  "suspense-countdown-thriller": "COUNTDOWN THRILLER: Organize the experience around palpable urgency, shrinking time, narrowing choices, irreversible losses, and escalating reversals; do not fill time with administrative planning. The climax must answer the actual deadline threat through a high-stakes consequential decision, not merely postpone the clock or reveal a new task.",
+  "science-fiction-problem-survival": "SCIENCE-FICTION SURVIVAL: Deliver wonder or disquiet from the authored speculative rules alongside concrete lived survival pressure, ingenuity, and human cost. Technical problem-solving must change the characters' options and moral choices; exposition or procedural troubleshooting cannot be the whole story. The climax must make a decisive survival choice whose outcome depends on the story's speculative premise.",
+  "dystopian-rebellion": "DYSTOPIAN REBELLION: Make the oppression felt in characters' lives and force escalating choices about resistance, complicity, solidarity, and freedom. The experience is rebellion under systemic pressure, not only uncovering secret documents or managing an operation. The climax must force a consequential rebellion-defining choice that changes the book's freedom/power question and leaves an irreversible cost.",
+  "epic-fantasy-quest": "EPIC FANTASY QUEST: Deliver wonder, peril, meaningful fellowship, expanding world-scale consequence, and sacrifices that transform the characters' purpose and bonds. Travel, lore, and quest logistics are not themselves dramatic movement. The climax must deliver the book's defining quest confrontation or irreversible choice, with earned consequences for companions and the threatened world.",
+  "progression-fantasy-litrpg": "PROGRESSION FANTASY/LITRPG: Deliver the felt satisfaction and cost of meaningful growth under the story's specific rules, through trials, rivalries, discoveries, and character choices. Level labels, training montages, and stat recitations do not substitute for earned changes in capability. The climax must prove a distinctive hard-won breakthrough against the book's principal challenge and open a transformed horizon.",
+  "historical-war-survival": "HISTORICAL WAR/SURVIVAL: Deliver lived historical danger, loyalty, loss, endurance, and the moral compromises of survival through specific character experiences. History cannot become generic mission briefings or a list of battles. The climax must force a decisive choice or event that tests what survival costs, followed by an irreversible human aftermath.",
+  "coming-of-age-bildungsroman": "COMING-OF-AGE/BILDUNGSROMAN: The PRIMARY reading experience is identity formation: inherited assumptions break, relationships and belonging demand compromises, disillusionment forces self-recognition, and the protagonist gradually claims authorship of their own life. External pursuits and spectacle may matter but cannot substitute for this identity change. The climax MUST be the character's consequential Adult Choice, made from the newly recognized self rather than inherited expectations; the resolution must show that transformed identity in action.",
+  "revenge": "REVENGE: Deliver obsession, retaliation, escalating counteraction, and moral corrosion or difficult self-confrontation caused by the protagonist's pursuit. A mere pursuit or police-style investigation is not the genre experience. The climax must settle the defining revenge question in a reckoning whose decision and cost irreversibly change the avenger and those involved, whether they retaliate, refuse, fail, or discover a worse truth.",
+  "heist-caper": "HEIST/CAPER: Deliver ingenuity, risky teamwork, misdirection, shifting loyalties, execution pressure, and improvisation with real consequences. Planning meetings, equipment lists, and operational checklists are not the caper's defining experience. The climax must resolve the heist through a character-caused decisive reversal or costly improvisation, then show the outcome for the crew and trust between them.",
+  "redemption-rebirth": "REDEMPTION/REBIRTH: Deliver a felt struggle between destructive old patterns and a possible new self through setbacks, harm, accountability, and costly choices. Stating a lesson or receiving forgiveness is not transformation. The climax must require an irreversible redemptive act or refusal revealing what the protagonist has actually become; the aftermath must honor its cost, even without a neat absolution.",
+  "family-saga-generational": "FAMILY SAGA/GENERATIONAL: Deliver accumulated emotional weight across family relationships, inheritance, time, loyalty, and repeated or broken patterns between generations. A single external mystery or policy conflict cannot replace the intergenerational human story. The climax must force a reckoning over the family's defining inherited conflict, changing the legacy carried into the final generation.",
+  "conspiracy-artifact-thriller": "CONSPIRACY/ARTIFACT THRILLER: Deliver mounting danger and awe through discoveries that overturn the characters' picture of reality, pursuit, betrayal, and consequential interpretation of clues. Report processing and evidence cataloging are not the suspense payoff. The climax must reveal or use the defining hidden truth in a decisive high-stakes reversal with irreversible consequences.",
+  "horror-escalating-dread": "HORROR: Sustained, escalating fear, vulnerability, uncanny or dreadful uncertainty, and encounters that are actually terrifying in the story's specific idiom are mandatory. Horror is NOT satisfied by violent incidents, a secret agency, investigation, or a countdown alone. The climax must confront the full manifestation of the threat at genuine emotional or existential cost; the final image must leave an earned horror-specific aftershock.",
+  "romance-hea": "ROMANCE/HEA: Attachment, desire, vulnerability, emotional jeopardy, and relationship transformation are the central dramatic experience. An external victory with an incidental confession is not romance fulfillment. The climax must force a costly, earned relationship decision; the ending must establish the promised happy future together rather than substitute a cliffhanger.",
+};
+
 export function arcReaderExperienceDirective(
   template: Pick<ArcTemplateBlob, "name" | "beats">,
 ): string {
   const normalized = normalizedTemplateName(template.name);
-  const genrePromise = /horror|dread|terror/.test(normalized)
+  const genrePromise = BUILTIN_ARC_READER_PROMISES[normalized] ?? (/horror|dread|terror/.test(normalized)
     ? "HORROR: Sustained, escalating fear, vulnerability, and disturbing uncertainty must be caused by the characters' choices and the threat's manifestations. Horror is NOT satisfied by violent incidents, an ominous investigation, institutional surveillance, an impending disaster, or disabling a device at the last minute. The full manifestation and confrontation must actually terrify or devastate, and the final image must leave an earned horror-specific aftershock. Grotesque humor, social satire, and mysteries can coexist with this promise but cannot replace it."
     : /romance|romantic|love-story/.test(normalized)
     ? "ROMANCE: The primary dramatic experience must be attachment, desire, emotional jeopardy, and relationship transformation. The climactic decision and ending must resolve the central relationship at the level promised by this arc; a solved external problem with an incidental romantic conversation is not enough. Honor HEA/HFN only when promised by the authored arc or recipe."
@@ -501,7 +528,7 @@ export function arcReaderExperienceDirective(
     ? "THRILLER/SUSPENSE: Immediate jeopardy, tightening options, consequential reversals, and urgent uncertainty must organize the experience. An investigative procedure alone is not tension; the climactic payoff must arise from the accumulating pressure and difficult choices."
     : /tragedy|tragic/.test(normalized)
     ? "TRAGEDY: Character choices and contradictions must make the irreversible loss or tragic recognition dramatically inevitable in hindsight. An incidental injury or sad epilogue cannot substitute for the decisive tragic reversal."
-    : "GENRE-NEUTRAL/OTHER: Honor the specific reader-facing dramatic effects promised by the beat descriptions and the author's recipe. A structural template alone must not impose an unrelated genre, conventional plot device, or default resolution.";
+    : "GENRE-NEUTRAL/OTHER: The template defines dramatic structure, not a genre. Infer the actual genre and reader-facing experience from the AUTHOR'S RECIPE, then fit that genre into the selected beat progression. The climax must fulfill that author-promised genre and resolve the book's defining conflict; structure alone cannot supply it. A structural template must not impose an unrelated genre, conventional plot device, or default resolution.");
   return "SELECTED ARC EXPERIENCE CONTRACT — " + template.name + ": " + genrePromise +
     " Each beat's authored description is also a reader-facing dramatic promise, not simply a section label. Select the book-level question, character-caused escalation, decisive climax, and final consequence to DELIVER this experience before choosing any investigation, institution, operation, or other plot machinery. A different arc on the same recipe must change the defining reader experience and consequential payoff; never change only the chapter labels. The recipe remains authoritative for story facts, tone, explicit guarantees, and accepted prior events.";
 }
@@ -584,6 +611,19 @@ const SECTION_SCHEMA = {
 } as const;
 
 export const NOVEL_LEAF_CONTAINERS = ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"] as const;
+
+// Literary planning is measured in WORDS. These are intended finished-prose
+// budgets per section, not API output tokens or a prose-length claim about the
+// outline JSON. All novel allocation/length decisions use this table directly.
+export const NOVEL_CONTAINER_WORD_TARGETS: Record<typeof NOVEL_LEAF_CONTAINERS[number], number> = {
+  scene: 1000,
+  developedScene: 1750,
+  setPiece: 2700,
+  sceneSequence: 3850,
+  chapter: 4200,
+};
+export const NOVEL_FIRST_PASS_WORD_GOAL = 121000; // Buffer for one discarded replay; nominal cap stays 125k.
+export const NOVEL_MIXED_SECTION_ESTIMATE_WORDS = 2700;
 
 export function validateNovelLeafContainers(
   suggestions: Array<{ container?: string | null }>,
@@ -2170,9 +2210,23 @@ export function projectedTokenRange(suggestions: Array<{ container: string }>): 
 export type PlannedSectionLike = { container?: string | null };
 
 export function projectedExpectedTokens(suggestions: PlannedSectionLike[]): number {
+  // Provider and legacy telemetry only. Do not use these token estimates to
+  // authorize a novel's planned word length.
   return suggestions.reduce((total, suggestion) => {
     const [min, max] = CONTAINER_EXPECTED_RANGES[suggestion.container ?? ""] ?? [800, 1800];
     return total + (min + max) / 2;
+  }, 0);
+}
+
+export function projectedExpectedWords(suggestions: PlannedSectionLike[]): number {
+  return suggestions.reduce((total, suggestion) => {
+    const container = suggestion.container ?? "";
+    if (Object.hasOwn(NOVEL_CONTAINER_WORD_TARGETS, container)) {
+      return total + NOVEL_CONTAINER_WORD_TARGETS[container as typeof NOVEL_LEAF_CONTAINERS[number]];
+    }
+    // Existing non-novel/legacy section types retain their historical estimate.
+    const [min, max] = CONTAINER_EXPECTED_RANGES[container] ?? [800, 1800];
+    return total + (min + max) / (2 * TOKENS_PER_WORD);
   }, 0);
 }
 
@@ -2198,18 +2252,21 @@ export function evaluateNovelScale(
   suggestions: PlannedSectionLike[],
   existingSections: PlannedSectionLike[] = [],
 ): NovelScaleEvaluation {
-  const projectedTokens = projectedExpectedTokens([...existingSections, ...suggestions]);
-  const deficitTokens = Math.max(0, NOVEL_MIN_PROJECTED_TOKENS - projectedTokens);
+  const projectedWords = projectedExpectedWords([...existingSections, ...suggestions]);
+  // Tokens are derived for backward-compatible diagnostics/provider budgeting.
+  // They are never the authority for passing or failing the novel word target.
+  const projectedTokens = projectedWords * TOKENS_PER_WORD;
+  const deficitTokens = Math.max(0, NOVEL_PREFERRED_MIN_WORDS - projectedWords) * TOKENS_PER_WORD;
   return {
     projectedTokens,
-    projectedWords: projectedTokens / TOKENS_PER_WORD,
+    projectedWords,
     minimumWords: NOVEL_PREFERRED_MIN_WORDS,
     preferredMinimumWords: NOVEL_PREFERRED_MIN_WORDS,
     maximumWords: NOVEL_MAX_WORDS,
     deficitTokens,
-    meetsMinimum: deficitTokens === 0,
-    meetsPreferredMinimum: projectedTokens / TOKENS_PER_WORD >= NOVEL_PREFERRED_MIN_WORDS,
-    exceedsMaximum: projectedTokens > NOVEL_ACCEPTED_MAX_PROJECTED_TOKENS,
+    meetsMinimum: projectedWords >= NOVEL_PREFERRED_MIN_WORDS,
+    meetsPreferredMinimum: projectedWords >= NOVEL_PREFERRED_MIN_WORDS,
+    exceedsMaximum: projectedWords > NOVEL_ACCEPTED_MAX_WORDS,
   };
 }
 
@@ -2225,12 +2282,9 @@ export function canFitNovelExpansion(
   existingSections: PlannedSectionLike[] = [],
 ): boolean {
   if (suggestions.length + existingSections.length >= MAX_PLANNED_SECTIONS) return false;
-  const remainingTokens = NOVEL_ACCEPTED_MAX_PROJECTED_TOKENS -
-    evaluateNovelScale(suggestions, existingSections).projectedTokens;
-  const smallestSectionTokens = Math.min(
-    ...NOVEL_LEAF_CONTAINERS.map((container) => projectedExpectedTokens([{ container }])),
-  );
-  return remainingTokens >= smallestSectionTokens;
+  const remainingWords = NOVEL_ACCEPTED_MAX_WORDS -
+    evaluateNovelScale(suggestions, existingSections).projectedWords;
+  return remainingWords >= Math.min(...Object.values(NOVEL_CONTAINER_WORD_TARGETS));
 }
 
 export function needsNovelExpansion(
@@ -2842,6 +2896,8 @@ export interface ExpansionPromptContext {
 
 
 export function plannedWordRangeForContainer(container: string): { minWords: number; maxWords: number } {
+  // Preserve the published generation section-range contract for existing
+  // checkpoints. New novel ALLOCATION lengths are separately word-authoritative.
   const [minTokens, maxTokens] = CONTAINER_EXPECTED_RANGES[container] ?? [800, 1800];
   return {
     minWords: Math.max(1, Math.round(minTokens / TOKENS_PER_WORD)),
@@ -2872,12 +2928,11 @@ export function buildExpansionPrompt(
   context?: ExpansionPromptContext,
   obligations: RecipeObligation[] = [],
 ): { system: string; user: string } {
-  const projectedTokens = context?.projectedTokens ?? projectedExpectedTokens(current);
-  const projectedWords = context?.projectedWords ?? projectedTokens / TOKENS_PER_WORD;
+  const projectedWords = context?.projectedWords ?? projectedExpectedWords(current);
+  const projectedTokens = context?.projectedTokens ?? projectedWords * TOKENS_PER_WORD;
   const remainingDeficitTokens = context?.remainingDeficitTokens ?? Math.max(
-    0,
-    NOVEL_MIN_PROJECTED_TOKENS - projectedTokens,
-  );
+    0, NOVEL_PREFERRED_MIN_WORDS - projectedWords,
+  ) * TOKENS_PER_WORD;
   const round = context?.round ?? 1;
   // Expansion must use the SAME author-first candidate boundary as the
   // initial outline; an unused optional escalation ladder is not a license
@@ -3142,7 +3197,7 @@ export function buildPrompt(
         ? `complete first-pass allocation: ${info.minSections} section${info.minSections === 1 ? "" : "s"}`
         : `minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"}`;
       const typePlan = isNovel && info.containerCounts
-        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; ordered slots: ${plannedNovelContainerSlots(info.containerCounts).map((type, index) => `${plannedNovelSlotKey(index)}=${type}`).join(", ")}`
+        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; beat word budget: ${plannedNovelContainerSlots(info.containerCounts).reduce((sum, type) => sum + NOVEL_CONTAINER_WORD_TARGETS[type], 0).toLocaleString()} words; ordered slots: ${plannedNovelContainerSlots(info.containerCounts).map((type, index) => `${plannedNovelSlotKey(index)}=${type} (~${NOVEL_CONTAINER_WORD_TARGETS[type].toLocaleString()} words)`).join(", ")}`
         : "";
       const narrativeCommitment = storyArchitecture && info.rationale
         ? `; planned dramatic movement: ${compactArcNarrativeText(info.rationale)}`
@@ -3151,7 +3206,7 @@ export function buildPrompt(
     })
     .join("\n");
   const allocationDirective = isNovel
-    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections, except when a beat has outstanding required dramatic functions. For those beats return an object with "sections" (the ordinary sections in order) and "required" (one named section per required dramatic function, such as "climax" or "resolution"). Those required sections occupy the final ordered slots, in the order the functions are listed below. Write each section for its exact ordered container slot above. Omit "container" from every planned novel section: the server assigns it from the slot. Give each section enough distinct dramatic development to justify its planned scale; never pass off a brief event as a chapter. The allocator already priced each planned section at its actual midpoint. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
+    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections, except when a beat has outstanding required dramatic functions. For those beats return an object with "sections" (the ordinary sections in order) and "required" (one named section per required dramatic function, such as "climax" or "resolution"). Those required sections occupy the final ordered slots, in the order the functions are listed below. Write each section for its exact ordered container slot above. Omit "container" from every planned novel section: the server assigns it from the slot. Give each section enough distinct dramatic development to justify its planned scale; never pass off a brief event as a chapter. The allocator already assigned an explicit WORD budget to every section. Each budget is the intended size of the eventual written section, not the length of this outline JSON. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
     : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
@@ -3183,7 +3238,7 @@ Before returning the outline, evaluate the complete proposed sequence in canonic
 Every section must commit to one canonical event. Never use unresolved alternatives such as "X or Y", "someone", "a friend", "somewhere", or multiple possible versions of the event. Choose the specific person, place, object, and action.
 
 ## Novel length policy
-For a novel, plan toward 115,000 words, with a 115,000-word minimum and a 125,000-word hard cap. The cap applies to the complete outline projection, not only to later expansion. Allocate the available word budget across the Story Arc beats before choosing sections. Cover every authored obligation, essential character arc, major conflict, reversal, consequence, and ending commitment within that budget. Combine related events into fuller sections; do not create one section per enrichment item. Fit the complete story package into the budget. When material competes for space, combine related events into fuller sections, deepen shared sections, and adjust the level of detail; do not drop story material merely to meet the cap. Never treat the length policy as permission to omit a required story element. Use the chapter container for substantial units and the server's expected container ranges as planning estimates; keep the complete projected outline at or below 125,000 words.
+For a novel, aim for a complete first-pass plan near 121,000 finished-prose words, with a 115,000-word minimum and a 125,000-word hard cap. The cap applies to the complete outline projection, not only to later expansion. Allocate the available word budget across the Story Arc beats before choosing sections. Cover every authored obligation, essential character arc, major conflict, reversal, consequence, and ending commitment within that budget. Combine related events into fuller sections; do not create one section per enrichment item. Fit the complete story package into the budget. When material competes for space, combine related events into fuller sections, deepen shared sections, and adjust the level of detail; do not drop story material merely to meet the cap. Never treat the length policy as permission to omit a required story element. Use the chapter container for substantial units and the server's explicit finished-prose word budgets per section as planning estimates; keep the complete projected outline at or below 125,000 words.
 
 Selected motifs are supporting material, not a quota. Use a motif in a section only when the section contract, causality, physical continuity, or a meaningful transformation requires it; do not repeat a motif merely to prove that the outline remembers it. Prefer concrete scene-specific images when no selected motif is needed.
 
@@ -3216,15 +3271,15 @@ Maintain the established narrative POV mode across the outline unless the suppli
 ## Container semantics for planning
 
 Choose a container for the scale of one dramatic unit, not to fake novel length:
-- scene: one focused dramatic event that genuinely develops and resolves within a relatively compact unit, expected 800-1,800 tokens
-- developedScene: prefer this for a substantial reader-facing novel section where one objective requires multiple tactics, meaningful resistance, escalation, reversal, emotional development, or a consequential relationship change, 1,500-3,000
-- setPiece: a major confrontation, action, ceremony, revelation, or complex high-stakes event, 2,000-5,000
-- sceneSequence: several connected scenes, locations, or times pursuing one coherent objective, 3,000-7,000
-- chapter: a publishing unit containing multiple substantial movements that belong together, 3,000-8,000+
+- scene: one focused dramatic event that genuinely develops and resolves within a relatively compact unit, planned around 1,000 words
+- developedScene: prefer this for a substantial reader-facing novel section where one objective requires multiple tactics, meaningful resistance, escalation, reversal, emotional development, or a consequential relationship change, planned around 1,750 words
+- setPiece: a major confrontation, action, ceremony, revelation, or complex high-stakes event, planned around 2,700 words
+- sceneSequence: several connected scenes, locations, or times pursuing one coherent objective, planned around 3,850 words
+- chapter: a publishing unit containing multiple substantial movements that belong together, planned around 4,200 words
 
-${isNovel ? `For novel planning, follow the allocator's per-beat container counts and keep the actual midpoint projection near 115,000 words without exceeding 125,000. Treat every container as its real narrative scale: chapters can hold coherent multi-movement developments, while scenes, developed scenes, set pieces, and scene sequences must earn their individual shape. Preserve distinct irreversible developments without padding, relabeling small scenes as chapters, or splitting one continuous objective into redundant leaves. This first-pass allocation already reflects the different container sizes.` : `Use the container whose range fits the material. Preserve the existing format's allocation semantics and do not use containers to inflate or fragment the outline.`}
-For a new novel, prefer the chapter container: each chapter-scale section targets the existing chapter minimum of 3,000 planned tokens. Use scene, developedScene, setPiece, or sceneSequence only when the material genuinely requires a smaller or differently shaped dramatic unit; never use them to fragment one chapter or inflate section counts. Do not create moment, vignette, microScene, beat, shortStory, or episode leaves. Do not split one continuous dramatic objective into several short sections merely because each tactic can be named as its own event: setup → attempt → resistance → changed tactic → consequence usually belongs in one developedScene. A brief final image, kiss, gesture, or emotional beat should normally close the preceding substantive scene rather than become an isolated tiny novel section. Favor more developed story, never padding; preserve distinct state change, no duplicate revelations or resolutions, and no filler sections.
-The expected ranges are literary targets; runtime/provider headroom is not a desired length.
+${isNovel ? `For novel planning, follow the allocator's per-beat container counts and explicit WORD budgets, aiming near 121,000 finished-prose words without exceeding 125,000. Treat every container as its real narrative scale: chapters can hold coherent multi-movement developments, while scenes, developed scenes, set pieces, and scene sequences must earn their individual shape. Preserve distinct irreversible developments without padding, relabeling small scenes as chapters, or splitting one continuous objective into redundant leaves. This first-pass allocation already reflects the different container sizes.` : `Use the container whose range fits the material. Preserve the existing format's allocation semantics and do not use containers to inflate or fragment the outline.`}
+For a new novel, prefer the chapter container: each chapter-scale section targets approximately 4,200 finished-prose words. Use scene, developedScene, setPiece, or sceneSequence only when the material genuinely requires a smaller or differently shaped dramatic unit; never use them to fragment one chapter or inflate section counts. Do not create moment, vignette, microScene, beat, shortStory, or episode leaves. Do not split one continuous dramatic objective into several short sections merely because each tactic can be named as its own event: setup → attempt → resistance → changed tactic → consequence usually belongs in one developedScene. A brief final image, kiss, gesture, or emotional beat should normally close the preceding substantive scene rather than become an isolated tiny novel section. Favor more developed story, never padding; preserve distinct state change, no duplicate revelations or resolutions, and no filler sections.
+The explicit word targets are literary planning estimates; runtime/provider token headroom is not a desired story length.
 
 ${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
 
@@ -3429,168 +3484,136 @@ export class AllocationBudgetConstraintError extends Error {
   }
 }
 
-// Novel scale is evaluated using the midpoint of a known container's literary
-// range, not its floor. When no reliable container mix is available, planning
-// uses the observed mixed-section estimate below; typed allocations remain
-// subject to their actual container midpoints.
+// Retain the historical mixed-token estimate for non-authoritative telemetry.
+// ALL novel planning and acceptance below use word targets, never token budgets.
 export const NOVEL_MIXED_SECTION_ESTIMATE_TOKENS = 3500;
-// Typed container midpoints are planning estimates. Allow a narrow 5,000-word
-// recovery tolerance so a near-boundary mix is repaired instead of hard-failing;
-// normal planning and final acceptance remain bounded by 125,000 words.
 export function maximumBudgetedNewSections(req: OutlineFromRecipeRequest): number {
   if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
-  const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
-  return Math.max(
-    0,
-    Math.min(
-      MAX_PLANNED_SECTIONS,
-      Math.floor(Math.max(0, NOVEL_MAX_PROJECTED_TOKENS - existingTokens) / NOVEL_MIXED_SECTION_ESTIMATE_TOKENS),
-    ),
-  );
+  const remainingWords = NOVEL_MAX_WORDS - projectedExpectedWords(req.existingSections ?? []);
+  return Math.max(0, Math.min(MAX_PLANNED_SECTIONS,
+    Math.floor(Math.max(0, remainingWords) / NOVEL_MIXED_SECTION_ESTIMATE_WORDS)));
 }
 
-/** Unknown-mix planning uses the observed typical mixed-section estimate.
- * Typed allocations are priced separately by their actual container mix. */
 export function maximumContainerPlannedNewSections(req: OutlineFromRecipeRequest): number {
-  if (requestedStoryMaterialFormat(req) !== "novel") return MAX_PLANNED_SECTIONS;
-  const remaining = NOVEL_MAX_PROJECTED_TOKENS - projectedExpectedTokens(req.existingSections ?? []);
-  return Math.max(0, Math.min(MAX_PLANNED_SECTIONS, Math.floor(Math.max(0, remaining) / NOVEL_MIXED_SECTION_ESTIMATE_TOKENS)));
+  return maximumBudgetedNewSections(req);
 }
 
-function projectedPlannedContainerTokens(allocation: Map<string, Allocation>): number {
+function projectedPlannedContainerWords(allocation: Map<string, Allocation>): number {
   return Array.from(allocation.values()).reduce((total, plan) =>
     total + NOVEL_LEAF_CONTAINERS.reduce((sum, container) =>
-      sum + (plan.containerCounts?.[container] ?? 0) * projectedExpectedTokens([{ container }]), 0), 0);
+      sum + (plan.containerCounts?.[container] ?? 0) * NOVEL_CONTAINER_WORD_TARGETS[container], 0), 0);
 }
 
-/** Keep every beat's coverage floor, but never let allocator floors make the
- * novel cap mathematically impossible. Relative allocation priority is
- * preserved through largest-remainder scaling; later stages can still combine
- * events inside each fuller section. */
+/** Reconcile the entire new-novel plan IN WORDS before the paid first pass.
+ * Existing accepted work counts once; no new model call, repair, or failure.
+ * A correctly typed but underlength model plan is NOT an acceptable budget.
+ * Preserve its authored beat movements and existing slots. Extra substantial
+ * chapters are distributed in proportion to developed beat allocations, with
+ * every addition named in the generated first-pass section contract.
+ */
 export function fitAllocationToNovelBudget(
   allocation: Map<string, Allocation>,
   req: OutlineFromRecipeRequest,
 ): Map<string, Allocation> {
   if (requestedStoryMaterialFormat(req) !== "novel") return allocation;
 
-  // Novel planning never drops container metadata or fails because the planner
-  // estimated too many words. Complete missing counts with a deterministic
-  // substantial mix, then trim the largest planned units until the accepted projection fits. This keeps every beat represented and keeps the
-  // generation schema constrained to named container slots.
   const normalized = new Map<string, Allocation>();
   const missingMixBeatIDs: string[] = [];
   for (const [beatID, plan] of allocation.entries()) {
-    // A malformed or omitted typed mix must not silently shrink the whole novel.
-    // Valid model-authored container mixes are never subject to the fallback.
     if (!plan.containerCounts && plan.minSections > 0) missingMixBeatIDs.push(beatID);
-    const counts: NovelContainerCounts = {
-      scene: 0,
-      developedScene: 0,
-      setPiece: 0,
-      sceneSequence: 0,
-      chapter: 0,
-    };
+    const counts: NovelContainerCounts = { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 };
     for (const container of NOVEL_LEAF_CONTAINERS) {
       counts[container] = Math.max(0, Math.floor(plan.containerCounts?.[container] ?? 0));
     }
-    let countTotal = NOVEL_LEAF_CONTAINERS.reduce((sum, container) => sum + counts[container], 0);
+    let countTotal = NOVEL_LEAF_CONTAINERS.reduce((sum, type) => sum + counts[type], 0);
     const requestedMinimum = Math.max(0, Math.floor(plan.minSections));
     while (countTotal < requestedMinimum) {
-      // A missing slot is completed with a deterministic substantial mix
-      // rather than an unbounded provider choice: scene + developedScene
-      // averages almost exactly the established mixed-section estimate.
-      const nextContainer = countTotal % 2 === 0 ? "scene" : "developedScene";
-      counts[nextContainer]++;
+      const next = countTotal % 2 === 0 ? "scene" : "developedScene";
+      counts[next]++;
       countTotal++;
     }
-    normalized.set(beatID, {
-      ...plan,
-      minSections: countTotal,
-      coverageMinimum: plan.coverageMinimum ?? 1,
-      containerCounts: counts,
-    });
+    normalized.set(beatID, { ...plan, minSections: countTotal,
+      coverageMinimum: plan.coverageMinimum ?? 1, containerCounts: counts });
   }
 
-  const positiveBeats = Array.from(normalized.values()).filter((plan) => plan.minSections > 0).length;
-  const existingTokens = projectedExpectedTokens(req.existingSections ?? []);
-  const acceptedTokens = Math.max(0, NOVEL_ACCEPTED_MAX_PROJECTED_TOKENS - existingTokens);
-  const projected = () => Array.from(normalized.values()).reduce((total, plan) =>
-    total + NOVEL_LEAF_CONTAINERS.reduce((sum, container) =>
-      sum + plan.containerCounts![container] * projectedExpectedTokens([{ container }]), 0), 0);
+  const existingWords = projectedExpectedWords(req.existingSections ?? []);
+  const nominalRemainingWords = Math.max(0, NOVEL_MAX_WORDS - existingWords);
+  const acceptedRemainingWords = Math.max(0, NOVEL_ACCEPTED_MAX_WORDS - existingWords);
+  const plannedWords = () => projectedPlannedContainerWords(normalized);
+  const sectionCount = () => Array.from(normalized.values()).reduce((sum, plan) => sum + plan.minSections, 0);
 
-  // Reprice only fallback-created slots against the existing first-pass goal.
-  // Previously the scene/developedScene placeholder mix could turn a valid
-  // 115k+ novel plan into an 86k-word draft before generation even started.
-  // Upgrade those unknown slots round-robin to chapter-sized units until the
-  // projected book reaches target or no such slots remain. Keep original beat
-  // counts and valid mixes untouched. If the available slots cannot reach the
-  // goal, preserve the usable allocation rather than adding a failure gate.
+  // Historical missing-container recovery: raise the scale of placeholder
+  // scenes without changing their counts, using the same word budget table.
   let upgraded = true;
   while (missingMixBeatIDs.length > 0 &&
-    existingTokens + projected() < NOVEL_MIN_PROJECTED_TOKENS && upgraded) {
+    existingWords + plannedWords() < NOVEL_PREFERRED_MIN_WORDS && upgraded) {
     upgraded = false;
     for (const beatID of missingMixBeatIDs) {
-      if (existingTokens + projected() >= NOVEL_MIN_PROJECTED_TOKENS) break;
+      if (existingWords + plannedWords() >= NOVEL_PREFERRED_MIN_WORDS) break;
       const counts = normalized.get(beatID)!.containerCounts!;
       const shorter = (["scene", "developedScene", "setPiece", "sceneSequence"] as const)
-        .find((container) => counts[container] > 0);
+        .find((type) => counts[type] > 0);
       if (!shorter) continue;
+      // Never widen a malformed plan past the nominal word ceiling.
+      const increase = NOVEL_CONTAINER_WORD_TARGETS.chapter - NOVEL_CONTAINER_WORD_TARGETS[shorter];
+      if (plannedWords() + increase > nominalRemainingWords) continue;
       counts[shorter]--;
       counts.chapter++;
       upgraded = true;
     }
   }
 
-  // A valid typed allocation can still miss the novel target (e.g. 26 chapters
-  // project ~110k words). Recover a NEAR-TARGET whole-book plan before the paid
-  // first pass, using at most three genuine chapter-scale slots across already
-  // developed beats. Avoid manufacturing dozens of sections from a sparse plan.
-  // One chapter's headroom absorbs an occasional exact replay removed below.
-  // Malformed mixes retain their separate deterministic recovery above.
-  const chapterTokens = projectedExpectedTokens([{ container: "chapter" }]);
-  const firstPassTargetTokens = NOVEL_MIN_PROJECTED_TOKENS + chapterTokens;
-  const maxRecoveryChapters = 3;
-  const missingTokens = firstPassTargetTokens - existingTokens - projected();
-  if (missingMixBeatIDs.length === 0 &&
-      existingTokens + projected() < NOVEL_MIN_PROJECTED_TOKENS &&
-      missingTokens > 0 && missingTokens <= maxRecoveryChapters * chapterTokens) {
-    const eligible = Array.from(normalized.entries())
-      .filter(([, plan]) => plan.minSections > 0 && plan.minSections < 20 &&
-        (plan.containerCounts?.chapter ?? 0) > 0)
-      .sort((left, right) => right[1].minSections - left[1].minSections);
-    for (let index = 0; eligible.length > 0 && index < maxRecoveryChapters &&
-      existingTokens + projected() < firstPassTargetTokens; index++) {
-      if (existingTokens + projected() + chapterTokens > NOVEL_MAX_PROJECTED_TOKENS ||
-          Array.from(normalized.values()).reduce((sum, plan) => sum + plan.minSections, 0) >= MAX_PLANNED_SECTIONS) break;
-      const plan = eligible[index % eligible.length][1];
-      if (plan.minSections >= 20) continue;
-      plan.containerCounts!.chapter++;
-      plan.minSections++;
-    }
-  }
-
-  while (projected() > acceptedTokens) {
+  // Respect the nominal 125k word ceiling on NEW first-pass plans.
+  // Preserve at least one planned section for each covered beat.
+  const positiveBeats = Array.from(normalized.values()).filter((plan) => plan.minSections > 0).length;
+  while (plannedWords() > nominalRemainingWords) {
     const candidates = Array.from(normalized.entries()).flatMap(([beatID, plan]) =>
-      NOVEL_LEAF_CONTAINERS.filter((container) => plan.containerCounts![container] > 1).map((container) => ({
-        beatID,
-        plan,
-        container,
-        cost: projectedExpectedTokens([{ container }]),
-      })));
-    if (candidates.length === 0 || Array.from(normalized.values()).reduce((sum, plan) => sum + plan.minSections, 0) <= positiveBeats) break;
-    const selected = candidates.sort((left, right) => right.cost - left.cost)[0];
-    selected.plan.containerCounts![selected.container]--;
+      NOVEL_LEAF_CONTAINERS.filter((type) => plan.containerCounts![type] > 1)
+        .map((type) => ({ beatID, plan, type, words: NOVEL_CONTAINER_WORD_TARGETS[type] })));
+    if (!candidates.length || sectionCount() <= positiveBeats) break;
+    const selected = candidates.sort((left, right) => right.words - left.words)[0];
+    selected.plan.containerCounts![selected.type]--;
     selected.plan.minSections--;
   }
 
+  // A complete first pass targets ~121k words, leaving a small safety buffer
+  // when the structural duplicate filter discards a single section. No three-
+  // chapter cutoff: valid mixed-section allocations can be substantially short.
+  const desiredTotalWords = Math.min(NOVEL_FIRST_PASS_WORD_GOAL, NOVEL_MAX_WORDS);
+  const startingCounts = new Map(Array.from(normalized.entries()).map(([id, plan]) => [id, plan.minSections]));
+  const addedCounts = new Map<string, number>();
+  while ((req.existingSections?.length ?? 0) === 0 &&
+    existingWords + plannedWords() < desiredTotalWords && sectionCount() < MAX_PLANNED_SECTIONS &&
+    (missingMixBeatIDs.length === 0 || existingWords + plannedWords() < NOVEL_PREFERRED_MIN_WORDS)) {
+    const availableWords = nominalRemainingWords - plannedWords();
+    const container = (["chapter", "sceneSequence", "setPiece", "developedScene", "scene"] as const)
+      .find((type) => NOVEL_CONTAINER_WORD_TARGETS[type] <= availableWords);
+    if (!container) break;
+    const eligible = Array.from(normalized.entries())
+      .filter(([, plan]) => plan.minSections > 0 && plan.minSections < 20)
+      .sort(([a, ap], [b, bp]) => {
+        const aBase = Math.max(1, startingCounts.get(a) ?? 1);
+        const bBase = Math.max(1, startingCounts.get(b) ?? 1);
+        // Allocate additional dramatic space proportionally to already
+        // developed beats rather than creating a generic post-climax tail.
+        return ((addedCounts.get(a) ?? 0) + 1) / aBase -
+          ((addedCounts.get(b) ?? 0) + 1) / bBase || bp.minSections - ap.minSections;
+      });
+    if (!eligible.length) break;
+    const [beatID, plan] = eligible[0];
+    plan.containerCounts![container]++;
+    plan.minSections++;
+    addedCounts.set(beatID, (addedCounts.get(beatID) ?? 0) + 1);
+  }
+
+  // The returned plan remains recoverable even for impossible one-beat/fully
+  // accepted corner cases; never introduce a new terminal failure condition.
   return new Map(Array.from(normalized.entries()).map(([beatID, plan]) => {
     const original = allocation.get(beatID)!;
     const changed = original.minSections !== plan.minSections ||
       JSON.stringify(original.containerCounts ?? null) !== JSON.stringify(plan.containerCounts);
     return [beatID, changed
-      ? { ...plan, rationale: `${plan.rationale} ${plan.minSections > original.minSections
-          ? "Reconciled near-target first-pass chapter budget without introducing a new planning stage."
-          : `Budget-normalized to the accepted ${NOVEL_ACCEPTED_MAX_WORDS.toLocaleString()}-word ceiling while preserving container slots.`}` }
+      ? { ...plan, rationale: `${plan.rationale} Word-budget reconciled for the full 115,000–125,000-word first pass; every added section must deliver a distinct irreversible event or character consequence.` }
       : plan] as [string, Allocation];
   }));
 }
@@ -3833,10 +3856,13 @@ export function buildAllocationPrompt(
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
   const maxBudgetedSections = isNovel ? maximumContainerPlannedNewSections(req) : maximumBudgetedNewSections(req);
   const containerBudgetInstructions = isNovel
-    ? `When no reliable container mix is available, use approximately ${NOVEL_MIXED_SECTION_ESTIMATE_TOKENS.toLocaleString()} tokens per typical mixed section; this gives an upper planning estimate of about ${Math.round(NOVEL_PREFERRED_MIN_WORDS * TOKENS_PER_WORD / NOVEL_MIXED_SECTION_ESTIMATE_TOKENS)} sections at the preferred target and about ${maxBudgetedSections} at the hard maximum, not a quota. When choosing a reliable mix, budget the story's real section sizes instead. Return containerCounts on each beat: scene=1,300 midpoint tokens, developedScene=2,250, setPiece=3,500, sceneSequence=5,000, chapter=5,500. minSections MUST equal the sum of its five containerCounts. Total proposed token midpoints PLUS existing section midpoints, divided by 1.3, should approach 115,000 projected words and must never exceed 125,000. Do not treat a scene as a chapter. Include enough causally distinct story to reach the goal without padding or relabeling scenes as chapters. The 125,000-word cap is absolute.`
+    ? `Budget in finished-prose WORDS, never API output tokens: scene=${NOVEL_CONTAINER_WORD_TARGETS.scene.toLocaleString()} words, developedScene=${NOVEL_CONTAINER_WORD_TARGETS.developedScene.toLocaleString()}, setPiece=${NOVEL_CONTAINER_WORD_TARGETS.setPiece.toLocaleString()}, sceneSequence=${NOVEL_CONTAINER_WORD_TARGETS.sceneSequence.toLocaleString()}, chapter=${NOVEL_CONTAINER_WORD_TARGETS.chapter.toLocaleString()}. Return containerCounts on each beat, with minSections exactly their sum. Sum the WORD targets of every proposed section plus accepted existing sections. The first-pass book must plan 115,000–125,000 words (aim approximately ${NOVEL_FIRST_PASS_WORD_GOAL.toLocaleString()} to accommodate deduplication). Give every section distinct dramatic substance appropriate to its word budget; never fill with paraphrased events. The 125,000-word nominal planning cap is absolute. The server reconciles any incomplete or short valid mix in WORDS before generation.`
     : "Allocate the number of format-appropriate sections needed for complete Story Arc coverage without the novel-only word or container budget.";
   const system =
-    `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
+    `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), design a complete ${requestedStoryMaterialFormat(req)} story and allocate its first-pass sections.
+
+${isNovel ? `## Binding whole-book creative objective — BEFORE inventing the plot
+Design a FULL-LENGTH NOVEL whose finished prose has a minimum objective of 115,000 WORDS, with a hard maximum of 125,000 words. Develop the story architecture, defining conflict, character journeys, distinct dramatic developments, reversals, climax, and irreversible aftermath with ENOUGH ORIGINAL STORY SUBSTANCE to sustain at least 115,000 words. This word-length requirement governs story design itself; do not first invent a short plot and then stretch it with extra scenes or repeated events. After making those author-and-arc-driven story decisions, assign word budgets across the sections, targeting approximately ${NOVEL_FIRST_PASS_WORD_GOAL.toLocaleString()} words as a safety buffer. Words are the story unit; API output tokens are not.` : ""}
 
 ## Binding experience of the selected Story Arc (same model call)
 ${arcReaderExperienceDirective(req.arcTemplate)}
@@ -3849,6 +3875,9 @@ Use the recipe and the FULL authored beat progression together to choose which c
 
 ## Author-promised reader experience BEFORE plot machinery
 First infer the specific READER EXPERIENCE promised by THIS recipe's genre, tone, premise, relationships, and intended emotional effect. Identify what makes that experience distinctive and which character-caused choices and consequences will deliver it. The Story Arc governs dramatic progression, not a default set of plot devices, objectives, or a required method of resolution. Do not automatically turn a condition, antagonist, mystery, institution, relationship, social conflict, or world-scale stake mentioned by the author into an assignment for the protagonists to investigate, master, defeat, reconcile, or solve. A premise fact does not itself create an objective. Select any investigation, mission, tactical operation, technical solution, revelation, victory, or relationship milestone only when it follows from the author's intended experience and the characters' particular choices, or the author explicitly requests it. Keep the book's completed dramatic question separate from longer-running pressures, mysteries, and series-scale promises; preserve the latter without forcing an artificial book-one resolution. This rule applies to ALL genres, including stories whose intended experience genuinely requires a concrete external resolution.
+
+## The Story Arc's genre/reader-experience promise governs the kind of climax
+The selected arc's reader-experience contract is a PRIMARY creative requirement, not a decorative genre label. Use it to choose what the novel must make readers feel, which character choices create that experience through the whole book, and what kind of irreversible climax fulfills it. A genre-specific template brings its own reading experience alongside the author's recipe, while a genre-neutral structural template must take its genre from the recipe instead of inventing one. For hybrid genre templates, the climax must integrate BOTH promised dramatic experiences through a single consequential event, rather than resolving a generic external conflict followed by a cosmetic genre scene.
 
 ## Choose an exceptional, arc-specific ending before building the central plot
 After interpreting the author’s recipe AND the selected arc’s complete progression, decide the TYPE of emotional and dramatic payoff that THIS arc promises. Invent a specific, exceptionally impactful book-level climax and its irreversible consequence BEFORE settling on a default external conflict or tactical objective. Aim for a bold, unforgettable outcome: a breathtaking earned reversal, monumental consequence, devastating sacrifice or loss, shattering revelation, surprising but retrospectively inevitable twist, or an emotionally overwhelming relationship decision. Select the form that genuinely fits the authored recipe and the selected Story Arc; do not mechanically include all of these, impose a tragic ending on a happy-ending contract, or inflate intimate drama with artificial explosions. Personal stakes can be as devastating as national stakes. Surprise must be prepared by causal setup and character choices, never an arbitrary shock, unearned death, or late invented explanation. The climax must actually dramatize the payoff; the ending must show what can never be restored.
@@ -3864,7 +3893,7 @@ Before distributing section counts, determine which authored beat actually owns 
 
 THEN work backward from that chosen payoff through the ordered arc beats and write the character-driven setup, promises, escalating costs, revelations, reversals, and consequences into each allocation rationale. Each rationale must explain BOTH the specific effect required by that beat's authored description AND the distinct event/choice/consequence that realizes it in this story; not merely label a plot step or justify a chapter count. In the existing rationales, connect neighboring beats causally: what irreversible choice or changed circumstance in this movement makes the next movement necessary, possible, or harder? Do not let a fixed external plot advance on its own while the arc supplies commentary afterward. Make the climax and ending rationales realize their respective arc requirements and the saved architecture's definite outcome. Only AFTER those story and arc decisions, budget and assign containerCounts and minSections. All reasoning and output belong to this ONE existing outline-plan response, not another stage or model call.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 115,000 projected words while staying below the 125,000-word maximum. Use each known container's midpoint as the authoritative estimate; when the container mix is unknown, use the named 3,500-token mixed-section planning estimate rather than treating every section as a chapter. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat, and the projected contribution of existing sections. Distribute distinct, substantial chapter-scale units according to the narrative material each movement requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. ${containerBudgetInstructions}
+This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 121,000 FINISHED-PROSE WORDS, within the 115,000–125,000-word target range. Add the explicit word targets of the chosen container types; token counts are NOT word budgets. Account for the projected WORDS contributed by existing accepted sections exactly once. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat. Distribute substantial dramatic movements according to the narrative material each beat requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. ${containerBudgetInstructions}
 
 Allocate sections according to distinct dramatic developments, not the number of steps, conversations, or locations involved in one development. Base the size and distribution on the dramatic developments already selected in storyArchitecture and each beat's narrative commitment. Consecutive preparations for the same confrontation, repeated consideration of the same decision, and multiple observations of one outcome generally belong within a larger section unless each independently changes the narrative state. Prefer appropriately substantial containers over fragmenting a single causal unit to meet the projected length target.
 
@@ -3881,7 +3910,7 @@ ${renderRequiredRecipeCoverage(obligations)}
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
 
-Output a single storyArchitecture FIRST (all six short text fields, including required arcExperience), THEN exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs in allocations. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 115,000 projected words and below 125,000. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Each allocation rationale records the selected beat's causal movement, especially the decisive clash and its later consequences. Do not output any other root key. ${isNovel ? "Provide all five containerCounts keys for every beat, including zeros." : "Do not return novel-only containerCounts."}
+Output a single storyArchitecture FIRST (all six short text fields, including required arcExperience), THEN exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs in allocations. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 121,000 finished-prose words (within 115,000–125,000), computed by adding each container\'s word target, not tokens. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Each allocation rationale records the selected beat's causal movement, especially the decisive clash and its later consequences. Do not output any other root key. ${isNovel ? "Provide all five containerCounts keys for every beat, including zeros." : "Do not return novel-only containerCounts."}
 
 Output JSON only. No commentary, no prose.`;
 
@@ -3908,11 +3937,10 @@ Output JSON only. No commentary, no prose.`;
     existingSectionsByBeat,
     existingUnlinkedSections,
     allocation: isNovel
-      ? "Choose containerCounts first; minSections equals their sum, and their actual midpoints should project about 115,000 words. Accepted existing work counts once."
+      ? "Choose containerCounts first; minSections equals their sum. Sum the explicit word targets to approximately 121,000 words (115,000–125,000 permitted). Accepted existing work counts once."
       : "For non-novels, return format-appropriate residual minSections per beat without novel containerCounts.",
-    ...(isNovel ? { containerMidpointTokens: Object.fromEntries(
-      NOVEL_LEAF_CONTAINERS.map((container) => [container, projectedExpectedTokens([{ container }])]),
-    ) } : {}),
+    ...(isNovel ? { containerWordTargets: NOVEL_CONTAINER_WORD_TARGETS,
+      firstPassWordGoal: NOVEL_FIRST_PASS_WORD_GOAL, minimumNovelWords: NOVEL_PREFERRED_MIN_WORDS, maximumNovelWords: NOVEL_MAX_WORDS } : {}),
     hint: req.hint ?? null,
   }, null, 2);
   return { system, user };
