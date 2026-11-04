@@ -2923,6 +2923,15 @@ The JSON request contains the authoritative obligations exactly once.`,
       mustDos: compactObligations(obligations.filter((o) => o.classification === "story_non_negotiable")),
       targetBeat: beatContext ? { ...beatContext, currentSections: compactExistingSections(beatContext.currentSections ?? []), unmetObligations: compactObligations(obligations.filter((o) => o.required && !beatContext.currentSections?.some((s) => (s.recipeRequirementIDs ?? []).includes(o.id)))) } : null,
       unusedStoryMaterial: compactMaterial({ relevant: unusedStoryMaterial }),
+      // The previous prompt told expansion not to replay earlier events but
+      // never actually provided the global existing-event ledger. Both global
+      // and beat-local expansion need this cross-beat context.
+      usedEventLedger: current.map((section) => ({
+        beatID: section.storyArcBeatID,
+        title: compactText(section.title, 90),
+        event: compactText(section.dramaticEvent ?? section.summary, 220),
+        resultingChange: compactText(section.resultingChange, 140),
+      })),
       neighbors: { previous: [], next: [] },
       expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens },
     }, null, 2),
