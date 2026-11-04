@@ -525,7 +525,7 @@ Deno.test("allocator floors are normalized into bounded container slots", () => 
   const total = Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0);
   assertEquals(total <= 200 && total > 0, true);
   assertEquals(projectedExpectedWords(Array.from(fitted.values()).flatMap((plan) =>
-    Object.entries(plan.containerCounts!).flatMap(([container,count]) => Array.from({length:count},()=>({container})))) <= 125000, true,
+    Object.entries(plan.containerCounts!).flatMap(([container,count]) => Array.from({length:count},()=>({container}))))) <= 125000, true,
     "budget normalization must use the nominal word ceiling");
   assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections > 0), true);
   assertEquals(maximumBudgetedNewSections(req), 46);
