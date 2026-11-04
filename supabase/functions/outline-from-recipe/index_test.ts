@@ -445,8 +445,8 @@ Deno.test("outline prompts distinguish substantial dramatic developments from fr
   assertStringIncludes(allocationPrompt, "Allocate sections according to distinct dramatic developments, not the number of steps, conversations, or locations involved in one development.");
   assertStringIncludes(allocationPrompt, "Consecutive preparations for the same confrontation");
   assertStringIncludes(allocationPrompt, "Prefer appropriately substantial containers over fragmenting a single causal unit");
-  assertStringIncludes(allocationPrompt, "115,000 projected words");
-  assertStringIncludes(allocationPrompt, "125,000-word maximum");
+  assertStringIncludes(allocationPrompt, "minimum objective of 115,000 WORDS");
+  assertStringIncludes(allocationPrompt, "hard maximum of 125,000 words");
   assertStringIncludes(allocationPrompt, "container");
   assertStringIncludes(allocationPrompt, "Story Arc");
   assertStringIncludes(allocationPrompt, "Recipe obligations");
@@ -804,7 +804,7 @@ Deno.test("genre-bearing Story Arcs explicitly govern the reader experience and 
     assertStringIncludes(verification.arcReaderExperienceContract,directive);
   }
   const neutral = arcReaderExperienceDirective({...sparseRequest.arcTemplate,name:"Three-Act",beats});
-  assertStringIncludes(neutral,"genre from the AUTHOR'S RECIPE");
+  assertStringIncludes(neutral,"genre and reader-facing experience from the AUTHOR'S RECIPE");
   assertEquals(neutral.includes("climax MUST be the character's consequential Adult Choice"),false,
     "generic story structures must not silently impose Coming-of-Age genre");
 });
