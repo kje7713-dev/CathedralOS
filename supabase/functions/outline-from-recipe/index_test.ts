@@ -1312,6 +1312,73 @@ Deno.test("container-aware allocation preserves typed slots inside the grace cei
   assertEquals(Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0), 30);
 });
 
+Deno.test("malformed mixes recover first-pass novel length without changing valid beats or slot counts", () => {
+  // Production-shaped Coming-of-Age regression: 42 planned sections across ten
+  // beats. The old placeholder fallback made three malformed mixes 14 tiny
+  // sections, shrinking the initial budget to 85,962 words.
+  const fixture = [
+    { min: 3, mix: [0, 1, 2, 0, 0] },
+    { min: 3, mix: [0, 1, 2, 0, 0] },
+    { min: 5, mix: [1, 1, 3, 0, 0] },
+    { min: 6, mix: [3, 2, 0, 0, 0] }, // malformed: sums to 5
+    { min: 5, mix: [1, 1, 3, 0, 0] },
+    { min: 5, mix: [1, 1, 3, 0, 0] },
+    { min: 4, mix: [2, 1, 0, 0, 0] }, // malformed: sums to 3
+    { min: 4, mix: [2, 1, 0, 0, 0] }, // malformed: sums to 3
+    { min: 3, mix: [0, 0, 2, 1, 0] },
+    { min: 4, mix: [0, 1, 2, 1, 0] },
+  ];
+  const names = ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"] as const;
+  const beats = fixture.map((_, index) => ({ id: `beat-${index + 1}` }));
+  const raw = JSON.stringify({ allocations: fixture.map(({ min, mix }, beatIndex) => ({
+    beatIndex,
+    minSections: min,
+    containerCounts: Object.fromEntries(names.map((name, index) => [name, mix[index]])),
+    rationale: `Distinct development for beat ${beatIndex + 1}`,
+  })) });
+  const parsed = parseAndValidateAllocation(raw, beats);
+  const invalid = [3, 6, 7];
+  for (const index of invalid) {
+    assertEquals(parsed.get(beats[index].id)?.containerCounts, undefined);
+  }
+  const req = { ...sparseRequest, requestedFormat: "novel",
+    arcTemplate: { ...sparseRequest.arcTemplate, beats }, existingSections: [] } as any;
+  const fitted = fitAllocationToNovelBudget(parsed, req);
+  const allContainers = Array.from(fitted.values()).flatMap((plan) =>
+    names.flatMap((container) =>
+      Array.from({ length: plan.containerCounts?.[container] ?? 0 }, () => ({ container }))
+    ));
+  assertEquals(allContainers.length, 42, "recover the word budget without adding sections");
+  const scale = evaluateNovelScale(allContainers);
+  assertEquals(scale.meetsMinimum, true, "the first pass should reach 115k without expansion");
+  assertEquals(scale.projectedWords <= 125000, true, "keep the nominal cap");
+  assertEquals(names.reduce((sum, name) => sum +
+    invalid.reduce((inner, index) => inner + (fitted.get(beats[index].id)?.containerCounts?.[name] ?? 0), 0), 0), 14);
+  assertEquals(invalid.some((index) => (fitted.get(beats[index].id)?.containerCounts?.chapter ?? 0) > 0), true);
+  for (const [index, beat] of beats.entries()) {
+    assertEquals(fitted.get(beat.id)?.minSections, fixture[index].min);
+    if (!invalid.includes(index)) {
+      assertEquals(fitted.get(beat.id)?.containerCounts, parsed.get(beat.id)?.containerCounts,
+        "never alter an already valid model-authored container mix");
+    }
+  }
+});
+
+Deno.test("valid short plans remain untouched and unrecoverable fallback stays usable", () => {
+  const counts = { scene: 1, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 };
+  const valid = new Map([["beat-1", { minSections: 1, containerCounts: counts, rationale: "intentionally short" }]]);
+  const req = { ...sparseRequest, requestedFormat: "novel", existingSections: [] } as any;
+  const unchanged = fitAllocationToNovelBudget(valid, req);
+  assertEquals(unchanged.get("beat-1")?.containerCounts, counts);
+  assertEquals(unchanged.get("beat-1")?.minSections, 1);
+
+  const missing = new Map([["beat-1", { minSections: 1, rationale: "only one slot available" }]]);
+  const recovered = fitAllocationToNovelBudget(missing, req);
+  assertEquals(recovered.get("beat-1")?.minSections, 1);
+  assertEquals(recovered.get("beat-1")?.containerCounts?.chapter, 1);
+  assertEquals(evaluateNovelScale([{ container: "chapter" }]).meetsMinimum, false);
+});
+
 Deno.test("container-aware allocation completes and trims incomplete or oversized mixes", () => {
   const beats = [{ id: "beat-1" }, { id: "beat-2" }];
   const counts = { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 20 };
