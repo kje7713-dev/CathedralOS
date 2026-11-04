@@ -3508,7 +3508,7 @@ Deno.test("invalid expansion is a terminal failed_expansion, never a completed u
   try {
     validateExpansionAdditions({ suggestions: [duplicate, duplicate] }, new Set(["beat-1"]), initial as any);
   } catch { rejected = true; }
-  assertEquals(rejected, true);
+  assertEquals(rejected, false, "exact replay proposals are silent no-ops");
   let failure: unknown;
   try {
     await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => {
@@ -7193,8 +7193,8 @@ Deno.test("missing recipe IDs remain internal QA and never discard a paid outlin
   const section = (beat: string) => ({
     title: `Missing ${beat}`, summary: "Missing recipe coverage", container: "scene",
     pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before",
-    dramaticEvent: "It happens", resultingChange: "Pressure changes",
-    terminalState: "After", storyArcBeatID: beat,
+    dramaticEvent: `It happens in ${beat}`, resultingChange: `Pressure changes in ${beat}`,
+    terminalState: `After ${beat}`, storyArcBeatID: beat,
     dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: [],
   });
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
@@ -7270,7 +7270,7 @@ Deno.test("first-pass recipe coverage enters novel length controls without a nar
   );
   const body = { ...fullBody, requestedFormat: "novel", storyMaterialEnrichment: novelMaterial } as any;
   const obligations = deriveRecipeObligations(body.recipe as any);
-  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: "A section", container: "scene", pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before", dramaticEvent: "It happens", resultingChange: "Pressure changes", terminalState: "After", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
+  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: `A section in ${beat}`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `It ends in ${beat}`, entryState: `Before ${beat}`, dramaticEvent: `It happens in ${beat}`, resultingChange: `Pressure changes in ${beat}`, terminalState: `After ${beat}`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
   const actions: string[] = [];
   const billable = validatedWorkerBilling(actions, (action) => {

@@ -2926,11 +2926,14 @@ The JSON request contains the authoritative obligations exactly once.`,
       // The previous prompt told expansion not to replay earlier events but
       // never actually provided the global existing-event ledger. Both global
       // and beat-local expansion need this cross-beat context.
-      usedEventLedger: current.map((section) => ({
+      // Keep the model-facing ledger bounded; deterministic validation still
+      // checks every section, while the prompt only needs the most recent
+      // completed events to steer expansion away from replay.
+      usedEventLedger: current.slice(-40).map((section) => ({
         beatID: section.storyArcBeatID,
         title: compactText(section.title, 90),
-        event: compactText(section.dramaticEvent ?? section.summary, 220),
-        resultingChange: compactText(section.resultingChange, 140),
+        event: compactText(section.dramaticEvent ?? section.summary, 120),
+        resultingChange: compactText(section.resultingChange, 80),
       })),
       neighbors: { previous: [], next: [] },
       expansion: { round, projectedTokens, projectedWords, desiredWords: context?.desiredWords ?? NOVEL_TARGET_WORDS, remainingDeficitTokens },
