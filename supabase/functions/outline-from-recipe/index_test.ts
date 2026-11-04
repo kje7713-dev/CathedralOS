@@ -43,6 +43,10 @@ import {
   maximumBudgetedNewSections,
   maximumContainerPlannedNewSections,
   NOVEL_MIXED_SECTION_ESTIMATE_TOKENS,
+  NOVEL_MIXED_SECTION_ESTIMATE_WORDS,
+  NOVEL_CONTAINER_WORD_TARGETS,
+  NOVEL_FIRST_PASS_WORD_GOAL,
+  projectedExpectedWords,
   NOVEL_ACCEPTED_MAX_WORDS,
   NOVEL_MAX_GRACE_WORDS,
   allocationDeficits,
@@ -547,13 +551,13 @@ Deno.test("unknown novel allocation uses the mixed-section estimate", () => {
   const chapterTokens = projectedExpectedTokens([{ container: "chapter" }]);
   assertEquals(chapterTokens, 5500);
   assertEquals(NOVEL_MIXED_SECTION_ESTIMATE_TOKENS, 3500);
-  assertEquals(maximumBudgetedNewSections(req), Math.floor(125000 * 1.3 / NOVEL_MIXED_SECTION_ESTIMATE_TOKENS));
+  assertEquals(maximumBudgetedNewSections(req), Math.floor(125000 / NOVEL_MIXED_SECTION_ESTIMATE_WORDS));
   assertEquals(maximumContainerPlannedNewSections(req), 46);
   assertEquals(Math.round(115000 * 1.3 / NOVEL_MIXED_SECTION_ESTIMATE_TOKENS), 43);
   const scale = evaluateNovelScale(
     Array.from({ length: 28 }, () => ({ container: "chapter" })),
   );
-  assertEquals(Math.round(scale.projectedWords), 118462);
+  assertEquals(scale.projectedWords, 117600);
   assertEquals(scale.meetsPreferredMinimum, true);
   assertEquals(scale.exceedsMaximum, false);
 });
@@ -578,7 +582,7 @@ Deno.test("container-aware planner can allocate a mixed 120k-word first pass bey
   const scale = evaluateNovelScale(plannedContainers);
   assertEquals(scale.meetsPreferredMinimum, true);
   assertEquals(scale.exceedsMaximum, false);
-  assertEquals(Math.round(scale.projectedWords), 120769);
+  assertEquals(scale.projectedWords, 120800);
   const schema: any = buildSuggestionResponseSchema(beats, fitted, [], "", "novel");
   const beatSchema = schema.properties.beats.properties["beat-1"];
   assertEquals(beatSchema.type, "array");
@@ -620,7 +624,8 @@ Deno.test("novel planning provider receives strict typed budget and carries 40 s
     providerCalls++;
     assertEquals(action, "outline-plan");
     assertEquals(system.includes("Return containerCounts on each beat"), true);
-    assertEquals(user.includes("containerMidpointTokens"), true);
+    assertEquals(user.includes("containerWordTargets"), true);
+    assertEquals(user.includes("containerMidpointTokens"), false);
     const schema = format.json_schema.schema;
     const item = schema.properties.allocations.items;
     assertEquals(item.required.includes("containerCounts"), true);
@@ -1390,7 +1395,7 @@ Deno.test("malformed mixes recover first-pass novel length without changing vali
         ? container === "scene" ? Math.ceil(min / 2) : container === "developedScene" ? Math.floor(min / 2) : 0
         : mix[index],
     }, () => ({ container }))));
-  assertEquals(Math.round(evaluateNovelScale(legacyFallback).projectedWords), 85962,
+  assertEquals(Math.round(evaluateNovelScale(legacyFallback).projectedWords), 86350,
     "reproduce the observed 85,962-word under-allocation before correcting it");
   const fitted = fitAllocationToNovelBudget(parsed, req);
   const allContainers = Array.from(fitted.values()).flatMap((plan) =>
@@ -1413,6 +1418,53 @@ Deno.test("malformed mixes recover first-pass novel length without changing vali
   }
 });
 
+Deno.test("November 4 typed 28-section allocation is reconciled in WORDS before the paid first pass", () => {
+  // Actual production mix: 14 chapters, eight sequences, three set pieces,
+  // three developed scenes. This previously bypassed the <=3-chapter repair
+  // and forced expansion from ~103k words.
+  const beats = Array.from({ length: 10 }, (_, i) => ({ id: `arc-${i}` }));
+  const mix = [
+    {chapter:2,sceneSequence:0,setPiece:0,developedScene:0,scene:0},
+    {chapter:1,sceneSequence:1,setPiece:0,developedScene:0,scene:0},
+    {chapter:1,sceneSequence:1,setPiece:0,developedScene:1,scene:0},
+    {chapter:2,sceneSequence:1,setPiece:1,developedScene:0,scene:0},
+    {chapter:2,sceneSequence:1,setPiece:1,developedScene:0,scene:0},
+    {chapter:1,sceneSequence:1,setPiece:0,developedScene:1,scene:0},
+    {chapter:1,sceneSequence:1,setPiece:0,developedScene:1,scene:0},
+    {chapter:2,sceneSequence:0,setPiece:1,developedScene:0,scene:0},
+    {chapter:1,sceneSequence:1,setPiece:0,developedScene:0,scene:0},
+    {chapter:1,sceneSequence:1,setPiece:0,developedScene:0,scene:0},
+  ];
+  const allocation = new Map(beats.map((beat,i) => [beat.id,{
+    minSections:Object.values(mix[i]).reduce((a,b)=>a+b,0),
+    containerCounts:{...mix[i]},rationale:`Distinct dramatic shift for ${beat.id}`,
+  }]));
+  const original = Array.from(allocation.values()).flatMap((plan) =>
+    Object.entries(plan.containerCounts).flatMap(([container,count]) =>
+      Array.from({length:count},()=>({container}))));
+  assertEquals(original.length,28);
+  assertEquals(projectedExpectedWords(original),102950);
+  const req = {...sparseRequest,requestedFormat:"novel",
+    arcTemplate:{...sparseRequest.arcTemplate,beats},existingSections:[]} as any;
+  const fitted = fitAllocationToNovelBudget(allocation as any,req);
+  const full = Array.from(fitted.values()).flatMap((plan) =>
+    Object.entries(plan.containerCounts!).flatMap(([container,count]) =>
+      Array.from({length:count},()=>({container}))));
+  assertEquals(full.length,33,"five added chapters close the first-pass WORD gap");
+  assertEquals(projectedExpectedWords(full),123950);
+  assertEquals(evaluateNovelScale(full).meetsMinimum,true);
+  assertEquals(evaluateNovelScale(full).exceedsMaximum,false);
+  assertEquals(evaluateNovelScale(full.filter((s)=>s.container!=="chapter")
+    .concat(full.filter((s)=>s.container==="chapter").slice(2))).meetsMinimum,true,
+    "two duplicate chapters can be removed without invoking length expansion");
+  assertEquals(Array.from(allocation.values()).reduce((n,p)=>n+p.minSections,0),28,
+    "the original model allocation remains unchanged");
+  const prompt = buildPrompt(req,fitted as any).system;
+  assertEquals(prompt.includes("beat word budget"),true);
+  assertEquals(prompt.includes("words)"),true);
+  assertEquals(NOVEL_FIRST_PASS_WORD_GOAL,121000);
+});
+
 Deno.test("valid near-target 26-chapter allocation is reconciled before first-pass generation", () => {
   const beats = Array.from({ length: 10 }, (_, index) => ({ id: `beat-${index + 1}` }));
   const allocation = new Map(beats.map((beat, index) => {
@@ -1424,7 +1476,7 @@ Deno.test("valid near-target 26-chapter allocation is reconciled before first-pa
   }));
   const req = { ...sparseRequest, requestedFormat: "novel",
     existingSections: [], arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
-  assertEquals(Math.round(evaluateNovelScale(Array.from({ length: 26 }, () => ({ container: "chapter" }))).projectedWords), 110000);
+  assertEquals(evaluateNovelScale(Array.from({ length: 26 }, () => ({ container: "chapter" }))).projectedWords, 109200);
   const fitted = fitAllocationToNovelBudget(allocation as any, req);
   const all = Array.from(fitted.values()).flatMap((plan) =>
     Array.from({ length: plan.containerCounts!.chapter }, () => ({ container: "chapter" })));
@@ -1438,18 +1490,20 @@ Deno.test("valid near-target 26-chapter allocation is reconciled before first-pa
   assertEquals(Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0), 26,
     "never mutate the original model allocation");
 });
-Deno.test("valid short plans remain untouched and unrecoverable fallback stays usable", () => {
+Deno.test("valid short plans must be grown within the per-beat safety cap, without new errors", () => {
   const counts = { scene: 1, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 };
   const valid = new Map([["beat-1", { minSections: 1, containerCounts: counts, rationale: "intentionally short" }]]);
   const req = { ...sparseRequest, requestedFormat: "novel", existingSections: [] } as any;
   const unchanged = fitAllocationToNovelBudget(valid, req);
-  assertEquals(unchanged.get("beat-1")?.containerCounts, counts);
-  assertEquals(unchanged.get("beat-1")?.minSections, 1);
+  assertEquals(unchanged.get("beat-1")?.containerCounts?.scene, 1,
+    "original model-authored scene is not silently converted into a chapter");
+  assertEquals(unchanged.get("beat-1")?.minSections, 20,
+    "even severely short but valid plans are no longer blindly trusted; per-beat cap remains");
 
   const missing = new Map([["beat-1", { minSections: 1, rationale: "only one slot available" }]]);
   const recovered = fitAllocationToNovelBudget(missing, req);
-  assertEquals(recovered.get("beat-1")?.minSections, 1);
-  assertEquals(recovered.get("beat-1")?.containerCounts?.chapter, 1);
+  assertEquals(recovered.get("beat-1")?.minSections, 20);
+  assertEquals(recovered.get("beat-1")?.containerCounts?.chapter, 20);
   assertEquals(evaluateNovelScale([{ container: "chapter" }]).meetsMinimum, false);
 });
 
@@ -1479,7 +1533,7 @@ Deno.test("container-aware allocation completes and trims incomplete or oversize
 
 Deno.test("existing accepted sections reduce unknown-mix planning capacity", () => {
   const req = { ...sparseRequest, requestedFormat: "novel", existingSections: [{ container: "chapter" }, { container: "scene" }] } as any;
-  const expected = Math.floor((125000 * 1.3 - 5500 - 1300) / NOVEL_MIXED_SECTION_ESTIMATE_TOKENS);
+  const expected = Math.floor((125000 - NOVEL_CONTAINER_WORD_TARGETS.chapter - NOVEL_CONTAINER_WORD_TARGETS.scene) / NOVEL_MIXED_SECTION_ESTIMATE_WORDS);
   assertEquals(maximumBudgetedNewSections(req), expected);
   assertEquals(maximumContainerPlannedNewSections(req), expected);
 });
@@ -1488,7 +1542,7 @@ Deno.test("novel length tolerances separate under-target expansion from overshoo
   assertEquals(NOVEL_EXPANSION_MIN_WORDS, 112700);
   const nearTarget = Array.from({ length: 27 }, () => ({ container: "chapter" }));
   const belowTolerance = Array.from({ length: 26 }, () => ({ container: "chapter" }));
-  assertEquals(Math.round(evaluateNovelScale(nearTarget).projectedWords), 114231);
+  assertEquals(evaluateNovelScale(nearTarget).projectedWords, 113400);
   assertEquals(evaluateNovelScale(nearTarget).meetsMinimum, false, "115k remains the preferred planning goal");
   assertEquals(needsNovelExpansion(nearTarget), false, "114,231 words is within the 2% tolerance");
   assertEquals(needsNovelExpansion(belowTolerance), true, "110k words still needs development");
@@ -1506,7 +1560,7 @@ Deno.test("novel length tolerances separate under-target expansion from overshoo
       return [];
     },
   );
-  assertEquals(expansionCalls, 0, "no optional provider expansion for a negligible deficit");
+  assertEquals(expansionCalls, 0, "no optional provider expansion for a deficit within the documented tolerance");
   assertEquals(result.suggestions.length, 27);
   assertEquals(result.diagnostics.length, 0);
 });
@@ -2650,26 +2704,27 @@ Deno.test("novel outline handoff treats allocation as complete and projects mixe
   ];
   assertEquals(productionShape.length, 29);
   assertEquals(Math.round(projectedExpectedTokens(productionShape) / 1.3), 77115);
-  assertEquals(Math.round(projectedExpectedTokens(Array.from({ length: 29 }, () => ({ container: "chapter" }))) / 1.3), 122692);
+  assertEquals(projectedExpectedWords(Array.from({ length: 29 }, () => ({ container: "chapter" }))), 121800);
 
   const nonNovelPrompt = buildPrompt({ ...sparseRequest, requestedFormat: "shortStory" } as any, allocation).system;
   assertEquals(nonNovelPrompt.includes("## Use the minimum-only allocation"), true);
   assertEquals(nonNovelPrompt.includes("## Complete first-pass allocation"), false);
 });
 
-Deno.test("novel planning exposes container semantics and projected-size expansion", async () => {
+Deno.test("novel planning exposes explicit word budgets and projected-size expansion", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
-  assertEquals(allocationPrompt.includes("complete first-pass book at approximately 115,000 projected words"), true);
-  assertEquals(allocationPrompt.includes("each known container's midpoint"), true);
-  assertEquals(allocationPrompt.includes("3,500-token mixed-section planning estimate"), true);
-  assertEquals(allocationPrompt.includes("about 43 sections at the preferred target"), true);
+  assertEquals(allocationPrompt.includes("complete first-pass book at approximately 121,000 finished-prose words"), true);
+  assertEquals(allocationPrompt.includes("Budget in finished-prose WORDS"), true);
+  assertEquals(allocationPrompt.includes("never API output tokens"), true);
+  assertEquals(allocationPrompt.includes("3,500-token mixed-section planning estimate"), false);
   assertEquals(allocationPrompt.includes("minSections is the intended complete first-pass allocation"), true);
   assertEquals(allocationPrompt.includes("a beat with sufficient existing coverage must remain at 0"), true);
   assertEquals(allocationPrompt.includes("Do not add sections to a sufficiently covered beat"), true);
   assertEquals(source.includes("targetSections"), false);
   assertEquals(source.includes("maxSections"), false);
   assertEquals(source.includes("fitAllocationToNovelTarget"), false);
+  assertEquals(source.includes("NOVEL_CONTAINER_WORD_TARGETS"), true);
   assertEquals(source.includes("promptLimit"), false);
   assertEquals(source.includes("assertPromptWithinBudget"), false);
   assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
@@ -3198,13 +3253,13 @@ Deno.test("budget fitting records partial acceptance and discarded candidates", 
 });
 
 Deno.test("a 129K-word projected novel cannot dispatch paid expansion when no section fits", async () => {
-  // 30 chapter midpoints + three scenes = 168,900 tokens (129,923 words).
-  // The accepted 130K ceiling leaves only 100 tokens: no novel leaf fits.
+  // 30 chapters + four scenes = 130,000 planned words.
+  // At the accepted 130K-word ceiling, no novel leaf can fit.
   const nearCap = [
     ...Array.from({ length: 30 }, (_, i) => expansionSection(`Chapter ${i}`, "chapter")),
-    ...Array.from({ length: 3 }, (_, i) => expansionSection(`Scene ${i}`, "scene")),
+    ...Array.from({ length: 4 }, (_, i) => expansionSection(`Scene ${i}`, "scene")),
   ];
-  assertEquals(Math.round(evaluateNovelScale(nearCap).projectedWords), 129923);
+  assertEquals(evaluateNovelScale(nearCap).projectedWords, 130000);
   assertEquals(canFitNovelExpansion(nearCap), false);
   let providerCalls = 0;
   const result = await progressivelyExpandOutline(
