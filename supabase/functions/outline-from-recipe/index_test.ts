@@ -1324,7 +1324,8 @@ Deno.test("selected book-level climax persists into outline without forcing the 
 });
 
 Deno.test("climax causality is carried through existing planning, first pass, and semantic review", async () => {
-  const request = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const request = { ...sparseRequest, requestedFormat: "novel",
+    arcTemplate: { ...sparseRequest.arcTemplate, name: "Coming-of-Age / Bildungsroman" } } as any;
   const architecture = {
     arcExperience: "A consequential choice changes how the protagonists see themselves.",
     centralQuestion: "Will a protagonist take a personal risk for someone else?",
