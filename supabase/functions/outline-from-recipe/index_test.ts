@@ -1413,6 +1413,31 @@ Deno.test("malformed mixes recover first-pass novel length without changing vali
   }
 });
 
+Deno.test("valid near-target 26-chapter allocation is reconciled before first-pass generation", () => {
+  const beats = Array.from({ length: 10 }, (_, index) => ({ id: `beat-${index + 1}` }));
+  const allocation = new Map(beats.map((beat, index) => {
+    const chapters = index < 6 ? 3 : 2;
+    return [beat.id, {
+      minSections: chapters, rationale: `Distinct character-caused development in ${beat.id}`,
+      containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: chapters },
+    }] as const;
+  }));
+  const req = { ...sparseRequest, requestedFormat: "novel",
+    existingSections: [], arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  assertEquals(Math.round(evaluateNovelScale(Array.from({ length: 26 }, () => ({ container: "chapter" }))).projectedWords), 110000);
+  const fitted = fitAllocationToNovelBudget(allocation as any, req);
+  const all = Array.from(fitted.values()).flatMap((plan) =>
+    Array.from({ length: plan.containerCounts!.chapter }, () => ({ container: "chapter" })));
+  assertEquals(all.length, 29, "recover scale with only three additional substantive first-pass chapters");
+  assertEquals(evaluateNovelScale(all).meetsMinimum, true);
+  assertEquals(evaluateNovelScale(all).projectedWords <= 125000, true);
+  assertEquals(evaluateNovelScale(all.slice(1)).meetsMinimum, true,
+    "one exact repeated chapter can be removed without forcing length expansion");
+  assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections <= 20), true);
+  assertEquals(Array.from(fitted.values()).every((plan) => plan.containerCounts!.chapter === plan.minSections), true);
+  assertEquals(Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0), 26,
+    "never mutate the original model allocation");
+});
 Deno.test("valid short plans remain untouched and unrecoverable fallback stays usable", () => {
   const counts = { scene: 1, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 };
   const valid = new Map([["beat-1", { minSections: 1, containerCounts: counts, rationale: "intentionally short" }]]);
@@ -2739,6 +2764,51 @@ Deno.test("first-pass deduplication removes cross-beat replay and keeps the firs
   assertEquals(result.removed, [{ title: "Same Event", index: 1 }]);
 });
 
+Deno.test("title-independent exact dramatic replay is removed across Story Arc beats", () => {
+  const original = {
+    title: "A Name on the Windshield", summary: "Ted refuses a diner performance and leaves the published records.",
+    dramaticEvent: "Ted leaves the public records and Millie chooses to stay with the trio.",
+    resultingChange: "Ted accepts limited responsibility and Millie chooses her companions.",
+    terminalState: "The trio drives away with a different public identity.",
+    entryState: "The confrontation has ended.", terminalBeat: "They drive away.",
+    container: "chapter", pov: "thirdPersonLimited", dramaticFunction: "resolution",
+    storyArcBeatID: "aftermath",
+  };
+  const replay = { ...original, title: "The Receipt Left Behind", storyArcBeatID: "final-image" };
+  const distinctConsequence = { ...original, title: "The Consequence Arrives",
+    storyArcBeatID: "final-image", dramaticEvent: "A witness publicly rejects Ted's records.",
+    resultingChange: "Ted must choose whether to protect a new witness." };
+  const result = removeDuplicateOutlineSections([original, replay, distinctConsequence] as any);
+  assertEquals(result.suggestions.map((section) => section.title),
+    ["A Name on the Windshield", "The Consequence Arrives"]);
+  assertEquals(result.removed, [{ title: "The Receipt Left Behind", index: 1 }]);
+  assertEquals(findDramaticDistinctnessIssues([original, replay] as any).length, 1,
+    "the nonblocking quality diagnostic must inspect other Story Arc beats too");
+});
+
+Deno.test("expansion silently skips cross-beat exact replay but keeps new dramatic work", () => {
+  const original = semanticSection("beginning", "The First Departure",
+    "Ted chooses to leave the town with Millie after the public incident.", "transformation");
+  const replay = { ...original, title: "The Last Departure", storyArcBeatID: "ending",
+    insertAfterTitle: null };
+  const newConsequence = { ...original, title: "The New Witness", storyArcBeatID: "ending",
+    dramaticEvent: "Millie confronts the witness who filmed their departure.",
+    summary: "Millie confronts the witness who filmed their departure.",
+    resultingChange: "The witness becomes an ally despite the public scrutiny.",
+    insertAfterTitle: null };
+  const parsed = parseExpansionResponse(
+    JSON.stringify({ suggestions: [replay, newConsequence] }),
+    new Set(["beginning", "ending"]), [original] as any);
+  assertEquals(parsed.map((section) => section.title), ["The New Witness"]);
+  const entirelyReplayed = parseExpansionResponse(
+    JSON.stringify({ suggestions: [replay] }),
+    new Set(["beginning", "ending"]), [original] as any);
+  assertEquals(entirelyReplayed, [], "duplicate proposals are no-ops, never a new failure path");
+  const prompt = JSON.parse(buildExpansionPrompt(sparseRequest as any, [original] as any).user);
+  assertEquals(prompt.usedEventLedger.length, 1);
+  assertEquals(prompt.usedEventLedger[0].event, original.dramaticEvent);
+  assertEquals(prompt.usedEventLedger[0].resultingChange, original.resultingChange);
+});
 Deno.test("outline rejects repeated titles across Story Arc beats", () => {
   const section = (beat: string) => ({
     title: "The Archive Handoff", summary: "A distinct handoff.", container: "scene",
@@ -3438,7 +3508,7 @@ Deno.test("invalid expansion is a terminal failed_expansion, never a completed u
   try {
     validateExpansionAdditions({ suggestions: [duplicate, duplicate] }, new Set(["beat-1"]), initial as any);
   } catch { rejected = true; }
-  assertEquals(rejected, true);
+  assertEquals(rejected, false, "exact replay proposals are silent no-ops");
   let failure: unknown;
   try {
     await progressivelyExpandOutline(initial as any, new Set(["beat-1"]), async () => {
@@ -7123,8 +7193,8 @@ Deno.test("missing recipe IDs remain internal QA and never discard a paid outlin
   const section = (beat: string) => ({
     title: `Missing ${beat}`, summary: "Missing recipe coverage", container: "scene",
     pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before",
-    dramaticEvent: "It happens", resultingChange: "Pressure changes",
-    terminalState: "After", storyArcBeatID: beat,
+    dramaticEvent: `It happens in ${beat}`, resultingChange: `Pressure changes in ${beat}`,
+    terminalState: `After ${beat}`, storyArcBeatID: beat,
     dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: [],
   });
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
@@ -7200,7 +7270,7 @@ Deno.test("first-pass recipe coverage enters novel length controls without a nar
   );
   const body = { ...fullBody, requestedFormat: "novel", storyMaterialEnrichment: novelMaterial } as any;
   const obligations = deriveRecipeObligations(body.recipe as any);
-  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: "A section", container: "scene", pov: "thirdPersonLimited", terminalBeat: "It ends", entryState: "Before", dramaticEvent: "It happens", resultingChange: "Pressure changes", terminalState: "After", storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
+  const section = (ids: string[], beat = "beat-1") => ({ title: `Repairable ${beat}`, summary: `A section in ${beat}`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `It ends in ${beat}`, entryState: `Before ${beat}`, dramaticEvent: `It happens in ${beat}`, resultingChange: `Pressure changes in ${beat}`, terminalState: `After ${beat}`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: ids });
   const db = new ExecutableRunDb(checkpointedWorkerRow(body));
   const actions: string[] = [];
   const billable = validatedWorkerBilling(actions, (action) => {
