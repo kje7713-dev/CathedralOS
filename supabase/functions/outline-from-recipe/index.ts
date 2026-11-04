@@ -3553,7 +3553,8 @@ export function fitAllocationToNovelBudget(
   const desiredTotalWords = Math.min(NOVEL_FIRST_PASS_WORD_GOAL, NOVEL_MAX_WORDS);
   const startingCounts = new Map(Array.from(normalized.entries()).map(([id, plan]) => [id, plan.minSections]));
   const addedCounts = new Map<string, number>();
-  while (existingWords + plannedWords() < desiredTotalWords && sectionCount() < MAX_PLANNED_SECTIONS) {
+  while (existingWords + plannedWords() < desiredTotalWords && sectionCount() < MAX_PLANNED_SECTIONS &&
+    (missingMixBeatIDs.length === 0 || existingWords + plannedWords() < NOVEL_PREFERRED_MIN_WORDS)) {
     const availableWords = nominalRemainingWords - plannedWords();
     const container = (["chapter", "sceneSequence", "setPiece", "developedScene", "scene"] as const)
       .find((type) => NOVEL_CONTAINER_WORD_TARGETS[type] <= availableWords);
