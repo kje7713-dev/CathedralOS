@@ -2719,7 +2719,12 @@ Deno.test("novel outline handoff treats allocation as complete and projects mixe
 
 Deno.test("novel planning exposes explicit word budgets and projected-size expansion", async () => {
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  const allocationPrompt = buildAllocationPrompt(sparseRequest as any).system;
+  const allocationPrompt = buildAllocationPrompt({ ...sparseRequest, requestedFormat: "novel" } as any).system;
+  assertEquals(allocationPrompt.indexOf("Binding whole-book creative objective") <
+    allocationPrompt.indexOf("Choose an exceptional, arc-specific ending"), true,
+    "the novelist must know the 115k-word objective before choosing the story");
+  assertEquals(allocationPrompt.includes("minimum objective of 115,000 WORDS"), true);
+  assertEquals(allocationPrompt.includes("do not first invent a short plot"), true);
   assertEquals(allocationPrompt.includes("complete book at approximately 121,000 finished-prose words"), true);
   assertEquals(allocationPrompt.includes("Budget in finished-prose WORDS"), true);
   assertEquals(allocationPrompt.includes("never API output tokens"), true);
