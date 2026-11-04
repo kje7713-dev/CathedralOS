@@ -782,6 +782,49 @@ Deno.test("arc experience survives strict allocation, outline handoff, and seman
   );
 });
 
+Deno.test("first-pass event ownership is arc-neutral and does not create repair or failure stages", () => {
+  const architecture = {
+    arcExperience: "The authored relationship and stakes determine the emotional payoff.",
+    centralQuestion: "Will their choice permanently change the relationship?",
+    characterCausality: "Their contrary decisions create irreversible costs.",
+    decisiveClimax: "A defining decision completes the book-level outcome.",
+    endingConsequence: "The consequences endure without a second climax.",
+    deliberatelyOpenThreads: "The wider conflict remains open.",
+  };
+  // The same causality rule must apply even when the selected arc name changes.
+  for (const name of ["Romantasy", "Horror / Escalating Dread", "Unclassified Custom Arc"]) {
+    const request: any = {
+      ...sparseRequest,
+      arcTemplate: {
+        ...sparseRequest.arcTemplate,
+        name,
+        beats: [
+          { id: "opening", label: "Opening", role: "setup", description: "Establish their conflict." },
+          { id: "crisis", label: "Crisis", role: "crisis", description: "The outcome remains in doubt." },
+          { id: "payoff", label: "Decisive Choice", role: "climax", description: "A defining outcome occurs." },
+          { id: "after", label: "Changed World", role: "resolution", description: "Dramatize lasting consequences." },
+        ],
+      },
+    };
+    const planning = buildAllocationPrompt(request);
+    const outline = buildPrompt(request, new Map(), [], undefined, architecture);
+
+    assertStringIncludes(planning.system, "## Assign one-time events to their owning Story Arc movement");
+    assertStringIncludes(planning.system, "one continuous causal story across ALL beats");
+    assertStringIncludes(planning.system, "Earlier beats can threaten, prepare, reverse an apparent advantage");
+    assertStringIncludes(planning.system, "Later beats must start from the changed reality");
+    assertStringIncludes(outline.system, "## First-pass event ownership and state inheritance");
+    assertStringIncludes(outline.system, "dramaticEvent → resultingChange → terminalState");
+    assertStringIncludes(outline.system, "every later section inherits that changed state");
+    assertStringIncludes(outline.system, "An intentional callback, an evolving relationship");
+    assertStringIncludes(outline.system, "redesign the LATER section in its existing allocation");
+    assertStringIncludes(outline.system, "not an output field, validator, additional call, or failure condition");
+    assertStringIncludes(outline.system, architecture.decisiveClimax);
+    assertEquals(JSON.parse(planning.user).planningContext.arc.beats.length, 4);
+    assertEquals(JSON.parse(outline.user).planningContext.arc.beats.length, 4);
+  }
+});
+
 Deno.test("high-impact endings preserve existing architecture schema and one-call planning", async () => {
   const req = { ...sparseRequest, requestedFormat: "novel" } as any;
   let calls = 0;
