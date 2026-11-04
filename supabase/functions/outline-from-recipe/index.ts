@@ -3831,8 +3831,11 @@ export function buildAllocationPrompt(
   const containerBudgetInstructions = isNovel
     ? `Budget in finished-prose WORDS, never API output tokens: scene=${NOVEL_CONTAINER_WORD_TARGETS.scene.toLocaleString()} words, developedScene=${NOVEL_CONTAINER_WORD_TARGETS.developedScene.toLocaleString()}, setPiece=${NOVEL_CONTAINER_WORD_TARGETS.setPiece.toLocaleString()}, sceneSequence=${NOVEL_CONTAINER_WORD_TARGETS.sceneSequence.toLocaleString()}, chapter=${NOVEL_CONTAINER_WORD_TARGETS.chapter.toLocaleString()}. Return containerCounts on each beat, with minSections exactly their sum. Sum the WORD targets of every proposed section plus accepted existing sections. The first-pass book must plan 115,000–125,000 words (aim approximately ${NOVEL_FIRST_PASS_WORD_GOAL.toLocaleString()} to accommodate deduplication). Give every section distinct dramatic substance appropriate to its word budget; never fill with paraphrased events. The 125,000-word nominal planning cap is absolute. The server reconciles any incomplete or short valid mix in WORDS before generation.`
     : "Allocate the number of format-appropriate sections needed for complete Story Arc coverage without the novel-only word or container budget.";
-    const system =
-    `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), decide how many outline sections each beat deserves in this particular ${requestedStoryMaterialFormat(req)}.
+  const system =
+    `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), design a complete ${requestedStoryMaterialFormat(req)} story and allocate its first-pass sections.
+
+${isNovel ? `## Binding whole-book creative objective — BEFORE inventing the plot
+Design a FULL-LENGTH NOVEL whose finished prose has a minimum objective of 115,000 WORDS, with a hard maximum of 125,000 words. Develop the story architecture, defining conflict, character journeys, distinct dramatic developments, reversals, climax, and irreversible aftermath with ENOUGH ORIGINAL STORY SUBSTANCE to sustain at least 115,000 words. This word-length requirement governs story design itself; do not first invent a short plot and then stretch it with extra scenes or repeated events. After making those author-and-arc-driven story decisions, assign word budgets across the sections, targeting approximately ${NOVEL_FIRST_PASS_WORD_GOAL.toLocaleString()} words as a safety buffer. Words are the story unit; API output tokens are not.` : ""}
 
 ## Binding experience of the selected Story Arc (same model call)
 ${arcReaderExperienceDirective(req.arcTemplate)}
