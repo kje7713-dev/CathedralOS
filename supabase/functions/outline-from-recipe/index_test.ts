@@ -764,6 +764,51 @@ Deno.test("selected arc imposes its own reader experience before any plot machin
   assertEquals(new Set([horror, romance, mystery, generic]).size, 4);
 });
 
+Deno.test("genre-bearing Story Arcs explicitly govern the reader experience and decisive climax", () => {
+  const beats = [
+    {id:"setup",role:"sheltered_identity",label:"Beginning",description:"Establish the inherited identity."},
+    {id:"adult",role:"adult_choice",label:"Adult Choice",description:"Force a life-changing decision."},
+  ];
+  const contracts: Array<[string,string,string]> = [
+    ["Coming-of-Age / Bildungsroman", "PRIMARY reading experience is identity formation", "climax MUST be the character's consequential Adult Choice"],
+    ["Romantasy", "both emotionally central romance", "climax must settle the book's defining romantic choice"],
+    ["Romantic Suspense", "genuine danger and mounting suspense", "climax must resolve the central danger"],
+    ["Dark Romance", "psychologically charged desire", "climax must force a consequential reckoning"],
+    ["Sports Romance", "Athletic ambition", "climax must make the defining sporting stakes"],
+    ["Revenge", "obsession, retaliation", "climax must settle the defining revenge question"],
+    ["Heist / Caper", "risky teamwork, misdirection", "climax must resolve the heist"],
+    ["Redemption / Rebirth", "destructive old patterns", "climax must require an irreversible redemptive act"],
+    ["Family Saga / Generational", "family relationships, inheritance", "climax must force a reckoning"],
+    ["Dystopian Rebellion", "rebellion under systemic pressure", "climax must force a consequential rebellion-defining choice"],
+    ["Epic Fantasy Quest", "wonder, peril", "climax must deliver the book's defining quest confrontation"],
+    ["Progression Fantasy / LitRPG", "hard-won breakthrough", "climax must prove a distinctive hard-won breakthrough"],
+    ["Historical War / Survival", "historical danger", "climax must force a decisive choice"],
+    ["Science-Fiction Problem / Survival", "speculative rules", "climax must make a decisive survival choice"],
+    ["Conspiracy / Artifact Thriller", "mounting danger and awe", "climax must reveal or use the defining hidden truth"],
+    ["Psychological / Domestic Thriller", "psychological suspense", "climax must force the protagonist"],
+    ["Suspense / Countdown Thriller", "shrinking time", "climax must answer the actual deadline threat"],
+  ];
+  for (const [name, experience, climax] of contracts) {
+    const arc = {...sparseRequest.arcTemplate,name,beats};
+    const directive = arcReaderExperienceDirective(arc);
+    assertStringIncludes(directive,experience,name);
+    assertStringIncludes(directive,climax,name);
+    const req = {...sparseRequest,requestedFormat:"novel",arcTemplate:arc} as any;
+    const planning = buildAllocationPrompt(req).system;
+    assertStringIncludes(planning,directive);
+    assertEquals(planning.indexOf("Binding whole-book creative objective") < planning.indexOf("Choose an exceptional, arc-specific ending before building the central plot"),true,name);
+    assertStringIncludes(planning,"genre/reader-experience promise governs the kind of climax");
+    const outline = buildPrompt(req,new Map()).system;
+    assertStringIncludes(outline,directive);
+    const verification = semanticVerificationInput([],arc,req.recipe) as any;
+    assertStringIncludes(verification.arcReaderExperienceContract,directive);
+  }
+  const neutral = arcReaderExperienceDirective({...sparseRequest.arcTemplate,name:"Three-Act",beats});
+  assertStringIncludes(neutral,"genre from the AUTHOR'S RECIPE");
+  assertEquals(neutral.includes("climax MUST be the character's consequential Adult Choice"),false,
+    "generic story structures must not silently impose Coming-of-Age genre");
+});
+
 Deno.test("arc experience survives strict allocation, outline handoff, and semantic review input", () => {
   const req: any = { ...sparseRequest, arcTemplate: { ...sparseRequest.arcTemplate, name: "Horror / Escalating Dread" } };
   const planning = buildAllocationPrompt(req);
