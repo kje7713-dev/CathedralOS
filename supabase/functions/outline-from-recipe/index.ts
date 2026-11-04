@@ -2941,6 +2941,7 @@ export function validateExpansionAdditions(
   const additions: ExpansionAddition[] = [];
   const fingerprints = new Set(original.map((s) => `${s.title}|${s.summary}|${s.storyArcBeatID}`));
   const titles = new Set(original.map((s) => s.title.trim().replace(/\s+/g, " ").toLocaleLowerCase()));
+  const narrativeChanges = new Set(original.map(narrativeChangeFingerprint).filter((value): value is string => value !== null));
   for (const raw of parsed.suggestions) {
     const { insertAfterTitle, arcObligationEvidence: _ignoredArcObligationEvidence, ...expansionSection } = raw ?? {};
     // Optional expansion predates the Story Arc semantic-role contract. Keep
@@ -2968,11 +2969,15 @@ export function validateExpansionAdditions(
       }
     }
     const fingerprint = `${validated.title}|${validated.summary}|${validated.storyArcBeatID}`;
-    if (fingerprints.has(fingerprint)) throw new Error("expansion introduced a duplicate section contract");
-    fingerprints.add(fingerprint);
     const titleKey = validated.title.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-    if (titles.has(titleKey)) throw new Error(`expansion introduced a duplicate outline title: ${validated.title}`);
+    const narrative = narrativeChangeFingerprint(validated);
+    // An already-completed event is not new story and should not become a paid
+    // retry/failure. Ignore it, including when the title or arc beat differs.
+    if (fingerprints.has(fingerprint) || titles.has(titleKey) ||
+        (narrative !== null && narrativeChanges.has(narrative))) continue;
+    fingerprints.add(fingerprint);
     titles.add(titleKey);
+    if (narrative !== null) narrativeChanges.add(narrative);
     additions.push({ ...validated, insertAfterTitle: resolvedInsertAfterTitle });
   }
   return additions;
@@ -3524,6 +3529,34 @@ export function fitAllocationToNovelBudget(
     }
   }
 
+  // A valid typed allocation can still miss the novel target (e.g. 26 chapters
+  // project ~110k words). Recover a NEAR-TARGET whole-book plan before the paid
+  // first pass, using at most three genuine chapter-scale slots across already
+  // developed beats. Avoid manufacturing dozens of sections from a sparse plan.
+  // One chapter's headroom absorbs an occasional exact replay removed below.
+  // Malformed mixes retain their separate deterministic recovery above.
+  const chapterTokens = projectedExpectedTokens([{ container: "chapter" }]);
+  const firstPassTargetTokens = NOVEL_MIN_PROJECTED_TOKENS + chapterTokens;
+  const maxRecoveryChapters = 3;
+  const missingTokens = firstPassTargetTokens - existingTokens - projected();
+  if (missingMixBeatIDs.length === 0 &&
+      existingTokens + projected() < NOVEL_MIN_PROJECTED_TOKENS &&
+      missingTokens > 0 && missingTokens <= maxRecoveryChapters * chapterTokens) {
+    const eligible = Array.from(normalized.entries())
+      .filter(([, plan]) => plan.minSections > 0 && plan.minSections < 20 &&
+        (plan.containerCounts?.chapter ?? 0) > 0)
+      .sort((left, right) => right[1].minSections - left[1].minSections);
+    for (let index = 0; eligible.length > 0 && index < maxRecoveryChapters &&
+      existingTokens + projected() < firstPassTargetTokens; index++) {
+      if (existingTokens + projected() + chapterTokens > NOVEL_MAX_PROJECTED_TOKENS ||
+          Array.from(normalized.values()).reduce((sum, plan) => sum + plan.minSections, 0) >= MAX_PLANNED_SECTIONS) break;
+      const plan = eligible[index % eligible.length][1];
+      if (plan.minSections >= 20) continue;
+      plan.containerCounts!.chapter++;
+      plan.minSections++;
+    }
+  }
+
   while (projected() > acceptedTokens) {
     const candidates = Array.from(normalized.entries()).flatMap(([beatID, plan]) =>
       NOVEL_LEAF_CONTAINERS.filter((container) => plan.containerCounts![container] > 1).map((container) => ({
@@ -3543,7 +3576,9 @@ export function fitAllocationToNovelBudget(
     const changed = original.minSections !== plan.minSections ||
       JSON.stringify(original.containerCounts ?? null) !== JSON.stringify(plan.containerCounts);
     return [beatID, changed
-      ? { ...plan, rationale: `${plan.rationale} Budget-normalized to the accepted ${NOVEL_ACCEPTED_MAX_WORDS.toLocaleString()}-word ceiling while preserving container slots.` }
+      ? { ...plan, rationale: `${plan.rationale} ${plan.minSections > original.minSections
+          ? "Reconciled near-target first-pass chapter budget without introducing a new planning stage."
+          : `Budget-normalized to the accepted ${NOVEL_ACCEPTED_MAX_WORDS.toLocaleString()}-word ceiling while preserving container slots.`}` }
       : plan] as [string, Allocation];
   }));
 }
@@ -3565,6 +3600,15 @@ export function suggestionContractFingerprint(suggestion: Suggestion): string {
     suggestion.resultingChange ?? "",
     suggestion.terminalState ?? "",
   ].map((value) => String(value).trim().replace(/\s+/g, " ").toLocaleLowerCase()).join("|");
+}
+
+/** An exact dramatic outcome belongs to one section, regardless of title or beat.
+ * Require all three change-bearing fields to avoid discarding legitimate
+ * callbacks or sections with incomplete legacy contracts. */
+function narrativeChangeFingerprint(suggestion: Suggestion): string | null {
+  const fields = [suggestion.dramaticEvent, suggestion.resultingChange, suggestion.terminalState]
+    .map((value) => typeof value === "string" ? value.trim().replace(/\s+/g, " ").toLocaleLowerCase() : "");
+  return fields.every(Boolean) ? fields.join("|") : null;
 }
 
 /**
@@ -3590,17 +3634,21 @@ export function removeDuplicateOutlineSections(
 ): { suggestions: Suggestion[]; removed: Array<{ title: string; index: number }> } {
   const seenContracts = new Set<string>();
   const seenTitles = new Set<string>();
+  const seenNarrativeChanges = new Set<string>();
   const kept: Suggestion[] = [];
   const removed: Array<{ title: string; index: number }> = [];
   for (const [index, suggestion] of suggestions.entries()) {
     const contract = suggestionContractFingerprint(suggestion);
     const title = suggestion.title.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-    if (seenContracts.has(contract) || seenTitles.has(title)) {
+    const narrative = narrativeChangeFingerprint(suggestion);
+    if (seenContracts.has(contract) || seenTitles.has(title) ||
+        (narrative !== null && seenNarrativeChanges.has(narrative))) {
       removed.push({ title: suggestion.title, index });
       continue;
     }
     seenContracts.add(contract);
     seenTitles.add(title);
+    if (narrative !== null) seenNarrativeChanges.add(narrative);
     kept.push(suggestion);
   }
   return { suggestions: kept, removed };
@@ -4375,9 +4423,8 @@ export function findDramaticDistinctnessIssues(suggestions: Suggestion[]): strin
   const issues: string[] = [];
   for (let index = 0; index < suggestions.length; index++) {
     const current = suggestions[index];
-    for (let otherIndex = Math.max(0, index - 1); otherIndex < index; otherIndex++) {
+    for (let otherIndex = 0; otherIndex < index; otherIndex++) {
       const other = suggestions[otherIndex];
-      if (other.storyArcBeatID !== current.storyArcBeatID) continue;
       const eventSimilarity = tokenSimilarity(
         current.dramaticEvent ?? current.summary,
         other.dramaticEvent ?? other.summary,
