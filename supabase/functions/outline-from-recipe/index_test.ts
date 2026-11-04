@@ -2746,7 +2746,8 @@ Deno.test("novel planning exposes explicit word budgets and projected-size expan
   assertEquals(outlinePrompt.includes("Fit the complete story package into the budget"), true);
   assertEquals(outlinePrompt.includes("Existing accepted sections already contribute to the complete projection"), true);
   assertEquals(outlinePrompt.includes("do not drop story material"), true);
-  assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), true);
+  assertEquals(outlinePrompt.includes("planned around 1,000 words"), true);
+  assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), false);
   assertEquals(outlinePrompt.includes("Recipe realization priority"), true);
   assertEquals(outlinePrompt.includes("governing creative brief"), true);
   assertEquals(outlinePrompt.includes("Novel-ready section titles"), true);
