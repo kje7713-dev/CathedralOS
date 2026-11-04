@@ -3458,7 +3458,11 @@ export function fitAllocationToNovelBudget(
   // substantial mix, then trim the largest planned units until the accepted projection fits. This keeps every beat represented and keeps the
   // generation schema constrained to named container slots.
   const normalized = new Map<string, Allocation>();
+  const missingMixBeatIDs: string[] = [];
   for (const [beatID, plan] of allocation.entries()) {
+    // A malformed or omitted typed mix must not silently shrink the whole novel.
+    // Valid model-authored container mixes are never subject to the fallback.
+    if (!plan.containerCounts && plan.minSections > 0) missingMixBeatIDs.push(beatID);
     const counts: NovelContainerCounts = {
       scene: 0,
       developedScene: 0,
@@ -3493,6 +3497,29 @@ export function fitAllocationToNovelBudget(
   const projected = () => Array.from(normalized.values()).reduce((total, plan) =>
     total + NOVEL_LEAF_CONTAINERS.reduce((sum, container) =>
       sum + plan.containerCounts![container] * projectedExpectedTokens([{ container }]), 0), 0);
+
+  // Reprice only fallback-created slots against the existing first-pass goal.
+  // Previously the scene/developedScene placeholder mix could turn a valid
+  // 115k+ novel plan into an 86k-word draft before generation even started.
+  // Upgrade those unknown slots round-robin to chapter-sized units until the
+  // projected book reaches target or no such slots remain. Keep original beat
+  // counts and valid mixes untouched. If the available slots cannot reach the
+  // goal, preserve the usable allocation rather than adding a failure gate.
+  let upgraded = true;
+  while (missingMixBeatIDs.length > 0 &&
+    existingTokens + projected() < NOVEL_MIN_PROJECTED_TOKENS && upgraded) {
+    upgraded = false;
+    for (const beatID of missingMixBeatIDs) {
+      if (existingTokens + projected() >= NOVEL_MIN_PROJECTED_TOKENS) break;
+      const counts = normalized.get(beatID)!.containerCounts!;
+      const shorter = (["scene", "developedScene", "setPiece", "sceneSequence"] as const)
+        .find((container) => counts[container] > 0);
+      if (!shorter) continue;
+      counts[shorter]--;
+      counts.chapter++;
+      upgraded = true;
+    }
+  }
 
   while (projected() > acceptedTokens) {
     const candidates = Array.from(normalized.entries()).flatMap(([beatID, plan]) =>
