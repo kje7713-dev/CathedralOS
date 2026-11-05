@@ -133,9 +133,9 @@ Deno.test("all 27 seeded arc templates are audited and only canonical text is up
 Deno.test("fresh built-in Story Arc selections receive 27 distinct creative promises without rewriting existing arcs", async () => {
   const swift = await Deno.readTextFile("./CathedralOSApp/Models/StoryArcTemplate.swift");
   const migration = await Deno.readTextFile("./supabase/migrations/20261105174500_refresh_story_arc_creative_promises.sql");
-  const names = [...swift.matchAll(/static let (\\w+) = StoryArcTemplate\\(/g)];
+  const names = [...swift.matchAll(/static let (\w+) = StoryArcTemplate\(/g)];
   assertEquals(names.length, 27);
-  const templateIDs = [...swift.matchAll(/id: UUID\\(uuidString: "(A0000001-0000-0000-0000-0000000000\\d{2})"\\)/g)];
+  const templateIDs = [...swift.matchAll(/id: UUID\(uuidString: "(A0000001-0000-0000-0000-0000000000\d{2})"\)/g)];
   assertEquals(templateIDs.length, 27);
   for (const match of templateIDs) {
     assertStringIncludes(migration.toLowerCase(), match[1].toLowerCase());
@@ -143,8 +143,8 @@ Deno.test("fresh built-in Story Arc selections receive 27 distinct creative prom
   assertStringIncludes(swift, "A transgressive romance of consuming desire");
   assertStringIncludes(swift, "a memorable, earned choice with lasting consequences");
   assertStringIncludes(migration, "Do not touch public.story_arcs or public.story_arc_beats");
-  assertEquals(/UPDATE\\s+public\\.story_arc_beats\\s/i.test(migration), false);
-  assertEquals(/UPDATE\\s+public\\.story_arcs\\s/i.test(migration), false);
+  assertEquals(/UPDATE\s+public\.story_arc_beats\s/i.test(migration), false);
+  assertEquals(/UPDATE\s+public\.story_arcs\s/i.test(migration), false);
   const promise = arcReaderExperienceDirective({ name: "Dark Romance", beats: [] });
   assertStringIncludes(promise, "Let lovers' choices cause shocking, irreversible changes");
   assertStringIncludes(promise, "do not turn an extreme relationship into therapy exercises");
