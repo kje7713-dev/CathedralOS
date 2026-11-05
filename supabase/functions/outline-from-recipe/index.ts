@@ -744,6 +744,15 @@ export function buildSuggestionResponseSchema(
         throw new Error(`beat ${beat.id} has ${minimum} allocated sections but ${outstanding.length} outstanding required dramatic functions`);
       }
       const ordinaryCount = minimum - outstanding.length;
+      // The required one-time dramatic function belongs only in its reserved
+      // slot; ordinary sections may set it up but must not claim it.
+      const ordinaryFunctions = contract.allowedFunctions.filter((fn) => !outstanding.includes(fn));
+      const ordinarySectionSchema = ordinaryFunctions.length > 0
+        ? { ...providerSectionSchema, properties: {
+          ...providerSectionSchema.properties,
+          dramaticFunction: { type: "string", enum: ordinaryFunctions },
+        } }
+        : providerSectionSchema; // Retain compatibility for custom single-function arcs.
       properties[beat.id] = outstanding.length === 0
         ? { type: "array", minItems: minimum, maxItems: minimum, items: providerSectionSchema }
         : {
@@ -753,7 +762,7 @@ export function buildSuggestionResponseSchema(
               type: "array",
               minItems: ordinaryCount,
               maxItems: ordinaryCount,
-              items: providerSectionSchema,
+              items: ordinarySectionSchema,
             },
             required: {
               type: "object",
@@ -3206,7 +3215,7 @@ export function buildPrompt(
     })
     .join("\n");
   const allocationDirective = isNovel
-    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections, except when a beat has outstanding required dramatic functions. For those beats return an object with "sections" (the ordinary sections in order) and "required" (one named section per required dramatic function, such as "climax" or "resolution"). Those required sections occupy the final ordered slots, in the order the functions are listed below. Write each section for its exact ordered container slot above. Omit "container" from every planned novel section: the server assigns it from the slot. Give each section enough distinct dramatic development to justify its planned scale; never pass off a brief event as a chapter. The allocator already assigned an explicit WORD budget to every section. Each budget is the intended size of the eventual written section, not the length of this outline JSON. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
+    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections, except when a beat has outstanding required dramatic functions. For those beats return an object with "sections" (the ordinary sections in order) and "required" (one named section per required dramatic function, such as "climax" or "resolution"). Those required sections occupy the final ordered slots, in the order the functions are listed below. ONLY the reserved section may perform its one-time required dramatic event. Ordinary sections must provide distinct causal prerequisites, crises, reversals, costs, or consequences; never write the same climax or resolution under another dramaticFunction label. Write each section for its exact ordered container slot above. Omit "container" from every planned novel section: the server assigns it from the slot. Give each section enough distinct dramatic development to justify its planned scale; never pass off a brief event as a chapter. The allocator already assigned an explicit WORD budget to every section. Each budget is the intended size of the eventual written section, not the length of this outline JSON. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
     : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
@@ -3669,7 +3678,22 @@ export function assertDistinctOutlineTitles(suggestions: Suggestion[]): void {
 
 export function removeDuplicateOutlineSections(
   suggestions: Suggestion[],
+  requiredFunctionsByBeat?: Map<string, DramaticFunction[]>,
 ): { suggestions: Suggestion[]; removed: Array<{ title: string; index: number }> } {
+  const titleKey = (section: Suggestion) =>
+    section.title.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  // If an ordinary section replays the designated climax or resolution,
+  // keep the canonical required event instead of the first duplicate.
+  const reservedTitles = new Map<string, number>();
+  const reservedChanges = new Map<string, number>();
+  suggestions.forEach((suggestion, index) => {
+    const required = requiredFunctionsByBeat?.get(suggestion.storyArcBeatID) ?? [];
+    if (!suggestion.dramaticFunction || !required.includes(suggestion.dramaticFunction)) return;
+    const title = titleKey(suggestion);
+    if (!reservedTitles.has(title)) reservedTitles.set(title, index);
+    const narrative = narrativeChangeFingerprint(suggestion);
+    if (narrative && !reservedChanges.has(narrative)) reservedChanges.set(narrative, index);
+  });
   const seenContracts = new Set<string>();
   const seenTitles = new Set<string>();
   const seenNarrativeChanges = new Set<string>();
@@ -3677,9 +3701,11 @@ export function removeDuplicateOutlineSections(
   const removed: Array<{ title: string; index: number }> = [];
   for (const [index, suggestion] of suggestions.entries()) {
     const contract = suggestionContractFingerprint(suggestion);
-    const title = suggestion.title.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+    const title = titleKey(suggestion);
     const narrative = narrativeChangeFingerprint(suggestion);
-    if (seenContracts.has(contract) || seenTitles.has(title) ||
+    if ((reservedTitles.has(title) && reservedTitles.get(title) !== index) ||
+        (narrative !== null && reservedChanges.has(narrative) && reservedChanges.get(narrative) !== index) ||
+        seenContracts.has(contract) || seenTitles.has(title) ||
         (narrative !== null && seenNarrativeChanges.has(narrative))) {
       removed.push({ title: suggestion.title, index });
       continue;
@@ -6253,124 +6279,8 @@ export async function runSuggestionJob(
       }));
     };
 
-    const expandNovel = async (
-      initialSuggestions: Suggestion[],
-      recipeObligations: RecipeObligation[],
-      startRound = 1,
-      startBeatIndex = 0,
-      priorDiagnostics: ExpansionRoundDiagnostic[] = [],
-    ): Promise<ProgressiveExpansionResult> => {
-      const allocationRepairRequired = sectionAllocationDeficits(initialSuggestions).length > 0;
-      diagnostics = {
-        ...diagnostics,
-        stage: "expansion_generation",
-        expansionRounds: priorDiagnostics,
-      };
-      return await progressivelyExpandOutline(
-        initialSuggestions,
-        new Set(body.arcTemplate.beats.map((beat) => beat.id)),
-        async (current, context, beat) => {
-          const expansionContext = beat ? { ...context, beat } : context;
-          const expansion = buildExpansionPrompt(body, current, expansionContext, recipeObligations);
-          const deficits = sectionAllocationDeficits(current);
-          const targetDeficit = beat ? deficits.find((entry) => entry.beatID === beat.beatID) : undefined;
-          if (targetDeficit) {
-            expansion.system += ` This beat is under its post-deduplication allocation floor by ${targetDeficit.missing} section${targetDeficit.missing === 1 ? "" : "s"}. Add that many distinct chapter-scale dramatic units before optional expansion; do not replay any existing section.`;
-          }
-          const expandedRaw = await billableCall(
-            expansion.system,
-            expansion.user,
-            OUTLINE_OUTPUT_TOKEN_BUDGET,
-            { type: "json_schema", json_schema: { name: "outline_expansion", strict: true, schema: buildExpansionResponseSchema(beat ? arcRoleContract(body.arcTemplate.beats.find((candidate) => candidate.id === beat.beatID)!, body.arcTemplate.name) : undefined, requestedStoryMaterialFormat(body), recipeObligations) } },
-            `outline-expansion-${context.round}-${beat?.beatID ?? "global"}`,
-            (content, finishReason) => {
-              const additions = parseExpansionResponse(content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, finishReason);
-              validateNovelLeafContainers(additions, requestedStoryMaterialFormat(body));
-              return fitExpansionAdditionsToBudget(current, additions, body.existingSections ?? [], {
-                round: context.round,
-                beatID: beat?.beatID,
-              });
-            },
-          );
-          const parsedAdditions = parseExpansionResponse(expandedRaw.content, new Set(body.arcTemplate.beats.map((beat) => beat.id)), current, recipeObligations, body.arcTemplate, expandedRaw.finishReason);
-          validateNovelLeafContainers(parsedAdditions, requestedStoryMaterialFormat(body));
-          return fitExpansionAdditionsToBudget(current, parsedAdditions, body.existingSections ?? [], {
-            round: context.round,
-            beatID: beat?.beatID,
-          });
-        },
-        async (_roundDiagnostic, allDiagnostics, current) => {
-          latestValidSuggestions = current;
-          const checkpoint = buildExpansionCheckpoint(current, body.existingSections ?? [], allDiagnostics);
-          diagnostics = {
-            ...diagnostics,
-            stage: "expansion_checkpoint",
-            expansionRounds: allDiagnostics,
-            expansionCheckpoint: checkpoint,
-            novelScale: checkpoint.scale,
-          };
-          const expansionCheckpoint = buildExpansionCheckpoint(current, body.existingSections ?? [], allDiagnostics);
-          planningState = { ...planningState, phase: "expansion", expansionCheckpoint };
-          diagnostics = markMeaningfulProgress(
-            { ...diagnostics, expansionCheckpoint },
-            `expansion_round_checkpoint:${stableJSONStringify(expansionCheckpoint)}`,
-          );
-          await updateRun({
-            suggestions: current,
-            planning_state: planningState,
-            diagnostics,
-          });
-        },
-        {
-          existingSections: body.existingSections ?? [],
-          startRound,
-          startBeatIndex,
-          priorDiagnostics,
-          // Allocation repair is beat-local because the missing section has a
-          // known destination. Optional enrichment is global: unused material
-          // has no canonical beat assignment, so the provider must choose the
-          // beat where it belongs instead of being forced into beat zero.
-          beats: allocationRepairRequired ? body.arcTemplate.beats : undefined,
-          shouldExpandBeat: (current, beatID) => sectionAllocationDeficits(current).some((entry) => entry.beatID === beatID),
-          coverageGate: (current) => requestedStoryMaterialFormat(body) === "novel" && sectionAllocationDeficits(current).length > 0,
-          qualityGate: (current) => {
-            if (requestedStoryMaterialFormat(body) !== "novel") return false;
-            const quality = collectAdvisoryOutlineQuality(
-              current,
-              body.storyMaterialEnrichment,
-              requestedStoryMaterialFormat(body),
-              body.arcTemplate,
-            );
-            return needsNovelExpansion(current, body.existingSections ?? []) ||
-              quality.causalScaleIssues.length > 0;
-          },
-          onBeat: async (round, nextBeatIndex, current, allDiagnostics) => {
-            // Beat-level checkpoints are validated additions too. Keep the
-            // latest one available if a later provider attempt fails.
-            latestValidSuggestions = current;
-            const expansionCheckpoint = buildExpansionCheckpoint(
-              current,
-              body.existingSections ?? [],
-              allDiagnostics,
-              { nextRound: round, nextBeatIndex },
-            );
-            planningState = { ...planningState, phase: "expansion", expansionCheckpoint };
-            diagnostics = {
-              ...diagnostics,
-              stage: "expansion_beat_checkpoint",
-              expansionCheckpoint,
-              expansionRounds: allDiagnostics,
-              novelScale: expansionCheckpoint.scale,
-            };
-            diagnostics = markMeaningfulProgress(
-              diagnostics,
-              `expansion_beat_checkpoint:${stableJSONStringify(expansionCheckpoint)}`,
-            );
-            await updateRun({ suggestions: current, planning_state: planningState, diagnostics });
-          },
-        },
-      );
-    };
+    // Automatic expansion is retired: deterministic deduplication produces
+    // the final first-pass narrative, not a request for replacement chapters.
 
     const provenance = await recipeProvenance(body.recipe);
     let recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>);
@@ -6378,7 +6288,6 @@ export async function runSuggestionJob(
     const completeValidatedOutline = async (
       completedSuggestions: Suggestion[],
       completionWarnings: string[],
-      allowUnderTarget = false,
     ) => {
       const finalCoverage = obligationCoverage([...(body.existingSections ?? []), ...completedSuggestions], recipeObligations);
       diagnostics = {
@@ -6399,15 +6308,8 @@ export async function runSuggestionJob(
       }
       const finalScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
       const belowLengthTolerance = needsNovelExpansion(completedSuggestions, body.existingSections ?? []);
-      if (requestedStoryMaterialFormat(body) === "novel" && belowLengthTolerance && !allowUnderTarget) {
-        throw new NovelScalePlanningError(
-          "failed_under_target",
-          "outline expansion did not reach plausible novel scale",
-        );
-      }
-      if (requestedStoryMaterialFormat(body) === "novel" && belowLengthTolerance && allowUnderTarget) {
-        completionWarnings.push(`Novel outline is below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target; the usable outline was preserved.`);
-      }
+      // A projected-length shortfall is internal QA, not a reason to rewrite
+      // the narrative or show a warning to the user after deduplication.
       if (requestedStoryMaterialFormat(body) === "novel" && finalScale.exceedsMaximum) {
         throw new NovelScalePlanningError(
           "failed_over_target",
@@ -6422,55 +6324,12 @@ export async function runSuggestionJob(
       );
       const allocationShortfallReport = allocationShortfalls(completedSuggestions, effectiveAllocation);
       diagnostics = { ...diagnostics, allocationShortfalls: allocationShortfallReport };
-      const expansionHistory = diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [];
-      const lastExpansionRound = expansionHistory.at(-1);
-      const allocationCannotAdvance =
-        !canFitNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
-        (lastExpansionRound !== undefined && lastExpansionRound.additionsReturned === 0);
-      if (remainingAllocationDeficits.length > 0 && allocationCannotAdvance) {
-        // Preserve a useful book-length outline, but report the true shortfall
-        // internally. A budget-blocked or zero-progress allocation must never
-        // be rescheduled as another paid expansion or advertised as repaired.
+      if (remainingAllocationDeficits.length > 0) {
         diagnostics = {
           ...diagnostics,
-          allocationRepairStatus: canFitNovelExpansion(completedSuggestions, body.existingSections ?? [])
-            ? "no_progress" : "budget_exhausted",
           allocationDeficits: remainingAllocationDeficits,
+          allocationReconciliation: "accepted_clean_first_pass",
         };
-      } else if (remainingAllocationDeficits.length > 0) {
-        const checkpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], expansionHistory);
-        const expansionRounds = diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [];
-        if (allocationRepairExhausted(remainingAllocationDeficits, expansionRounds)) {
-          // A resumed checkpoint can start at round four. Do not yield the
-          // same checkpoint forever when the bounded expansion budget is gone:
-          // fail recoverably and keep the paid draft available for review.
-          planningState = {
-            ...planningState,
-            phase: "failed",
-            nextAction: "allocation-repair-exhausted",
-            expansionCheckpoint: checkpoint,
-          };
-          diagnostics = markMeaningfulProgress({
-            ...diagnostics,
-            stage: "allocation_repair_exhausted",
-            allocationDeficits: remainingAllocationDeficits,
-            expansionCheckpoint: checkpoint,
-          }, `allocation_repair_exhausted:${stableJSONStringify(remainingAllocationDeficits)}`);
-          latestValidSuggestions = completedSuggestions;
-          throw new NovelScalePlanningError(
-            "failed_expansion",
-            `Outline allocation still lacks coverage for ${remainingAllocationDeficits.map((entry) => entry.beatID).join(", ")} after ${MAX_EXPANSION_ROUNDS} expansion rounds. The saved draft is preserved for review.`,
-          );
-        }
-        planningState = { ...planningState, phase: "expansion", nextAction: "expansion", expansionCheckpoint: checkpoint };
-        diagnostics = markMeaningfulProgress({
-          ...diagnostics,
-          stage: "allocation_repair_pending",
-          allocationDeficits: remainingAllocationDeficits,
-          expansionCheckpoint: checkpoint,
-        }, `allocation_repair_pending:${stableJSONStringify(remainingAllocationDeficits)}`);
-        await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
-        throw new SuggestionWorkerYield();
       }
       const finalWarnings = completionWarnings;
       await updateRun({
@@ -6498,83 +6357,27 @@ export async function runSuggestionJob(
       initialSuggestions: Suggestion[],
       initialWarnings: string[],
     ) => {
-      // A repeated title across beats is a hard replay signal. Reject it
-      // before optional expansion can amplify the bad outline.
       assertDistinctOutlineTitles(initialSuggestions);
-      let completedSuggestions = initialSuggestions;
-      let completionWarnings = initialWarnings;
-      // Only callbacks after validation may advance this value. A provider
-      // response that fails validation must never replace the last checkpoint.
       latestValidSuggestions = initialSuggestions;
-      const initialScale = evaluateNovelScale(completedSuggestions, body.existingSections ?? []);
-      if (requestedStoryMaterialFormat(body) === "novel" && initialScale.exceedsMaximum) {
+      const scale = evaluateNovelScale(initialSuggestions, body.existingSections ?? []);
+      if (requestedStoryMaterialFormat(body) === "novel" && scale.exceedsMaximum) {
         throw new NovelScalePlanningError(
           "failed_over_target",
-          `Novel outline exceeds the ${NOVEL_ACCEPTED_MAX_WORDS.toLocaleString()}-word accepted ceiling before expansion.`,
+          `Novel outline exceeds the ${NOVEL_ACCEPTED_MAX_WORDS.toLocaleString()}-word accepted ceiling.`,
         );
       }
-      const initialQuality = collectAdvisoryOutlineQuality(
-        completedSuggestions,
-        body.storyMaterialEnrichment,
-        requestedStoryMaterialFormat(body),
-        body.arcTemplate,
-      );
-      const outlineNeedsExpansion = requestedStoryMaterialFormat(body) === "novel" &&
-        canFitNovelExpansion(completedSuggestions, body.existingSections ?? []) &&
-        (sectionAllocationDeficits(completedSuggestions).length > 0 ||
-          needsNovelExpansion(completedSuggestions, body.existingSections ?? []) ||
-          initialQuality.causalScaleIssues.length > 0);
-      planningState = {
-        ...planningState,
-        phase: outlineNeedsExpansion ? "expansion" : "outline_complete",
-        nextAction: outlineNeedsExpansion ? "expansion" : "completed",
-      };
-      const expansionCheckpoint = buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], []);
-      // The outline has passed structural and obligation validation even when
-      // a novel still needs optional expansion. Persist that checkmark before
-      // dispatching expansion so the UI does not imply allocation is the last
-      // completed stage.
-      diagnostics = markCompletedStage(diagnostics, "outline");
-      diagnostics = { ...diagnostics, stage: outlineNeedsExpansion ? "expansion_pending" : "outline_complete", expansionCheckpoint };
+      planningState = { ...planningState, phase: "outline_complete", nextAction: "completed" };
+      diagnostics = markCompletedStage({
+        ...diagnostics,
+        stage: "outline_complete",
+        automaticExpansion: "disabled",
+      }, "outline");
       diagnostics = markMeaningfulProgress(
         diagnostics,
-        `validated_suggestions_persisted:${stableJSONStringify(completedSuggestions)}`,
+        `validated_suggestions_persisted:${stableJSONStringify(initialSuggestions)}`,
       );
-      await updateRun({ suggestions: completedSuggestions, planning_state: planningState, diagnostics });
-      if (outlineNeedsExpansion) {
-        try {
-          const expanded = await expandNovel(completedSuggestions, recipeObligations, 1, 0, []);
-          completedSuggestions = expanded.suggestions;
-          completionWarnings = [...completionWarnings, ...expanded.warnings];
-          diagnostics = {
-            ...diagnostics,
-            expansionRounds: expanded.diagnostics,
-            expansionCheckpoint: buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], expanded.diagnostics),
-            novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
-          };
-        } catch (error) {
-          if (!(error instanceof NovelScalePlanningError) || !["failed_expansion", "failed_under_target"].includes(error.code)) throw error;
-          // progressivelyExpandOutline invokes checkpoint callbacks only after
-          // additions pass structural, beat, and length validation. Prefer
-          // that newest validated state over the first-pass outline; invalid
-          // or partially parsed provider output never reaches this variable.
-          completedSuggestions = latestValidSuggestions.length > 0
-            ? latestValidSuggestions
-            : completedSuggestions;
-          completionWarnings.push(`Optional novel expansion did not finish; the usable outline was preserved below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target.`);
-          diagnostics = {
-            ...diagnostics,
-            expansionWarning: error.message,
-            expansionCheckpoint: diagnostics.expansionCheckpoint ?? buildExpansionCheckpoint(
-              completedSuggestions,
-              body.existingSections ?? [],
-              diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? [],
-            ),
-            novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
-          };
-        }
-      }
-      await completeValidatedOutline(completedSuggestions, completionWarnings, true);
+      await updateRun({ suggestions: initialSuggestions, planning_state: planningState, diagnostics });
+      await completeValidatedOutline(initialSuggestions, initialWarnings);
     };
 
     if (!body.storyMaterialEnrichment && claimedRun.story_material) {
@@ -6719,97 +6522,17 @@ export async function runSuggestionJob(
       return;
     }
     const resume = expansionResumeState(claimedRun);
-    if (requestedStoryMaterialFormat(body) === "novel" && resume && claimedRun.story_material) {
-      // PR8 (revised): delegate validation/repair to resumeOrRepairStoryMaterial.
-      // The helper persists story_material + diagnostics.storyMaterialRepair
-      // BEFORE returning when a repair is required, so a downstream
-      // expandNovel failure or worker interruption cannot lose the completed
-      // repair. When no repair is required the helper is a no-op persist-wise
-      // and we explicitly persist the validated material below.
-      const { material: resumedMaterial, audit: repairAudit } = await resumeOrRepairStoryMaterial({
-        claimedMaterial: claimedRun.story_material,
-        recipe: body.recipe,
-        provenance,
-        format: requestedStoryMaterialFormat(body),
-        updateRun,
-      });
-      body = { ...body, storyMaterialEnrichment: resumedMaterial };
-      // The persisted checkpoint is already validated; it is the fallback if
-      // the resumed provider attempt fails before producing another checkpoint.
-      latestValidSuggestions = resume.suggestions;
-      // PR8 (revised): preserve the repair audit fields through the
-      // subsequent diagnostics assignment so they actually land in the
-      // persisted row. The previous shape wrote audit fields into
-      // diagnostics but the next spread (claimedRun.diagnostics) overwrote
-      // them — they never landed in the run row.
-      diagnostics = {
-        ...(claimedRun.diagnostics && typeof claimedRun.diagnostics === "object" ? claimedRun.diagnostics : {}),
-        ...(repairAudit ? { storyMaterialRepair: repairAudit } : {}),
-        stage: "expansion_resume",
-        resumedFromRound: resume.startRound,
-      };
-      // Recovered expansion checkpoints necessarily represent an already
-      // validated outline; keep that stage visible without marking expansion
-      // complete until the resumed expansion actually succeeds.
-      diagnostics = markCompletedStage(diagnostics, "outline");
-      // PR8 (revised): persist the (possibly repaired) story_material and
-      // the resume-stage diagnostics BEFORE expandNovel so a later failure
-      // or interruption cannot lose the completed repair. Idempotent with
-      // any earlier persist inside resumeOrRepairStoryMaterial — the final
-      // updateRun below overwrites the same fields with completed-stage
-      // diagnostics on success.
-      if (repairAudit) {
-        diagnostics = markMeaningfulProgress(
-          diagnostics,
-          `story_material_repaired:${stableJSONStringify(resumedMaterial)}`,
-        );
-      }
-      await updateRun({
-        story_material: resumedMaterial,
-        diagnostics,
-      });
-      const recipeObligations = deriveRecipeObligations(body.recipe as unknown as Record<string, unknown>, resumedMaterial.premiseComponents ?? []);
-      let completedSuggestions = resume.suggestions;
-      let completionWarnings: string[] = [];
-      try {
-        const expanded = await expandNovel(resume.suggestions, recipeObligations, resume.startRound, resume.startBeatIndex, resume.priorDiagnostics);
-        completedSuggestions = expanded.suggestions;
-        completionWarnings = expanded.warnings;
-        const advisoryQuality = collectAdvisoryOutlineQuality(
-          completedSuggestions,
-          resumedMaterial,
-          requestedStoryMaterialFormat(body),
-          body.arcTemplate,
-        );
-        diagnostics = {
-          ...diagnostics,
-          advisoryQuality,
-          expansionRounds: expanded.diagnostics,
-          expansionCheckpoint: buildExpansionCheckpoint(completedSuggestions, body.existingSections ?? [], expanded.diagnostics),
-          novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
-        };
-      } catch (error) {
-        if (isProviderBillingUnavailable(error)) throw error;
-        const recoverableExpansionFailure = error instanceof NovelScalePlanningError &&
-          ["failed_expansion", "failed_under_target"].includes(error.code);
-        if (!recoverableExpansionFailure) throw error;
-        completedSuggestions = latestValidSuggestions.length > 0
-          ? latestValidSuggestions
-          : resume.suggestions;
-        completionWarnings.push(`Optional novel expansion did not finish; the usable outline was preserved below the preferred ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()}-word planning target.`);
-        diagnostics = {
-          ...diagnostics,
-          expansionWarning: error.message,
-          expansionCheckpoint: diagnostics.expansionCheckpoint ?? buildExpansionCheckpoint(
-            completedSuggestions,
-            body.existingSections ?? [],
-            diagnostics.expansionRounds as ExpansionRoundDiagnostic[] ?? resume.priorDiagnostics,
-          ),
-          novelScale: evaluateNovelScale(completedSuggestions, body.existingSections ?? []),
-        };
-      }
-      // Initial and resumed expansion use the same final completion gate.
-      await completeValidatedOutline(completedSuggestions, completionWarnings, true);
+    if (requestedStoryMaterialFormat(body) === "novel" && resume) {
+      // Retire old expansion checkpoints without a further paid creative call;
+      // retain the already validated saved outline and its billing history.
+      diagnostics = markCompletedStage({
+        ...diagnostics,
+        stage: "legacy_expansion_retired",
+        automaticExpansion: "disabled",
+        legacyExpansionCheckpointRetired: true,
+      }, "outline");
+      await updateRun({ suggestions: resume.suggestions, diagnostics });
+      await continueAfterSemanticVerification(resume.suggestions);
       return;
     }
     let storyMaterial: StoryMaterialEnrichment | null = null;
@@ -7083,7 +6806,7 @@ export async function runSuggestionJob(
           await updateRun({ suggestions: latestProviderCandidate, diagnostics });
           diagnostics = { ...diagnostics, stage: "outline_validating" };
           const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
-          const deduped = removeDuplicateOutlineSections(validated.suggestions);
+          const deduped = removeDuplicateOutlineSections(validated.suggestions, requiredFunctionOrderByBeat);
           validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
           const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true);
           if (merged.length > MAX_PLANNED_SECTIONS) {
@@ -7099,7 +6822,7 @@ export async function runSuggestionJob(
         requiredFunctionOrderByBeat,
       );
       const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
-      const deduped = removeDuplicateOutlineSections(validated.suggestions);
+      const deduped = removeDuplicateOutlineSections(validated.suggestions, requiredFunctionOrderByBeat);
       validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true), warnings: validated.warnings };
       // Structural replay is removed before any durable checkpoint or semantic
@@ -7142,7 +6865,9 @@ export async function runSuggestionJob(
     };
 
     const authoredSemanticBeatCount = body.arcTemplate.beats.filter((beat) => arcRoleContract(beat, body.arcTemplate.name).semanticObligations.length > 0).length;
-    if ((authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null || hasNamedArcExperiencePromise(body.arcTemplate)) && sectionAllocationDeficits(result.suggestions).length === 0) {
+    // A discarded duplicate must never suppress the independent semantic
+    // review of the final cleaned first-pass outline.
+    if (authoredSemanticBeatCount > 0 || intimacyRequirement(body) !== null || hasNamedArcExperiencePromise(body.arcTemplate)) {
       // Semantic verification is its own durable provider stage. Persist the
       // validated outline before yielding so a one-dispatch worker slice never
       // replays the paid outline call or loses the verifier checkpoint.
