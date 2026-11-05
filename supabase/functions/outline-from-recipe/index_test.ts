@@ -1047,6 +1047,10 @@ Deno.test("compact novel schemas reserve mandatory dramatic functions without pe
         assertEquals(shape.properties.sections.items.properties.container, undefined);
         assertEquals(Object.keys(shape.properties.required.properties), required);
         for (const fn of required) {
+          assertEquals(shape.properties.sections.items.properties.dramaticFunction.enum.includes(fn), false,
+            `ordinary ${sample.name} sections must not perform the reserved ${fn}`);
+        }
+        for (const fn of required) {
           assertEquals(shape.properties.required.properties[fn].properties.dramaticFunction.enum, [fn]);
           assertEquals(shape.properties.required.properties[fn].properties.container, undefined);
         }
@@ -2923,6 +2927,25 @@ Deno.test("first-pass deduplication removes cross-beat replay and keeps the firs
   assertEquals(result.suggestions.length, 1);
   assertEquals(result.suggestions[0].storyArcBeatID, "beat-1");
   assertEquals(result.removed, [{ title: "Same Event", index: 1 }]);
+});
+
+Deno.test("first-pass deduplication keeps the reserved climax over an earlier ordinary duplicate", () => {
+  const ordinary = {
+    title: "The Uncut Broadcast", summary: "A first version of the same event",
+    container: "setPiece", pov: "thirdPersonLimited",
+    terminalBeat: "The evidence spreads.",
+    entryState: "The plan is ready.",
+    dramaticEvent: "Ted releases the evidence.", resultingChange: "The operation is exposed.",
+    terminalState: "The broadcast is public.", dramaticFunction: "crisis",
+    storyArcBeatID: "adult-choice",
+  };
+  const required = { ...ordinary, dramaticFunction: "climax", container: "sceneSequence",
+    summary: "The decisive climax version." };
+  const result = removeDuplicateOutlineSections([ordinary, required] as any,
+    new Map([["adult-choice", ["climax"]]]));
+  assertEquals(result.suggestions.length, 1);
+  assertEquals(result.suggestions[0].dramaticFunction, "climax");
+  assertEquals(result.removed, [{ title: "The Uncut Broadcast", index: 0 }]);
 });
 
 Deno.test("title-independent exact dramatic replay is removed across Story Arc beats", () => {
@@ -6642,7 +6665,7 @@ Deno.test("missing authored beat evidence remains a beat-level semantic issue", 
   assertStringIncludes(issues[0], "authored_beat_requirement");
 });
 
-Deno.test("optional enrichment expansion checkpoints a global round before the next dispatch", async () => {
+Deno.test("one removed duplicate can leave an underlength beat and still complete after semantic verification", async () => {
   const fullBody = await executableWorkerBody();
   const recipe = fullBody.recipe;
   const plannerItem = (id: string, label: string) => ({ id, label, description: `${label} description`, source: "planner", sourceReference: null });
@@ -6661,11 +6684,12 @@ Deno.test("optional enrichment expansion checkpoints a global round before the n
   const body = { ...fullBody, requestedFormat: "novel", storyMaterialEnrichment: material } as any;
   const row: any = checkpointedWorkerRow(body);
   row.story_material = material;
+  row.planning_state.allocationEntries[0][1].minSections = 2;
   const db = new ExecutableRunDb(row);
   const actions: string[] = [];
   const baseSection = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`), entryState: "Prior state", dramaticEvent: `${title} happens`, resultingChange: `${title} changes the pressure`, terminalState: `${title} hands forward pressure` });
   const billable = validatedWorkerBilling(actions, (action) => {
-    if (action === "outline-suggestions") return { beats: { "beat-1": [baseSection("beat-1", "Opening")], "beat-2": [baseSection("beat-2", "Closing")] } };
+    if (action === "outline-suggestions") return { beats: { "beat-1": [baseSection("beat-1", "Opening"), baseSection("beat-1", "Opening")], "beat-2": [baseSection("beat-2", "Closing")] } };
     const beat = action.endsWith("beat-1") ? "beat-1" : "beat-2";
     const count = beat === "beat-1" ? 7 : 2;
     return { suggestions: Array.from({ length: count }, (_, index) => expansionSection(`${action}-${index}`, "scene", beat)) };
@@ -6680,14 +6704,14 @@ Deno.test("optional enrichment expansion checkpoints a global round before the n
   assertEquals(db.row.status, "pending");
   await run();
   assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
-  assertEquals(db.row.planning_state.phase, "expansion");
-  await run();
-  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global"]);
-  assertEquals(db.row.planning_state.expansionCheckpoint.nextRound, 2);
-  assertEquals(db.row.planning_state.expansionCheckpoint.nextBeatIndex, 0);
-  assertEquals(db.row.suggestions.some((section: any) => section.title.includes("global-0")), true);
-  assertEquals(db.row.status, "pending");
-  assertEquals(db.row.planning_state.phase, "expansion");
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.planning_state.phase, "completed");
+  assertEquals(db.row.diagnostics.automaticExpansion, "disabled");
+  assertEquals(db.row.diagnostics.structuralDedupedSections.length, 1);
+  assertEquals(db.row.diagnostics.allocationDeficits.length, 1);
+  assertEquals(db.row.diagnostics.allocationReconciliation, "accepted_clean_first_pass");
+  assertEquals(db.row.suggestions.length, 2);
+  assertEquals(db.row.warnings.some((warning: string) => warning.includes("below the preferred")), false);
   assertEquals(db.row.attempt_count, 0);
 });
 
@@ -7046,11 +7070,6 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
         },
       };
     }
-    if (action === "outline-expansion-1-global") {
-      return { suggestions: [expansionSection("Checkpoint chapter 26", "chapter"), expansionSection("Checkpoint chapter 27", "chapter")] };
-    }
-    // A valid first expansion is followed by a recoverable under-target
-    // failure, exercising completion from the persisted 27-section state.
     return { suggestions: [] };
   });
   const initialRun = () => runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
@@ -7063,17 +7082,12 @@ Deno.test("initial and resumed optional expansion preserve the newest valid chec
   });
   await initialRun();
   await initialRun();
-  await initialRun();
-  await initialRun();
   assertEquals(initialDB.row.status, "completed");
-  assertEquals(initialDB.row.suggestions.length, 27);
-  assertEquals(initialDB.row.suggestions.map((section: any) => section.title), [
-    ...firstPass.slice(0, 24).map((section) => section.title),
-    "Checkpoint chapter 26",
-    "Checkpoint chapter 27",
-    firstPass[24].title,
-  ]);
-  assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global"]);
+  assertEquals(initialDB.row.suggestions.length, 25);
+  assertEquals(initialDB.row.suggestions.map((section: any) => section.title),
+    firstPass.map((section) => section.title));
+  assertEquals(initialActions, ["outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(initialDB.row.diagnostics.automaticExpansion, "disabled");
   assertEquals(initialDB.row.warnings.some((warning: string) => warning.includes("Optional novel expansion did not finish")), false);
 
   const completedRound = {
@@ -7446,7 +7460,7 @@ Deno.test("first-pass recipe coverage enters novel length controls without a nar
   await run();
   assertEquals(db.row.status, "completed", db.row.error ?? "no error");
   assertEquals(db.row.planning_state.phase, "completed");
-  assertEquals(actions.slice(0, 3), ["outline-suggestions", "outline-semantic-verification", "outline-expansion-1-global"]);
+  assertEquals(actions, ["outline-suggestions", "outline-semantic-verification"]);
   assertEquals(actions.some((action) => action.includes("repair")), false);
   assertEquals(db.row.diagnostics.automaticNarrativeRepair, "disabled");
 });
@@ -7500,7 +7514,7 @@ Deno.test("provider billing unavailable during allocation bypasses retry and fai
   assertEquals(contexts[0].upstreamStatus, 429);
 });
 
-Deno.test("provider billing unavailable during resumed expansion suppresses raw diagnostics", async () => {
+Deno.test("retired expansion checkpoints complete without another paid provider call suppresses raw diagnostics", async () => {
   const baseBody = await executableWorkerBody();
   const body = { ...baseBody, requestedFormat: "novel", storyMaterialEnrichment: undefined } as any;
   const recoveredNovelMaterial = repairStoryMaterialFromRecipe(baseBody.recipe as any, {
@@ -7550,41 +7564,24 @@ Deno.test("provider billing unavailable during resumed expansion suppresses raw 
       },
     },
   });
-  const contexts: any[] = [];
-  const scheduled: Promise<unknown>[] = [];
+  const actions: string[] = [];
   const billable = async (request: any) => {
-    assertEquals(request.action.startsWith("outline-expansion-"), true);
-    throw new ProviderBillingUnavailableError({
-      code: "organization_spend_limit_exceeded",
-      message: "resumed expansion upstream spend limit",
-      status: 429,
-    });
+    actions.push(request.action);
+    throw new Error("A retired expansion checkpoint must not trigger another paid provider call.");
   };
-
   await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
     db,
     model: { provider_model: "fixture-model" },
     provider: {},
     creditStore: {},
     billableLLM: billable as any,
-    notifyProviderBillingUnavailable: async (context) => { contexts.push(context); },
-    scheduleAlert: (promise) => { scheduled.push(promise); },
   });
-  await Promise.all(scheduled);
-
-  assertEquals(db.row.status, "failed");
-  assertEquals(db.row.error_code, "provider_billing_unavailable");
-  assertEquals(db.row.error.startsWith("Temporarily unavailable — try again later."), true);
-  assertEquals(db.row.error.includes("No settled customer charge is recorded"), true);
+  assertEquals(actions, []);
+  assertEquals(db.row.status, "completed");
+  assertEquals(db.row.error_code ?? null, null);
   assertEquals(db.row.suggestions, suggestions);
-  assertEquals(db.row.completed_at !== null, true);
-  assertEquals(db.row.lease_owner, null);
-  assertEquals(db.row.lease_expires_at, null);
-  assertEquals(JSON.stringify(db.row.diagnostics).includes("resumed expansion upstream spend limit"), false);
-  assertEquals(JSON.stringify(db.row.diagnostics).includes("expansionError"), false);
-  assertEquals(contexts[0].upstreamProviderCode, "organization_spend_limit_exceeded");
-  assertEquals(contexts[0].upstreamMessage, "resumed expansion upstream spend limit");
-  assertEquals(contexts[0].upstreamStatus, 429);
+  assertEquals(db.row.diagnostics.legacyExpansionCheckpointRetired, true);
+  assertEquals(db.row.diagnostics.automaticExpansion, "disabled");
 });
 
 Deno.test("provider billing unavailable fails Suggest Sections safely and alerts with structured upstream details", async () => {
