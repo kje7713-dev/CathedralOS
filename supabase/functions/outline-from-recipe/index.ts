@@ -639,7 +639,7 @@ export function validateNovelLeafContainers(
 
 /** Interleave a beat's planned containers rather than grouping similar
  * sizes together. Counts and slot names remain deterministic on replay. */
-export function plannedNovelContainerSlots(counts: NovelContainerCounts): Array<typeof NOVEL_LEAF_CONTAINERS[number]> {
+export function plannedNovelContainerSlots(counts: NovelContainerCounts, reserveClimaxSetPiece = false, requiredFunctionsAfterClimax = 0): Array<typeof NOVEL_LEAF_CONTAINERS[number]> {
   const total = NOVEL_LEAF_CONTAINERS.reduce((sum, type) => sum + counts[type], 0);
   const used = Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((type) => [type, 0])) as NovelContainerCounts;
   const slots: Array<typeof NOVEL_LEAF_CONTAINERS[number]> = [];
@@ -650,6 +650,13 @@ export function plannedNovelContainerSlots(counts: NovelContainerCounts): Array<
         (i + 1) * counts[best] / total - used[best] ? type : best);
     slots.push(chosen);
     used[chosen]++;
+  }
+  // Keep the climactic set-piece in the named climax slot, even if the beat
+  // reserves an additional resolution/aftermath slot after its climax.
+  const climaxSlot = slots.length - requiredFunctionsAfterClimax - 1;
+  if (reserveClimaxSetPiece && counts.setPiece > 0 && climaxSlot >= 0 && slots[climaxSlot] !== "setPiece") {
+    const setPieceIndex = slots.lastIndexOf("setPiece");
+    [slots[setPieceIndex], slots[climaxSlot]] = [slots[climaxSlot], slots[setPieceIndex]];
   }
   return slots;
 }
@@ -851,7 +858,10 @@ export function flattenSuggestionResponse(
       : null;
     if (!sections) throw new Error(`response missing beat ${beat.id}`);
     const plannedContainers = allocation?.get(beat.id)?.containerCounts
-      ? plannedNovelContainerSlots(allocation.get(beat.id)!.containerCounts!)
+      ? plannedNovelContainerSlots(allocation.get(beat.id)!.containerCounts!,
+        requiredFunctionOrderByBeat?.get(beat.id)?.includes("climax") ?? false,
+        Math.max(0, (requiredFunctionOrderByBeat?.get(beat.id)?.length ?? 0) -
+          (requiredFunctionOrderByBeat?.get(beat.id)?.indexOf("climax") ?? -1) - 1))
       : null;
     if (plannedContainers && sections.length !== plannedContainers.length) {
       throw new Error(`beat ${beat.id} returned ${sections.length} sections but allocation requires ${plannedContainers.length}`);
@@ -3232,6 +3242,7 @@ export function buildPrompt(
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
   // A recipe-grounded causal architecture now precedes allocation; its selected
   // beat rationales are intentionally passed to the global outline generator.
+  const reservedFunctions = outstandingRequiredFunctionsByBeat(req.arcTemplate.beats, req.arcTemplate.name, req.existingSections ?? []);
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
       const beat = req.arcTemplate.beats.find((b) => b.id === beatId);
@@ -3239,7 +3250,8 @@ export function buildPrompt(
         ? `complete first-pass allocation: ${info.minSections} section${info.minSections === 1 ? "" : "s"}`
         : `minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"}`;
       const typePlan = isNovel && info.containerCounts
-        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; beat word budget: ${plannedNovelContainerSlots(info.containerCounts).reduce((sum, type) => sum + NOVEL_CONTAINER_WORD_TARGETS[type], 0).toLocaleString()} words; ordered slots: ${plannedNovelContainerSlots(info.containerCounts).map((type, index) => `${plannedNovelSlotKey(index)}=${type} (~${NOVEL_CONTAINER_WORD_TARGETS[type].toLocaleString()} words)`).join(", ")}`
+        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; beat word budget: ${plannedNovelContainerSlots(info.containerCounts).reduce((sum, type) => sum + NOVEL_CONTAINER_WORD_TARGETS[type], 0).toLocaleString()} words; ordered slots: ${plannedNovelContainerSlots(info.containerCounts, reservedFunctions.get(beatId)?.includes("climax") ?? false,
+          Math.max(0, (reservedFunctions.get(beatId)?.length ?? 0) - (reservedFunctions.get(beatId)?.indexOf("climax") ?? -1) - 1)).map((type, index) => `${plannedNovelSlotKey(index)}=${type} (~${NOVEL_CONTAINER_WORD_TARGETS[type].toLocaleString()} words)`).join(", ")}`
         : "";
       const narrativeCommitment = storyArchitecture && info.rationale
         ? `; planned dramatic movement: ${compactArcNarrativeText(info.rationale)}`
@@ -3248,7 +3260,7 @@ export function buildPrompt(
     })
     .join("\n");
   const allocationDirective = isNovel
-    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections, except when a beat has outstanding required dramatic functions. For those beats return an object with "sections" (the ordinary sections in order) and "required" (one named section per required dramatic function, such as "climax" or "resolution"). Those required sections occupy the final ordered slots, in the order the functions are listed below. ONLY the reserved section may perform its one-time required dramatic event. This reserves the EVENT AND OUTCOME, not merely the dramaticFunction label: an ordinary section must not confess, reveal, defeat, choose, or resolve the exact decisive event that the reserved section is assigned to perform. Even an earlier setPiece or transformation in that SAME beat may only create distinct prerequisites, crises, reversals, costs, or consequences. If two slots would do the same dramatic work, redesign the NON-OWNING slot to create genuinely new story, regardless of which slot comes first. No duplicate events or outcomes anywhere in the returned outline, including paraphrases with different titles or labels. Write each section for its exact ordered container slot above. Omit "container" from every planned novel section: the server assigns it from the slot. Give each section enough distinct dramatic development to justify its planned scale; never pass off a brief event as a chapter. The allocator already assigned an explicit WORD budget to every section. Each budget is the intended size of the eventual written section, not the length of this outline JSON. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
+    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Do not manufacture extra sections solely to hit a numeric target: each allocated section must correspond to a different planned dramatic contribution with its own cause, effect, and inherited state. If a beat's rationale describes fewer events than its slots, develop distinct story BEFORE generating the outline, not an encore of a completed event. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections, except when a beat has outstanding required dramatic functions. For those beats return an object with "sections" (the ordinary sections in order) and "required" (one named section per required dramatic function, such as "climax" or "resolution"). Those required sections occupy the final ordered slots, in the order the functions are listed below. ONLY the reserved section may perform its one-time required dramatic event. This reserves the EVENT AND OUTCOME, not merely the dramaticFunction label: an ordinary section must not confess, reveal, defeat, choose, or resolve the exact decisive event that the reserved section is assigned to perform. Even an earlier setPiece or transformation in that SAME beat may only create distinct prerequisites, crises, reversals, costs, or consequences. If two slots would do the same dramatic work, redesign the NON-OWNING slot to create genuinely new story, regardless of which slot comes first. No duplicate events or outcomes anywhere in the returned outline, including paraphrases with different titles or labels. Write each section for its exact ordered container slot above. Omit "container" from every planned novel section: the server assigns it from the slot. Give each section enough distinct dramatic development to justify its planned scale; never pass off a brief event as a chapter. The allocator already assigned an explicit WORD budget to every section. Each budget is the intended size of the eventual written section, not the length of this outline JSON. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
     : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
@@ -3347,9 +3359,9 @@ Before writing any sections, assign each author-required behavior, event, and st
 When multiple developments satisfy the recipe, Story Arc, continuity, and section contract, choose the most entertaining, original, surprising, and dramatically compelling option. Let authored and invented characters' distinctive personalities, desires, flaws, obsessions, relationships, and unpredictable decisions generate events: supporting characters should create complications, change relationships, trigger reversals, and produce lasting consequences rather than serving as informants, exposition, transportation, or other functional devices. When the authored genre and tone support it, seek daring encounters, consequential emotional choices, reckless mistakes, surprising reversals, memorable revelations, and escalating consequences. Investigations, administrative discoveries, tactical missions, and procedural storytelling are entirely valid when they actively deliver the selected arc's experience; do not categorically prefer or prohibit any plot device. Preserve intended adult intensity without sanitizing it; make the climax emerge from the protagonists' distinctive choices and behavior and deliver the premise's consequential outcome rather than merely completing a generic tactical objective. Do not force randomness, spectacle, or artificial chaos into restrained stories. Preserve causality, continuity, and authorial intent.
 
 ## Character-caused story selection before plot construction
-First choose the story's causal drivers, BEFORE deciding on its central apparatus, tactical objective, climax method, or beat-by-beat plot. Read the authored protagonists' motives and relationships and the planningContext.characterDecisionCandidates. Identify the distinct desires and compromised choices that could make this story happen specifically to THESE people. Select the strongest optional supporting characters for their independent decisions, conflicting agendas, betrayals, selfish gambles, outrageous mistakes, and effects on the protagonists. For each selected character, work out privately what they want, the distinctive choice they make, whose plan it derails, and a later consequence that would not happen without that choice. Their choices and the protagonists' reactions must supply the causal spine; a preselected institutional mission, pursuit, technical device, or generic threat must not be the spine with characters added afterward. If the recipe calls for a system-driven procedural story, preserve it, but still let authored character agency determine its crucial turns.
+First choose the story's causal drivers, BEFORE deciding on its central apparatus, tactical objective, climax method, or beat-by-beat plot. Read the authored protagonists' motives and relationships and the planningContext.characterDecisionCandidates. Identify the distinct desires and compromised choices that could make this story happen specifically to THESE people. Select the strongest optional supporting characters for their independent decisions that change the conflict, conflicting agendas, betrayals, selfish gambles, outrageous mistakes, and effects on the protagonists. For each selected character, work out privately what they want, the distinctive choice they make, whose plan it derails, and a later consequence that would not happen without that choice. Their choices and the protagonists' reactions must supply the causal spine; a preselected institutional mission, pursuit, technical device, or generic threat must not be the spine with characters added afterward. If the recipe calls for a system-driven procedural story, preserve it, but still let authored character agency determine its crucial turns.
 
-Do not force every generated character into the outline. A candidate whose choices cannot earn a consequence may be dropped; do not add cameos, exposition couriers, or filler scenes to satisfy an invented cast quota. Equally, do not replace a distinctive, consequential candidate with a nameless official, contact, or contractor merely because a functional role makes the plot easier. Before finalizing the sequence, test each retained supporting character: if substituting an interchangeable job title would leave the important events unchanged, give that character a genuinely consequential personal decision or omit them. Reconcile the authored Story Arc's dramatic progression with the recipe BEFORE committing to the plot, rather than fitting previously selected plot machinery into its beat labels. Preserve the author's tone, adult intensity, ambiguity, restrained genres, and all continuity and output contracts.
+Do not force every generated character into the outline. A candidate whose choices cannot earn a consequence may be dropped; do not add cameos, exposition couriers, or filler scenes to satisfy an invented cast quota. Keep the actual decisions and fallout of selected supporting people, not just their colorful introductions. Equally, do not replace a distinctive, consequential candidate with a nameless official, contact, or contractor merely because a functional role makes the plot easier. Before finalizing the sequence, test each retained supporting character: if substituting an interchangeable job title would leave the important events unchanged, give that character a genuinely consequential personal decision or omit them. Reconcile the authored Story Arc's dramatic progression with the recipe BEFORE committing to the plot, rather than fitting previously selected plot machinery into its beat labels. Preserve the author's tone, adult intensity, ambiguity, restrained genres, and all continuity and output contracts.
 
 ## Premise outcome and ending causality
 Before drafting sections, identify the intended reader experience from this recipe's specific genre, tone, emotional promises, and character relationships, then the BOOK-level dramatic question. Honor the arc-specific climactic payoff chosen in the existing planning call; work backward from its irreversible consequence to the preceding decisions, relationships, and reversals that earn it. Determine the cause-and-effect trajectory that delivers that experience, including the decisive climax, the irreversible character/world change it causes, and an ending that inherits that change. A major premise element may be an unresolved pressure, mystery, relationship, or long-range stake rather than a problem the protagonists are required to investigate, explain, solve, or defeat. Equally, investigation, explanation, or external victory may be central when the author requests them. Plan the book's definite outcome before distributing distinct events across Story Arc beats. The protagonists' specific traits, choices, and relationships must materially cause or complicate that outcome; an interchangeable tactical or institutional solution must not replace their agency. Preserve the architecture's specifically selected, extraordinary arc-driven payoff: a mere narrow escape, surviving together, stopping a routine operation, or returning to the road cannot be the sole decisive event. A twist, revelation, enormous irreversible consequence, sacrifice, or intense emotional reckoning must be EARNED by earlier chapters and appropriate to the selected arc and authored ending, rather than inserted as last-minute spectacle. Across the entire sequence, preserve irreversible events: a threat stopped in one section stays stopped unless a new and expressly caused event changes that state; deaths, departures, promises, discoveries, and destroyed objects persist. Do not let a subsequent section restart the same countdown, restage a resolved confrontation, or resolve the central conflict a second time. Check the complete resultingChange and terminalState sequence before returning the first-pass outline. The ending can be ambiguous, tragic, grotesque, destructive, morally compromised, or only partly understood; it need not answer every question, but must deliver the premise's consequential promise.
@@ -3631,42 +3643,20 @@ export function fitAllocationToNovelBudget(
     selected.plan.minSections--;
   }
 
-  // The provider chooses the actual story structure. Respect any plan already
-  // within 115k–125k finished-prose words; 121k is a creative AIM, not permission
-  // to invent an extra chapter. Only bring objectively short plans to the floor.
-  const desiredTotalWords = Math.min(NOVEL_PREFERRED_MIN_WORDS, NOVEL_MAX_WORDS);
-  const startingCounts = new Map(Array.from(normalized.entries()).map(([id, plan]) => [id, plan.minSections]));
-  const addedCounts = new Map<string, number>();
-  while ((req.existingSections?.length ?? 0) === 0 &&
-    existingWords + plannedWords() < desiredTotalWords && sectionCount() < MAX_PLANNED_SECTIONS &&
-    (missingMixBeatIDs.length === 0 || existingWords + plannedWords() < NOVEL_PREFERRED_MIN_WORDS)) {
-    const availableWords = nominalRemainingWords - plannedWords();
-    const container = (["chapter", "sceneSequence", "setPiece", "developedScene", "scene"] as const)
-      .find((type) => NOVEL_CONTAINER_WORD_TARGETS[type] <= availableWords);
-    if (!container) break;
-    const eligible = Array.from(normalized.entries())
-      .filter(([, plan]) => plan.minSections > 0 && plan.minSections < 20)
-      .sort(([a, ap], [b, bp]) => {
-        const aBase = Math.max(1, startingCounts.get(a) ?? 1);
-        const bBase = Math.max(1, startingCounts.get(b) ?? 1);
-        // Allocate additional dramatic space proportionally to already
-        // developed beats rather than creating a generic post-climax tail.
-        return ((addedCounts.get(a) ?? 0) + 1) / aBase -
-          ((addedCounts.get(b) ?? 0) + 1) / bBase || bp.minSections - ap.minSections;
-      });
-    if (!eligible.length) break;
-    const [beatID, plan] = eligible[0];
-    plan.containerCounts![container]++;
-    plan.minSections++;
-    addedCounts.set(beatID, (addedCounts.get(beatID) ?? 0) + 1);
-  }
+  // Preserve model-authored section count, dramatic assignments, and section
+  // types. A word-count shortfall is internal QA, not license to synthesize
+  // another empty narrative slot. The planning model must provide enough
+  // distinct dramatic substance in its FIRST allocation response; downstream
+  // fitting may recover legacy malformed container mixes but never pad a valid
+  // first-pass outline with additional sections.
 
   // The returned plan remains recoverable even for impossible one-beat/fully
   // accepted corner cases; never introduce a new terminal failure condition.
   return new Map(Array.from(normalized.entries()).map(([beatID, plan]) => {
     const original = allocation.get(beatID)!;
     const changed = original.minSections !== plan.minSections ||
-      JSON.stringify(original.containerCounts ?? null) !== JSON.stringify(plan.containerCounts);
+      NOVEL_LEAF_CONTAINERS.some((container) =>
+        (original.containerCounts?.[container] ?? 0) !== (plan.containerCounts?.[container] ?? 0));
     return [beatID, changed
       ? { ...plan, rationale: `${plan.rationale} Word-budget reconciled for the full 115,000–125,000-word first pass; every added section must deliver a distinct irreversible event or character consequence.` }
       : plan] as [string, Allocation];
@@ -3952,7 +3942,7 @@ Before committing to the architecture, imagine the defining events as scenes the
 ## Book-scale transformations before section allocation
 Design a whole-book trajectory with materially different phases of interpersonal conflict and consequential action. Major reversals should transform the characters' circumstances, relationships, power, allegiances, and understanding so that the next dramatic problem is meaningfully different from the last, not simply the original danger or argument repeated with more pressure. Once a truth is revealed or a decision has changed the relationship, its next appearance must cause a NEW choice or irreversible consequence rather than replay the same disclosure, apology, restraint, or negotiation.
 
-Let independently motivated supporting characters and unexpected consequences alter the protagonists' options and the nature of the conflict. Prepare surprising developments through established motives and earlier decisions; no arbitrary twists or genre-inappropriate escalation. Map these transformations into the EXISTING ordered arc beats and their rationale before assigning containers or word budgets. The 115,000-word objective must be supported by genuinely evolving dramatic substance, not by revisiting a smaller story for more sections. Do not create mandatory twist counts, schema fields, model calls, validation gates, or repair stages.
+Select optional enrichment people for independently motivated decisions that force genuinely new choices, not merely for distinctive biographies or opportunities to deliver exposition. Preserve those decisions and their downstream consequences in the existing beat rationales, then carry them into the outline. Never impose a cast quota or make a generated character canonical. Prepare surprising developments through established motives and earlier decisions; no arbitrary twists or genre-inappropriate escalation. Map these transformations into the EXISTING ordered arc beats and their rationale before assigning containers or word budgets. The 115,000-word objective must be supported by genuinely evolving dramatic substance, not by revisiting a smaller story for more sections. Do not create mandatory twist counts, schema fields, model calls, validation gates, or repair stages.
 
 ## Story Arc selection governs the book's causal conflict
 Use the recipe and the FULL authored beat progression together to choose which conflict becomes THIS book's central engine, which character choice triggers it, and which irreversible reversals change its direction. The arc must determine the kinds of problems and consequential choices that arise, not merely the protagonists' emotional reactions to a preselected external plot. Preserve every explicit recipe promise, including any authored external events or ending; do not invent mandatory plot machinery from a broad premise or impose a canned genre formula. Express this jointly chosen causal story using the EXISTING storyArchitecture and beat rationales, not additional stages or fields.
