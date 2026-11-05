@@ -4423,8 +4423,9 @@ Deno.test("enrichment prompt favors audacity, adult intensity, and memorable exp
   assertStringIncludes(prompt, "wild, eccentric, larger-than-life supporting characters");
   assertStringIncludes(prompt, "spectacular mistakes, escalating disasters, reckless decisions");
   assertStringIncludes(prompt, "addictions, appetites, obsessions, moral corruption");
-  assertStringIncludes(prompt, "Do not automatically transform morally compromised protagonists into responsible heroes");
-  assertStringIncludes(prompt, "Do not impose redemption arcs, moral lessons, institutional reform");
+  assertStringIncludes(prompt, "Do not assume a morally compromised protagonist must become responsible, descend further into vice");
+  assertStringIncludes(prompt, "Honor any moral or character trajectory explicitly authored");
+  assertStringIncludes(prompt, "Never impose a generic moral lesson, institutional reform");
   assertStringIncludes(prompt, "Do not unnecessarily sanitize or dilute authored adult intensity");
   assertStringIncludes(prompt, "subject to applicable content constraints");
   assertStringIncludes(prompt, "## Invent distinctive experiences");
