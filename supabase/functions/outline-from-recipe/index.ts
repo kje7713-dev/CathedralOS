@@ -4107,7 +4107,50 @@ export function buildAllocationPrompt(
   obligations: RecipeObligation[] = [],
 ): { system: string; user: string } {
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
-  const maxBudgetedSections = isNovel ? maximumContainerPlannedNewSections(req) : maximumBudgetedNewSections(req);
+  if (isNovel) {
+    const planningContext = buildArchitecturePlanningView(
+      req, obligations, req.storyMaterialEnrichment,
+    );
+    const arcObligations = req.arcTemplate.beats.map((beat, index) => {
+      const contract = arcRoleContract(beat, req.arcTemplate.name);
+      return `${index}. ${beat.label} (${beat.role}): ${compactArcNarrativeText(beat.description)}; required dramatic functions: ${contract.requiredFunctions.join(", ") || "none"}`;
+    }).join("\n");
+    return {
+      system: `${RECIPE_CREATIVE_AUTHORITY_DIRECTIVE}
+
+You are StoryDonkey's story architect. Invent an exceptionally compelling COMPLETE novel by interpreting the canonical recipe and the ordered Story Arc as one creative brief. This call chooses the real dramatic story, not a count of chapters to meet a word budget.
+
+## Architecture first: identify anchors, then build backward and forward
+Identify the author's desired experience, the decisive climax and outcome, major reversals, the central character-caused conflict, and the irreversible aftermath. Work BACKWARD to earn the pivotal event and FORWARD from the initial disruption, choosing the most inventive credible causal progression these particular people would cause. Respect required beats and author-defined outcomes, but never impose a moral destination. The recipe's defining compulsions, desires, relationships, contradictions, and adult intensity remain active creative causes through late events unless specific earned changes explain otherwise.
+
+## Return the actual ordered sections, not numerical allocations
+After choosing the entire story, output an ordered sections array. Each entry is a DISTINCT dramatic unit with a specific action (dramaticEvent), its irreversible resultingChange, a working title, its primary beatIndex, an optional list of adjacent coveredBeatIndices, and a story-appropriate container. The number of entries is determined by narrative necessity: one beat may need many sections; a section can fulfill two neighboring beat requirements when its SINGLE event naturally does both. Do not create a second section for the other beat. Sections must follow the selected Story Arc's chronological progression, but do not give each beat an arbitrary quota. A book-scale conflict needs substantial, varied dramatic material; don't compress genuinely different events merely to reduce section count.
+
+## Choose container by dramatic SHAPE, never arithmetic
+Select scene for a focused event, developedScene for sustained conflict, setPiece for a major consequential encounter, sceneSequence for linked movements across places or time, or chapter for a cohesive multi-movement publishing unit. Do not calculate words, tokens, minSections, containerCounts, or padding. A separate deterministic server step will develop appropriate container lengths toward 115,000–125,000 finished-prose words WITHOUT adding a single story event or changing your event sequence. A section can be longer if its own event warrants richer prose; NEVER split an event or repeat a choice to meet length.
+
+## Causality and beat fulfillment
+Every chosen unit must change what happens next. People cannot leave twice without returning; deaths and revelations stay accomplished; do not reproduce one relationship argument or moral lesson in several beats. Each beat's complete authored promise must be satisfied by one or more genuinely appropriate events, which may be shared with a neighboring beat. A beat with a required dramatic function (especially the defining climax or resolution) must own a primary section; position that defining event late in the beat. The climax and irreversible aftermath must be earned and distinctly different. Optional enrichment is not canon. The author recipe outranks genre conventions and convenient artifacts, operations, permits, evidence trails, and administrative devices.
+
+## Full selected Story Arc
+${arcReaderExperienceDirective(req.arcTemplate)}
+${arcObligations}
+
+${intimacyPlanningDirective(req)}
+
+## Required authored story coverage
+${renderRequiredRecipeCoverage(obligations)}
+
+Return JSON only with storyArchitecture (the existing six fields) and ordered sections (beatIndex, coveredBeatIndices, title, dramaticEvent, resultingChange, container). Include EVERY dramatic beat, even when a beat is covered within a neighboring primary section. Do not return allocations or a word-budget table.`,
+      user: JSON.stringify({
+        planningContext,
+        existingSections: req.existingSections ?? [],
+        hint: req.hint ?? null,
+        requestedFormat: "novel",
+      }),
+    };
+  }
+  const maxBudgetedSections = maximumBudgetedNewSections(req);
   const containerBudgetInstructions = isNovel
     ? `Budget in finished-prose WORDS, never API output tokens: scene=${NOVEL_CONTAINER_WORD_TARGETS.scene.toLocaleString()} words, developedScene=${NOVEL_CONTAINER_WORD_TARGETS.developedScene.toLocaleString()}, setPiece=${NOVEL_CONTAINER_WORD_TARGETS.setPiece.toLocaleString()}, sceneSequence=${NOVEL_CONTAINER_WORD_TARGETS.sceneSequence.toLocaleString()}, chapter=${NOVEL_CONTAINER_WORD_TARGETS.chapter.toLocaleString()}. Return containerCounts on each beat, with minSections exactly their sum. Sum the WORD targets of every proposed section plus accepted existing sections. The first-pass book must plan 115,000–125,000 words (aim approximately ${NOVEL_FIRST_PASS_WORD_GOAL.toLocaleString()} to accommodate deduplication). Give every section distinct dramatic substance appropriate to its word budget; never fill with paraphrased events. The 125,000-word nominal planning cap is absolute. The server preserves chosen dramatic section slots. The first allocation itself must supply the full finished-prose target through distinctly envisioned events; it will not generate extra chapters to correct an underdeveloped plan.`
     : "Allocate the number of format-appropriate sections needed for complete Story Arc coverage without the novel-only word or container budget.";
