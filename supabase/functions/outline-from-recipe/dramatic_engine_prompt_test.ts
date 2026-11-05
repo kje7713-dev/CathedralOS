@@ -59,7 +59,7 @@ Deno.test("shared dramatic-engine prompts apply to every genre without adding st
     assertStringIncludes(enrichment, "Story possibilities before procedural apparatus", arc.name);
     assertStringIncludes(allocation, "Choose a distinctive dramatic engine, not the first workable plot", arc.name);
     assertStringIncludes(outline, "Dramatic events over procedural narration", arc.name);
-    assertStringIncludes(allocation, "WITHIN THIS EXISTING planning response", arc.name);
+    assertStringIncludes(allocation, "Within THIS EXISTING planning response", arc.name);
     assertStringIncludes(allocation, "not a new validity gate or failure path", arc.name);
     assertStringIncludes(outline, "without additional stages, sections, or repair", arc.name);
     // The author and arc can still choose a genuine investigation or operation.
