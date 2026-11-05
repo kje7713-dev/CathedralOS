@@ -6290,8 +6290,11 @@ function validatedWorkerBilling(
 function outputExhaustedBilling(actions: string[]) {
   return async (request: any) => {
     actions.push(request.action);
-    await request.onProviderSuccess?.({ content: '{"truncated":', finishReason: "length" });
-    throw new Error("output exhaustion callback unexpectedly returned");
+    const content = '{"truncated":';
+    await request.onProviderSuccess?.({ content, finishReason: "length" });
+    // Enrichment may recover from malformed paid output and continue.
+    // The other stages still throw before reaching this return.
+    return { featureResult: content, charged: true, actualCharge: 1, remainingCredits: 99 } as any;
   };
 }
 
@@ -6613,7 +6616,7 @@ Deno.test("first-pass missing climax declaration stays intact after verification
   assertEquals((db.row.warnings ?? []).length, 0);
 });
 
-Deno.test("enrichment semantic failure checkpoints one repair without repeating the first call", async () => {
+Deno.test("malformed enrichment continues from canonical material without a second paid call", async () => {
   const fullBody = await executableWorkerBody();
   const body = { ...fullBody, storyMaterialEnrichment: undefined } as any;
   const row: any = {
@@ -6632,10 +6635,10 @@ Deno.test("enrichment semantic failure checkpoints one repair without repeating 
   });
   await run();
   assertEquals(actions, ["story-material-enrichment"]);
-  assertEquals(db.row.planning_state.nextAction, "story-material-enrichment-repair");
-  await run();
-  assertEquals(actions, ["story-material-enrichment", "story-material-enrichment-repair"]);
+  assertEquals(db.row.planning_state.nextAction, "outline-plan");
   assertEquals(db.row.planning_state.phase, "enrichment_complete");
+  assertEquals(db.row.diagnostics.providerMaterialFallback, "canonical_recipe");
+  assertEquals(db.row.story_material !== null, true);
   assertEquals(db.row.attempt_count, 0);
 });
 
@@ -8047,7 +8050,7 @@ Deno.test("length-truncated outline JSON is classified as output exhaustion", ()
   assertEquals(parseOutlineJSON('{"ok":true}', "stop"), { ok: true });
 });
 
-Deno.test("provider output exhaustion reaches terminal run state for each production stage", async () => {
+Deno.test("paid enrichment output exhaustion recovers; later provider-stage exhaustion remains classified", async () => {
   const fullBody = await executableWorkerBody();
   const cases = [
     {
@@ -8100,6 +8103,12 @@ Deno.test("provider output exhaustion reaches terminal run state for each produc
       },
     );
     assertEquals(actions, [testCase.action], testCase.name);
+    if (testCase.name === "enrichment") {
+      assertEquals(db.row.status, "pending", "usable canonical enrichment remains recoverable");
+      assertEquals(db.row.planning_state.nextAction, "outline-plan");
+      assertEquals(db.row.diagnostics.providerMaterialFallback, "canonical_recipe");
+      continue;
+    }
     assertEquals(db.row.status, "failed", testCase.name);
     assertEquals(db.row.error_code, "provider_output_exhausted", testCase.name);
     assertEquals(db.row.diagnostics.errorCode, "provider_output_exhausted", testCase.name);
