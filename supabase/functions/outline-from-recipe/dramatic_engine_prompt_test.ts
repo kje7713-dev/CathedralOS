@@ -2,8 +2,8 @@ import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.208.
 import { buildAllocationPrompt, buildEnrichmentPrompt, buildPrompt } from "./index.ts";
 import { RECIPE_CREATIVE_AUTHORITY_DIRECTIVE } from "./_prompt_context.ts";
 
-// A deliberately plot-open recipe: the selected arc, not an invented transaction,
-// should shape the events and distinctive reader experience.
+// A deliberately plot-open recipe: the author and selected arc, not incidental
+// enrichment, should shape the events and distinctive reader experience.
 const recipe = {
   schema: "cathedralos.story_packet",
   version: 1,
@@ -56,18 +56,18 @@ Deno.test("shared dramatic-engine prompts apply to every genre without adding st
     const enrichment = buildEnrichmentPrompt(req).system;
     const allocation = buildAllocationPrompt(req).system;
     const outline = buildPrompt(req, new Map()).system;
-    assertStringIncludes(enrichment, "Story possibilities before procedural apparatus", arc.name);
-    assertStringIncludes(allocation, "Choose a distinctive dramatic engine, not the first workable plot", arc.name);
-    assertStringIncludes(outline, "Dramatic events over procedural narration", arc.name);
+    assertStringIncludes(enrichment, "Creative independence of generated material", arc.name);
+    assertStringIncludes(allocation, "Select the strongest author-and-arc-driven dramatic engine", arc.name);
+    assertStringIncludes(outline, "Dramatize the chosen story", arc.name);
     assertStringIncludes(allocation, "Within THIS EXISTING planning response", arc.name);
     assertStringIncludes(allocation, "not a new validity gate or failure path", arc.name);
     assertStringIncludes(outline, "without additional stages, sections, or repair", arc.name);
-    // The author and arc can still choose a genuine investigation or operation.
-    assertStringIncludes(allocation, "A procedurally driven genre remains completely valid", arc.name);
-    assertStringIncludes(allocation, "NEVER which kind of plot is chosen", arc.name);
-    assertStringIncludes(allocation, "planner-invented supporting character", arc.name);
-    assertStringIncludes(allocation, "deepen THAT story with genuinely different consequences", arc.name);
-    assertStringIncludes(enrichment, "investigation, conspiracy, crime, legal dispute", arc.name);
+    // Every genre may retain its defining narrative form without promoting enrichment into canon.
+    assertStringIncludes(allocation, "Any mode of storytelling, including procedural or investigative storytelling", arc.name);
+    assertStringIncludes(allocation, "never the kind of story the model should choose", arc.name);
+    assertStringIncludes(allocation, "Its existence does not determine the story\'s central conflict", arc.name);
+    assertStringIncludes(allocation, "deepen that chosen story through genuinely different consequential developments", arc.name);
+    assertStringIncludes(enrichment, "No element gains narrative authority merely because an earlier model invented it", arc.name);
     assertStringIncludes(outline, "selected architecture, accepted history, allocated slots", arc.name);
   }
 });
