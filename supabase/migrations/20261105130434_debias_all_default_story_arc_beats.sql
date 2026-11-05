@@ -5,24 +5,24 @@
 -- This updates only the template catalog, never user-authored story_arc customizations.
 WITH beat_rewrites (template_id, beat_role, original_text, revised_text) AS (
   VALUES
-    ('A0000001-0000-0000-0000-000000000001'::uuid, 'resolution', 'The new normal. Loose threads are tied. The world has changed.', 'Show the changed final situation, what is settled, and what meaningfully remains unresolved.'),
-    ('A0000001-0000-0000-0000-000000000004'::uuid, 'theme_stated', 'Hint at the lesson or central question the protagonist must face.', 'Hint at the central question or tension the protagonist must face; no moral lesson is required.'),
-    ('A0000001-0000-0000-0000-000000000004'::uuid, 'finale', 'The protagonist applies the lesson and resolves the central conflict.', 'The protagonist acts on changed understanding or commitment, bringing the central conflict to a consequential turning point.'),
-    ('A0000001-0000-0000-0000-000000000005'::uuid, 'take', 'The character sacrifices or suffers to bring the prize home.', 'The character pays a consequential price for pursuing or possessing what they found.'),
-    ('A0000001-0000-0000-0000-000000000005'::uuid, 'change', 'The character demonstrates what they learned and how they are different.', 'The character shows how the experience has changed their choices, for better or worse.'),
-    ('A0000001-0000-0000-0000-000000000006'::uuid, 'denouement', 'The final situation settles and the meaning of the events becomes clear.', 'Show the changed final situation and what is resolved, uncertain, or unsettled.'),
-    ('A0000001-0000-0000-0000-000000000007'::uuid, 'ketsu', 'Connect the elements and show the new understanding or harmony.', 'Connect the elements and reveal a new relationship or meaning between them, without requiring harmony.'),
-    ('A0000001-0000-0000-0000-000000000010'::uuid, 'quest_and_bond', 'Escalate trials while trust, desire, and mutual dependence deepen.', 'Escalate fantasy-world pressures and consequential choices while trust, desire, and mutual dependence deepen.'),
-    ('A0000001-0000-0000-0000-000000000010'::uuid, 'midpoint_revelation', 'Reveal a truth about the world, mission, power, or relationship that changes the trajectory.', 'Reveal a truth about the world, power, danger, or relationship that changes the trajectory.'),
-    ('A0000001-0000-0000-0000-000000000010'::uuid, 'final_battle_and_choice', 'Resolve the primary external conflict through a climax inseparable from the central emotional choice.', 'Bring the defining fantasy stakes and romantic choice together in one consequential climax; a literal battle is not required.'),
-    ('A0000001-0000-0000-0000-000000000011'::uuid, 'first_pursuit', 'Escalate pursuit, investigation, or evasion while proving the threat is active.', 'Escalate active danger through pursuit, evasion, discovery, or consequential failed attempts, whichever fits the story.'),
-    ('A0000001-0000-0000-0000-000000000011'::uuid, 'final_lead', 'Reveal the actionable path that makes one last attempt possible.', 'Reveal an earned opening, hard choice, or opportunity that makes one last attempt possible.'),
-    ('A0000001-0000-0000-0000-000000000016'::uuid, 'pinch_point_one', 'Apply direct pressure from the antagonistic force and demonstrate the cost of failure.', 'Apply direct pressure from a person, circumstance, or opposing force and demonstrate the cost of failure.'),
-    ('A0000001-0000-0000-0000-000000000016'::uuid, 'resolution', 'Deliver the decisive confrontation and resolve the central story problem.', 'Deliver the decisive act or encounter and establish the central story''s consequential outcome.'),
-    ('A0000001-0000-0000-0000-000000000017'::uuid, 'rules_discovered', 'Reveal enough about the threat''s nature or pattern to make resistance possible but costly.', 'Reveal or complicate the threat''s behavior and the cost of confronting it, without requiring a solvable rule.'),
-    ('A0000001-0000-0000-0000-000000000019'::uuid, 'midpoint_reveal', 'Reveal a truth that changes both the investigation and the relationship.', 'Reveal a truth that changes both the danger and the relationship.'),
-    ('A0000001-0000-0000-0000-000000000027'::uuid, 'buried_conflict', 'Deepen the secret, resentment, debt, or unresolved wrong carried across time.', 'Deepen a resentment, inherited pressure, unresolved wrong, or recurring choice carried across time; a buried secret is optional.'),
-    ('A0000001-0000-0000-0000-000000000027'::uuid, 'inherited_truth_revealed', 'Expose the hidden history that explains the repeating conflict.', 'Reveal or reinterpret the inherited pattern through decisions, memory, or discovery; no hidden document is required.')
+    ('a0000001-0000-0000-0000-000000000001'::uuid, 'resolution', 'The new normal. Loose threads are tied. The world has changed.', 'Show the changed final situation, what is settled, and what meaningfully remains unresolved.'),
+    ('a0000001-0000-0000-0000-000000000004'::uuid, 'theme_stated', 'Hint at the lesson or central question the protagonist must face.', 'Hint at the central question or tension the protagonist must face; no moral lesson is required.'),
+    ('a0000001-0000-0000-0000-000000000004'::uuid, 'finale', 'The protagonist applies the lesson and resolves the central conflict.', 'The protagonist acts on changed understanding or commitment, bringing the central conflict to a consequential turning point.'),
+    ('a0000001-0000-0000-0000-000000000005'::uuid, 'take', 'The character sacrifices or suffers to bring the prize home.', 'The character pays a consequential price for pursuing or possessing what they found.'),
+    ('a0000001-0000-0000-0000-000000000005'::uuid, 'change', 'The character demonstrates what they learned and how they are different.', 'The character shows how the experience has changed their choices, for better or worse.'),
+    ('a0000001-0000-0000-0000-000000000006'::uuid, 'denouement', 'The final situation settles and the meaning of the events becomes clear.', 'Show the changed final situation and what is resolved, uncertain, or unsettled.'),
+    ('a0000001-0000-0000-0000-000000000007'::uuid, 'ketsu', 'Connect the elements and show the new understanding or harmony.', 'Connect the elements and reveal a new relationship or meaning between them, without requiring harmony.'),
+    ('a0000001-0000-0000-0000-000000000010'::uuid, 'quest_and_bond', 'Escalate trials while trust, desire, and mutual dependence deepen.', 'Escalate fantasy-world pressures and consequential choices while trust, desire, and mutual dependence deepen.'),
+    ('a0000001-0000-0000-0000-000000000010'::uuid, 'midpoint_revelation', 'Reveal a truth about the world, mission, power, or relationship that changes the trajectory.', 'Reveal a truth about the world, power, danger, or relationship that changes the trajectory.'),
+    ('a0000001-0000-0000-0000-000000000010'::uuid, 'final_battle_and_choice', 'Resolve the primary external conflict through a climax inseparable from the central emotional choice.', 'Bring the defining fantasy stakes and romantic choice together in one consequential climax; a literal battle is not required.'),
+    ('a0000001-0000-0000-0000-000000000011'::uuid, 'first_pursuit', 'Escalate pursuit, investigation, or evasion while proving the threat is active.', 'Escalate active danger through pursuit, evasion, discovery, or consequential failed attempts, whichever fits the story.'),
+    ('a0000001-0000-0000-0000-000000000011'::uuid, 'final_lead', 'Reveal the actionable path that makes one last attempt possible.', 'Reveal an earned opening, hard choice, or opportunity that makes one last attempt possible.'),
+    ('a0000001-0000-0000-0000-000000000016'::uuid, 'pinch_point_one', 'Apply direct pressure from the antagonistic force and demonstrate the cost of failure.', 'Apply direct pressure from a person, circumstance, or opposing force and demonstrate the cost of failure.'),
+    ('a0000001-0000-0000-0000-000000000016'::uuid, 'resolution', 'Deliver the decisive confrontation and resolve the central story problem.', 'Deliver the decisive act or encounter and establish the central story''s consequential outcome.'),
+    ('a0000001-0000-0000-0000-000000000017'::uuid, 'rules_discovered', 'Reveal enough about the threat''s nature or pattern to make resistance possible but costly.', 'Reveal or complicate the threat''s behavior and the cost of confronting it, without requiring a solvable rule.'),
+    ('a0000001-0000-0000-0000-000000000019'::uuid, 'midpoint_reveal', 'Reveal a truth that changes both the investigation and the relationship.', 'Reveal a truth that changes both the danger and the relationship.'),
+    ('a0000001-0000-0000-0000-000000000027'::uuid, 'buried_conflict', 'Deepen the secret, resentment, debt, or unresolved wrong carried across time.', 'Deepen a resentment, inherited pressure, unresolved wrong, or recurring choice carried across time; a buried secret is optional.'),
+    ('a0000001-0000-0000-0000-000000000027'::uuid, 'inherited_truth_revealed', 'Expose the hidden history that explains the repeating conflict.', 'Reveal or reinterpret the inherited pattern through decisions, memory, or discovery; no hidden document is required.')
 )
 UPDATE public.story_arc_templates AS t
 SET beats = (
@@ -50,5 +50,5 @@ WHERE jsonb_typeof(t.beats) = 'array'
 
 UPDATE public.story_arc_templates
 SET description = 'A dual-engine fantasy arc in which external fantasy stakes and central romance escalate together and become inseparable at the climax.'
-WHERE id = 'A0000001-0000-0000-0000-000000000010'::uuid
+WHERE id = 'a0000001-0000-0000-0000-000000000010'::uuid
   AND description = 'A dual-engine fantasy arc in which the external quest and central romance escalate together and become inseparable at the climax.';
