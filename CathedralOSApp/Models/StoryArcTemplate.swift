@@ -38,7 +38,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let threeAct = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000001")!,
         name: "Three-Act",
-        description: "A versatile three-act engine for vivid, escalating drama: an irresistible rupture, a middle that changes what the struggle means, and a decisive, unforgettable consequence. Let the author's genre choose the intensity and aftertaste, not a tidy default.",
+        description: "A versatile three-act engine for vivid, escalating drama: an irresistible rupture, a middle that changes what the struggle means, and a decisive, unforgettable consequence. Let the author's genre choose the intensity and aftertaste, not a tidy default. Wild dust: Let the author's genre unleash reckless decisions, bizarre collisions, breathtaking reversals, and an ending no tidy formula could predict.",
         beats: [
             .init(role: "setup",              label: "Setup",              description: "Introduce the world, characters, and the ordinary life that will be disrupted."),
             .init(role: "inciting_incident",  label: "Inciting Incident",  description: "The event that disrupts the ordinary world and sets the story in motion."),
@@ -54,7 +54,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let herosJourney = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000002")!,
         name: "Hero's Journey",
-        description: "An extraordinary journey through strange encounters, dangerous bonds, temptation, ordeal, and a changed return. The hero may emerge triumphant, haunted, compromised, or monstrous when the authored story warrants it.",
+        description: "An extraordinary journey through strange encounters, dangerous bonds, temptation, ordeal, and a changed return. The hero may emerge triumphant, haunted, compromised, or monstrous when the authored story warrants it. Wild dust: Let temptation, monstrous companions, absurd wagers, and disastrous desires transform the journey into something nobody planned.",
         beats: [
             .init(role: "ordinary_world",        label: "Ordinary World",           description: "The hero's normal life before the adventure begins."),
             .init(role: "call_to_adventure",    label: "Call to Adventure",        description: "The hero is presented with a problem, challenge, or opportunity."),
@@ -74,7 +74,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let mystery = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000003")!,
         name: "Mystery",
-        description: "An irresistible mystery of volatile people, seductive false answers, and revelations that keep changing whom readers trust. Deliver a surprising but fair truth with a personal cost far beyond closing the case.",
+        description: "An irresistible mystery of volatile people, seductive false answers, and revelations that keep changing whom readers trust. Deliver a surprising but fair truth with a personal cost far beyond closing the case. Wild dust: Suspects can be magnetic, outrageous, grotesque, or dangerous; let each fair clue threaten a bond and each revelation detonate an assumption.",
         beats: [
             .init(role: "the_crime",             label: "The Crime / Hook",         description: "Establish the crime, mystery, or question that drives the story."),
             .init(role: "investigation_begins",  label: "Investigation Begins",     description: "The detective/protagonist takes the case and starts gathering evidence."),
@@ -91,7 +91,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let saveTheCat = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000004")!,
         name: "Save the Cat!",
-        description: "A propulsive fifteen-beat story of bold choices, unpredictable encounters, major reversals, and the vivid pleasures or terrors of the authored premise. Its transformation may be exhilarating, grotesque, tragic, tender, or morally dark.",
+        description: "A propulsive fifteen-beat story of bold choices, unpredictable encounters, major reversals, and the vivid pleasures or terrors of the authored premise. Its transformation may be exhilarating, grotesque, tragic, tender, or morally dark. Wild dust: Treat familiar beats as launchpads for audacious reversals, vivid chaos, and uniquely character-caused consequences.",
         beats: [
             .init(role: "opening_image", label: "Opening Image", description: "Show the protagonist and world before the story changes."),
             .init(role: "theme_stated", label: "Theme Stated", description: "Hint at the central question or tension the protagonist must face; no moral lesson is required."),
@@ -114,7 +114,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let storyCircle = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000005")!,
         name: "Story Circle",
-        description: "An eight-movement spiral from familiar desire into startling discovery, costly possession, and a return that cannot restore the old world. Transformation need not equal improvement.",
+        description: "An eight-movement spiral from familiar desire into startling discovery, costly possession, and a return that cannot restore the old world. Transformation need not equal improvement. Wild dust: Desire may lead through delirious pleasures, impossible bargains, disastrous possession, and a wildly altered return.",
         beats: [
             .init(role: "you", label: "You", description: "Show the character in a zone of comfort and establish what they want."),
             .init(role: "need", label: "Need", description: "The character enters an unfamiliar situation to pursue a need."),
@@ -130,7 +130,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let freytagsPyramid = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000006")!,
         name: "Freytag's Pyramid",
-        description: "Five movements of rising pressure toward a breathtaking dramatic collision, followed by consequences that fracture or remake lives. The author's genre decides whether the climax is horrifying, ecstatic, intimate, or devastating.",
+        description: "Five movements of rising pressure toward a breathtaking dramatic collision, followed by consequences that fracture or remake lives. The author's genre decides whether the climax is horrifying, ecstatic, intimate, or devastating. Wild dust: Escalate beyond polite complications into a volcanic collision whose consequences cannot be neatly cleaned up.",
         beats: [
             .init(role: "exposition", label: "Exposition", description: "Introduce the world, characters, conflict, and conditions of the story."),
             .init(role: "rising_action", label: "Rising Action", description: "Complications build as choices intensify the central conflict."),
@@ -143,7 +143,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let kishotenketsu = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000007")!,
         name: "Kishōtenketsu",
-        description: "An inventive four-part architecture that builds fascination, then creates a radical change in meaning through juxtaposition rather than mandatory conflict. The turn can be funny, uncanny, devastating, exquisite, or sublime.",
+        description: "An inventive four-part architecture that builds fascination, then creates a radical change in meaning through juxtaposition rather than mandatory conflict. The turn can be funny, uncanny, devastating, exquisite, or sublime. Wild dust: Use the turn to make readers gasp, howl, ache, or see reality differently; inventive upheaval need not require a fight.",
         beats: [
             .init(role: "ki", label: "Ki — Introduction", description: "Establish the setting, characters, and initial idea."),
             .init(role: "sho", label: "Shō — Development", description: "Develop the situation and deepen the world without a major reversal."),
@@ -155,7 +155,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let romanceHEA = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000008")!,
         name: "Romance / HEA",
-        description: "A passionate romance driven by combustible chemistry, clashing desires, revelatory intimacy, costly rupture, and a grand act of choosing love. Deliver the promised HEA/HFN with an exciting, personal route to it—not interchangeable relationship talks.",
+        description: "A passionate romance driven by combustible chemistry, clashing desires, revelatory intimacy, costly rupture, and a grand act of choosing love. Deliver the promised HEA/HFN with an exciting, personal route to it—not interchangeable relationship talks. Wild dust: Let lovers make outrageous, costly choices, risk everything for pleasure and attachment, and earn thrilling commitment rather than a sensible negotiation.",
         beats: [
             .init(role: "ordinary_life", label: "Ordinary Life", description: "Establish each lead's life, unmet need, and emotional defenses before the relationship changes them."),
             .init(role: "meet_attraction", label: "Meet / Attraction", description: "Bring the leads together and create a meaningful spark, friction, or pull between them."),
@@ -175,7 +175,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let psychologicalThriller = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000009")!,
         name: "Psychological / Domestic Thriller",
-        description: "A feverish thriller of obsession, intimate treachery, shifting guilt, and revelations that turn familiar people terrifying. Make the final truth shocking, earned, and emotionally destabilizing.",
+        description: "A feverish thriller of obsession, intimate treachery, shifting guilt, and revelations that turn familiar people terrifying. Make the final truth shocking, earned, and emotionally destabilizing. Wild dust: Weaponize intimate knowledge, maddening ambiguity, shameful hunger, and impossible reversals until every familiar relationship feels explosive.",
         beats: [
             .init(role: "normal_surface", label: "Normal Surface", description: "Establish a believable domestic or psychological status quo with subtle fault lines underneath."),
             .init(role: "destabilizing_incident", label: "Destabilizing Incident", description: "Introduce the event, discovery, or behavior that makes the protagonist question what is real or safe."),
@@ -193,7 +193,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let romantasy = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000010")!,
         name: "Romantasy",
-        description: "A high-intensity collision of dangerous magic, wonder, forbidden or consuming desire, and loyalties that can remake a world. Fantasy conflict and romantic choices must transform one another spectacularly.",
+        description: "A high-intensity collision of dangerous magic, wonder, forbidden or consuming desire, and loyalties that can remake a world. Fantasy conflict and romantic choices must transform one another spectacularly. Wild dust: Magic and desire should tempt people into reckless bargains, spectacular betrayal, and choices that can wreck a realm or a heart.",
         beats: [
             .init(role: "ordinary_world", label: "Ordinary World", description: "Establish the protagonist, the fantasy world, and the emotional conditions before disruption."),
             .init(role: "magical_disruption", label: "Magical Disruption", description: "Introduce the threat, power, mission, or revelation that overturns the status quo."),
@@ -214,7 +214,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let suspenseCountdown = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000011")!,
         name: "Suspense / Countdown Thriller",
-        description: "A relentless countdown of ingenious setbacks, desperation, betrayals, and surprising changes in what the threat demands. End in a nail-biting, earned collision at the clock's edge.",
+        description: "A relentless countdown of ingenious setbacks, desperation, betrayals, and surprising changes in what the threat demands. End in a nail-biting, earned collision at the clock's edge. Wild dust: Let the clock provoke deranged improvisation, moral collisions, and catastrophic personal costs, never an endless string of similar near-misses.",
         beats: [
             .init(role: "threat_appears", label: "Threat Appears", description: "Introduce a concrete danger with consequences the protagonist cannot ignore."),
             .init(role: "clock_starts", label: "Clock Starts", description: "Create a meaningful deadline and force the protagonist into action."),
@@ -232,7 +232,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let scienceFictionSurvival = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000012")!,
         name: "Science-Fiction Problem / Survival",
-        description: "A mind-bending survival story of impossible phenomena, terrifying implications, emotional collisions, and discoveries that redraw what is possible. The breakthrough must change people and their world, not merely fix a device.",
+        description: "A mind-bending survival story of impossible phenomena, terrifying implications, emotional collisions, and discoveries that redraw what is possible. The breakthrough must change people and their world, not merely fix a device. Wild dust: Let impossible discoveries corrupt desires, rupture relationships, and produce awe or existential terror beyond a routine technical fix.",
         beats: [
             .init(role: "baseline_world", label: "Baseline World", description: "Establish the system, environment, technology, and ordinary operating assumptions."),
             .init(role: "impossible_problem", label: "Impossible Problem", description: "Introduce the anomaly, disaster, discovery, or survival problem that breaks those assumptions."),
@@ -250,7 +250,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let dystopianRebellion = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000013")!,
         name: "Dystopian Rebellion",
-        description: "A fierce rebellion of seductive power, dangerous loyalty, treachery, desperate sacrifice, and upheaval. Resistance may liberate or corrupt; the new order need not be reassuring.",
+        description: "A fierce rebellion of seductive power, dangerous loyalty, treachery, desperate sacrifice, and upheaval. Resistance may liberate or corrupt; the new order need not be reassuring. Wild dust: Revolt can become beautiful, obscene, ecstatic, or monstrous as volatile characters invent dangerous forms of power and betrayal.",
         beats: [
             .init(role: "controlled_normal", label: "Controlled Normal", description: "Establish the rules, rewards, punishments, and normalized compromises of the oppressive system."),
             .init(role: "crack_in_system", label: "Crack in the System", description: "Expose a contradiction, injustice, or forbidden truth that the protagonist cannot unsee."),
@@ -268,7 +268,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let darkRomance = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000014")!,
         name: "Dark Romance",
-        description: "A transgressive romance of consuming desire, obsession, dangerous dependence, temptation, moral compromise, betrayal, and shifting power. Let passion cause shocking and intimate consequences. Development need not mean rehabilitation, and an earned romantic future need not be wholesome, domestic, or emotionally tidy.",
+        description: "A transgressive romance of consuming desire, obsession, dangerous dependence, temptation, moral compromise, betrayal, and shifting power. Let passion cause shocking and intimate consequences. Development need not mean rehabilitation, and an earned romantic future need not be wholesome, domestic, or emotionally tidy. Wild dust: Embrace obsession, dangerous seduction, forbidden longing, irrational devotion, and shocking intimate consequences; do not automatically make the lovers well-adjusted.",
         beats: [
             .init(role: "dangerous_encounter", label: "Dangerous Encounter", description: "Introduce an attraction carrying credible emotional, social, moral, or physical risk."),
             .init(role: "boundary_drawn", label: "Boundary Drawn", description: "Expose a dangerous imbalance or forbidden limit that intensifies the attraction and provokes consequential choices; this is not a recurring discussion of relationship rules."),
@@ -288,7 +288,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let epicFantasyQuest = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000015")!,
         name: "Epic Fantasy Quest",
-        description: "A vast, perilous adventure of strange civilizations, impossible bargains, magical terrors, fractured fellowship, and sacrifices capable of remaking the world. Each revelation should change the quest itself.",
+        description: "A vast, perilous adventure of strange civilizations, impossible bargains, magical terrors, fractured fellowship, and sacrifices capable of remaking the world. Each revelation should change the quest itself. Wild dust: Invent frightening wonders, outrageous companions, soul-shaking reversals, and choices that make the original quest unrecognizable.",
         beats: [
             .init(role: "threatened_home", label: "Threatened Home", description: "Establish the world and the danger that makes remaining unchanged impossible."),
             .init(role: "call_or_mission", label: "Call / Mission", description: "Define the quest, objective, or burden that must be undertaken."),
@@ -306,7 +306,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let sevenPoint = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000016")!,
         name: "Seven-Point Story Structure",
-        description: "A sharp seven-turn architecture of irresistible contrast, disruptive choices, severe pressure, and a startling consequential payoff. Let the selected genre—not a generic plotting formula—determine the spectacle or intimacy.",
+        description: "A sharp seven-turn architecture of irresistible contrast, disruptive choices, severe pressure, and a startling consequential payoff. Let the selected genre—not a generic plotting formula—determine the spectacle or intimacy. Wild dust: Each structural turn may unleash a daring, genre-specific reversal instead of another safe step in a universal formula.",
         beats: [
             .init(role: "hook", label: "Hook", description: "Establish the protagonist, central lack, and starting conditions in direct contrast with the eventual ending."),
             .init(role: "plot_turn_one", label: "Plot Turn One", description: "Introduce the event that commits the protagonist to the central story problem."),
@@ -321,7 +321,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let horrorDread = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000017")!,
         name: "Horror / Escalating Dread",
-        description: "A nightmare engine of encroaching wrongness, bizarre revelations, collapsing safety, and a genuinely terrifying manifestation. Leave unforgettable images and consequences that disturb the reader long after the ending.",
+        description: "A nightmare engine of encroaching wrongness, bizarre revelations, collapsing safety, and a genuinely terrifying manifestation. Leave unforgettable images and consequences that disturb the reader long after the ending. Wild dust: Pursue uncanny images, monstrous intimacy, grotesque surprises, and terror that changes the rules of the nightmare itself.",
         beats: [
             .init(role: "normal_with_crack", label: "Normal with a Crack", description: "Establish ordinary life while planting a specific detail that feels wrong before its meaning is known."),
             .init(role: "first_intrusion", label: "First Intrusion", description: "Let the threat cross into the protagonist's world in a way that can no longer be fully ignored."),
@@ -339,7 +339,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let sportsRomance = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000018")!,
         name: "Sports Romance",
-        description: "An exhilarating collision of competitive ambition, fierce rivalry, obsessive drive, public pressure, and romantic chemistry. Make both the athletic climax and love choice thrilling and costly, with an earned romantic future.",
+        description: "An exhilarating collision of competitive ambition, fierce rivalry, obsessive drive, public pressure, and romantic chemistry. Make both the athletic climax and love choice thrilling and costly, with an earned romantic future. Wild dust: Fierce chemistry, reckless ambition, outrageous rivalries, public humiliation, and a truly shocking contest can upend the lovers' world.",
         beats: [
             .init(role: "season_setup", label: "Season Setup", description: "Establish the athletic stakes, team or competitive environment, and each lead's current priorities."),
             .init(role: "meet_or_rivalry", label: "Meet / Rivalry", description: "Create the relationship spark through competition, collision, recruitment, or a shared sports context."),
@@ -359,7 +359,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let romanticSuspense = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000019")!,
         name: "Romantic Suspense",
-        description: "A combustible romance under mounting peril, where chemistry, secrets, betrayal, and risky trust reshape the danger itself. Deliver a thrilling, earned joint climax that makes the relationship essential to survival.",
+        description: "A combustible romance under mounting peril, where chemistry, secrets, betrayal, and risky trust reshape the danger itself. Deliver a thrilling, earned joint climax that makes the relationship essential to survival. Wild dust: Desire must provoke dangerous gambles, electric reversals, startling betrayals, and a climax where love transforms survival.",
         beats: [
             .init(role: "danger_hook", label: "Danger Hook", description: "Introduce the threat that forces the leads into the same problem."),
             .init(role: "forced_alliance", label: "Forced Alliance", description: "Make cooperation necessary even though trust is incomplete."),
@@ -379,7 +379,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let conspiracyArtifactThriller = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000020")!,
         name: "Conspiracy / Artifact Thriller",
-        description: "A thrilling rabbit hole of dangerous discoveries, hidden power, treacherous allies, astonishing connections, and revelations that redraw reality. Clues must unleash human danger and consequential action, not paperwork.",
+        description: "A thrilling rabbit hole of dangerous discoveries, hidden power, treacherous allies, astonishing connections, and revelations that redraw reality. Clues must unleash human danger and consequential action, not paperwork. Wild dust: Make rabbit-hole revelations bizarre, perilous, personally devastating, and reality-shattering, not an audit of documents and procedures.",
         beats: [
             .init(role: "discovery", label: "Discovery", description: "Uncover the object, document, secret, or anomaly that opens the larger mystery."),
             .init(role: "pursuit_begins", label: "Pursuit Begins", description: "Make possession of the discovery dangerous and force the protagonist to act."),
@@ -398,7 +398,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let progressionFantasy = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000021")!,
         name: "Progression Fantasy / LitRPG",
-        description: "An electrifying climb through imaginative power systems, spectacular trials, fierce rivals, and costly breakthroughs. Each tier unlocks different dangers and freedoms, not merely bigger numbers.",
+        description: "An electrifying climb through imaginative power systems, spectacular trials, fierce rivals, and costly breakthroughs. Each tier unlocks different dangers and freedoms, not merely bigger numbers. Wild dust: Each new power should open exhilarating, terrifying, and morally dangerous possibilities nobody could foresee from the previous tier.",
         beats: [
             .init(role: "weak_start", label: "Weak Start", description: "Establish the protagonist's limitations, status, and the hierarchy they cannot yet overcome."),
             .init(role: "system_discovered", label: "System Discovered", description: "Reveal the rules, power system, progression path, or game-like structure that makes advancement possible."),
@@ -417,7 +417,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let historicalWarSurvival = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000022")!,
         name: "Historical War / Survival",
-        description: "A raw historical survival saga of desperation, fragile loyalty, savage irony, heartbreaking courage, and irreversible choices. Let lived history collide with unpredictable human decisions rather than procedural campaign summaries.",
+        description: "A raw historical survival saga of desperation, fragile loyalty, savage irony, heartbreaking courage, and irreversible choices. Let lived history collide with unpredictable human decisions rather than procedural campaign summaries. Wild dust: Give period-credible people ferocious appetites, savage luck, outrageous survival gambles, and choices that remake their private history.",
         beats: [
             .init(role: "life_before", label: "Life Before", description: "Establish the social world, relationships, duties, and historical conditions before open rupture."),
             .init(role: "war_arrives", label: "War Arrives", description: "Bring the historical conflict directly into the protagonist's life."),
@@ -435,7 +435,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let comingOfAge = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000023")!,
         name: "Coming-of-Age / Bildungsroman",
-        description: "An unruly journey of intoxicating discovery, humiliation, dangerous belonging, fierce attachments, and irreversible self-definition. Growing up may be ecstatic, ugly, strange, or morally compromised rather than wholesome.",
+        description: "An unruly journey of intoxicating discovery, humiliation, dangerous belonging, fierce attachments, and irreversible self-definition. Growing up may be ecstatic, ugly, strange, or morally compromised rather than wholesome. Wild dust: Build identity through reckless belonging, astonishing mistakes, sudden ecstasy, humiliating reversals, and irreversible personal consequences.",
         beats: [
             .init(role: "sheltered_identity", label: "Sheltered Identity", description: "Establish the protagonist's inherited identity, assumptions, and limited understanding of the world."),
             .init(role: "first_disruption", label: "First Disruption", description: "Introduce an experience that makes the old identity insufficient."),
@@ -453,7 +453,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let revenge = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000024")!,
         name: "Revenge",
-        description: "A savage vengeance tale of obsession, inventive retaliation, treacherous alliances, escalating counterstrikes, and a victory that may taste monstrous. Revenge must change its pursuer and the world they injure.",
+        description: "A savage vengeance tale of obsession, inventive retaliation, treacherous alliances, escalating counterstrikes, and a victory that may taste monstrous. Revenge must change its pursuer and the world they injure. Wild dust: Let the avenger's most ingenious move create a stranger monster, temptation, or betrayal, with consequences beyond settling accounts.",
         beats: [
             .init(role: "injury", label: "Injury", description: "Inflict the wrong, loss, humiliation, or betrayal that creates the desire for revenge."),
             .init(role: "vow", label: "Vow", description: "Turn pain into a concrete commitment to retaliate."),
@@ -471,7 +471,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let heist = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000025")!,
         name: "Heist / Caper",
-        description: "An audacious caper of impossible ambition, eccentric specialists, clashing loyalties, outrageous complications, clever improvisation, and double-crosses that change the job itself. The story must thrill, not read like a logistics plan.",
+        description: "An audacious caper of impossible ambition, eccentric specialists, clashing loyalties, outrageous complications, clever improvisation, and double-crosses that change the job itself. The story must thrill, not read like a logistics plan. Wild dust: Unleash eccentric accomplices, outrageous gambles, seductive double-crosses, improvisational catastrophes, and a twist that transforms the score.",
         beats: [
             .init(role: "target", label: "The Target", description: "Establish the prize, obstacle, and why taking it matters."),
             .init(role: "motive", label: "The Motive", description: "Create the pressure or opportunity that makes the heist worth attempting."),
@@ -490,7 +490,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let redemption = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000026")!,
         name: "Redemption / Rebirth",
-        description: "A dangerous, hard-fought rebirth where a compromised person faces temptation, catastrophic relapse, and the ultimate cost of acting against their old self. Redemption must be proven through stunning action, not declarations.",
+        description: "A dangerous, hard-fought rebirth where a compromised person faces temptation, catastrophic relapse, and the ultimate cost of acting against their old self. Redemption must be proven through stunning action, not declarations. Wild dust: Let temptation be feral and transformation costly, startling, and spectacular; a neat confession is never the whole change.",
         beats: [
             .init(role: "broken_state", label: "Broken State", description: "Establish the protagonist's damaged pattern, moral failure, or self-defeating way of living."),
             .init(role: "chance_to_change", label: "Chance to Change", description: "Introduce the person, event, responsibility, or consequence that makes another path possible."),
@@ -508,7 +508,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let familySaga = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000027")!,
         name: "Family Saga / Generational",
-        description: "An unruly generational epic of consuming love, inherited shame, fierce ambition, rivalries, secrets, and choices that echo catastrophically through time. Legacy may be triumph, curse, or a startling mixture.",
+        description: "An unruly generational epic of consuming love, inherited shame, fierce ambition, rivalries, secrets, and choices that echo catastrophically through time. Legacy may be triumph, curse, or a startling mixture. Wild dust: Encourage extravagant passions, absurd feuds, inherited appetites, betrayals across eras, and revelations that recast the family myth.",
         beats: [
             .init(role: "founding_choice", label: "Founding Choice", description: "Establish the consequential decision, relationship, wound, or ambition that shapes the family system."),
             .init(role: "first_inheritance", label: "First Inheritance", description: "Show how the founding generation's choices become conditions imposed on the next."),
