@@ -639,7 +639,7 @@ export function validateNovelLeafContainers(
 
 /** Interleave a beat's planned containers rather than grouping similar
  * sizes together. Counts and slot names remain deterministic on replay. */
-export function plannedNovelContainerSlots(counts: NovelContainerCounts, reserveClimaxSetPiece = false): Array<typeof NOVEL_LEAF_CONTAINERS[number]> {
+export function plannedNovelContainerSlots(counts: NovelContainerCounts, reserveClimaxSetPiece = false, requiredFunctionsAfterClimax = 0): Array<typeof NOVEL_LEAF_CONTAINERS[number]> {
   const total = NOVEL_LEAF_CONTAINERS.reduce((sum, type) => sum + counts[type], 0);
   const used = Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((type) => [type, 0])) as NovelContainerCounts;
   const slots: Array<typeof NOVEL_LEAF_CONTAINERS[number]> = [];
@@ -651,11 +651,12 @@ export function plannedNovelContainerSlots(counts: NovelContainerCounts, reserve
     slots.push(chosen);
     used[chosen]++;
   }
-  // The structural climax must occupy its reserved final slot. Interleaving
-  // container sizes must never move the planned climactic set piece earlier.
-  if (reserveClimaxSetPiece && counts.setPiece > 0 && slots.at(-1) !== "setPiece") {
+  // Keep the climactic set-piece in the named climax slot, even if the beat
+  // reserves an additional resolution/aftermath slot after its climax.
+  const climaxSlot = slots.length - requiredFunctionsAfterClimax - 1;
+  if (reserveClimaxSetPiece && counts.setPiece > 0 && climaxSlot >= 0 && slots[climaxSlot] !== "setPiece") {
     const setPieceIndex = slots.lastIndexOf("setPiece");
-    [slots[setPieceIndex], slots[slots.length - 1]] = [slots[slots.length - 1], slots[setPieceIndex]];
+    [slots[setPieceIndex], slots[climaxSlot]] = [slots[climaxSlot], slots[setPieceIndex]];
   }
   return slots;
 }
