@@ -206,3 +206,41 @@ Deno.test("allocation demands a unique event and causal state for each section b
     assertEquals(firstPass.includes("another instance of the same thematic problem"), true);
   }
 });
+
+Deno.test("recipe-driven character identity and moral direction survive every existing planning stage", () => {
+  // These three mutually different story instructions must all be permitted;
+  // no common redemption or degeneration outcome may be forced by the prompts.
+  const authoredDirections = [
+    "A dangerous addict makes a hard-earned change and gives up their destructive habit.",
+    "A calculating trickster grows more reckless and remains morally compromised.",
+    "A volatile lover has no assigned moral future; their decisions determine it.",
+  ];
+  for (const direction of authoredDirections) {
+    for (const arc of arcCases) {
+      const req = requestFor(arc);
+      req.recipe = {
+        ...recipe,
+        project: { ...recipe.project, summary: direction, audienceNotes: "Preserve authorial tone and character complexity." },
+        selectedCharacters: [
+          { id: "a", name: "Character A", goals: ["Pursue dangerous pleasure"], flaws: ["Impulsive"], contradictions: ["Protective and cruel"] },
+          { id: "b", name: "Character B", goals: ["Preserve a risky bond"], flaws: ["Deceptive"] },
+        ],
+      } as any;
+      const enrichment = buildEnrichmentPrompt(req);
+      const architecture = buildAllocationPrompt(req);
+      const outline = buildPrompt(req, new Map());
+      for (const stage of [enrichment, architecture, outline]) {
+        assertStringIncludes(stage.system, "Do not preselect ANY moral trajectory");
+        assertStringIncludes(stage.system, "the recipe's populated character traits");
+        assertStringIncludes(stage.user, direction);
+        assertStringIncludes(stage.user, "Pursue dangerous pleasure");
+      }
+      assertStringIncludes(architecture.system, "Across early, middle, and late beat rationales");
+      assertStringIncludes(architecture.system, "a virtue lesson or a plunge into vice");
+      assertStringIncludes(architecture.system, "An object, document, delivery, permit, institution");
+      assertStringIncludes(architecture.system, "check whether the planned centralQuestion");
+      assertStringIncludes(outline.system, "including its later sections");
+      assertStringIncludes(outline.system, "they are repetitive writing");
+    }
+  }
+});
