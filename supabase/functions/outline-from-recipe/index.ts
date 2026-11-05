@@ -3549,6 +3549,35 @@ export type PlannedStorySection = {
   targetWords?: number;
 };
 
+// For novels the model invents actual ordered story units, NOT word budgets or
+// section counts per beat. Existing non-novel allocation wire format remains intact.
+const NOVEL_ARCHITECTURE_PLAN_SCHEMA = {
+  type: "object",
+  properties: {
+    storyArchitecture: STORY_ARCHITECTURE_SCHEMA,
+    sections: {
+      type: "array",
+      minItems: 1,
+      maxItems: MAX_PLANNED_SECTIONS,
+      items: {
+        type: "object",
+        properties: {
+          beatIndex: { type: "integer", minimum: 0 },
+          coveredBeatIndices: { type: "array", maxItems: 20, items: { type: "integer", minimum: 0 } },
+          title: { type: "string", minLength: 1, maxLength: 120 },
+          dramaticEvent: { type: "string", minLength: 1, maxLength: 600 },
+          resultingChange: { type: "string", minLength: 1, maxLength: 450 },
+          container: { type: "string", enum: [...NOVEL_LEAF_CONTAINERS] },
+        },
+        required: ["beatIndex", "coveredBeatIndices", "title", "dramaticEvent", "resultingChange", "container"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["storyArchitecture", "sections"],
+  additionalProperties: false,
+} as const;
+
 type Allocation = {
   minSections: number;
   /** Ordered dramatic units are selected by architecture before word sizing. */
@@ -3927,6 +3956,91 @@ export function parseAndValidateAllocation(
     onArchitecture?.(architecture);
   }
   return new Map(beats.map((beat) => [beat.id, out.get(beat.id)!]));
+}
+
+/**
+ * The planner returns an ordered dramatic spine. The server derives grouping
+ * by primary beat; shared sections can satisfy adjacent beats once, without
+ * creating phantom sections to fill a beat-count quota.
+ */
+export function parseNovelArchitecturePlan(
+  raw: string,
+  req: OutlineFromRecipeRequest,
+  onArchitecture?: (architecture: StoryArchitecture) => void,
+): Map<string, Allocation> {
+  const parsed = parseOutlineJSON(raw) as Record<string, any>;
+  if (!parsed || !Array.isArray(parsed.sections) || !parsed.storyArchitecture) {
+    throw new Error("architecture plan is missing ordered sections");
+  }
+  const source = parsed.storyArchitecture;
+  const architecture = {} as StoryArchitecture;
+  for (const key of STORY_ARCHITECTURE_SCHEMA.required) {
+    const value = source[key];
+    if (typeof value !== "string" || !value.trim() ||
+      value.length > STORY_ARCHITECTURE_SCHEMA.properties[key].maxLength) {
+      throw new Error(`architecture plan has invalid ${key}`);
+    }
+    architecture[key] = value.trim();
+  }
+  const beats = req.arcTemplate.beats;
+  const allocations = new Map<string, Allocation>(beats.map((beat) =>
+    [beat.id, { minSections: 0, allocationMinimum: 0, coverageMinimum: 0,
+      containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 },
+      plannedSections: [], rationale: "" }]));
+  const covered = new Set<number>();
+  let lastPrimary = -1;
+  const usedTitles = new Set<string>();
+  for (const [sequence, rawSection] of parsed.sections.entries()) {
+    const beatIndex = Number(rawSection?.beatIndex);
+    if (!Number.isInteger(beatIndex) || beatIndex < 0 || beatIndex >= beats.length ||
+      beatIndex < lastPrimary) throw new Error("architecture sections must follow the ordered Story Arc");
+    lastPrimary = beatIndex;
+    const additional = rawSection.coveredBeatIndices;
+    if (!Array.isArray(additional) || additional.some((index: unknown) =>
+      !Number.isInteger(index) || Number(index) < 0 || Number(index) >= beats.length ||
+      Math.abs(Number(index) - beatIndex) > 1)) {
+      throw new Error("shared section must cover an adjacent, valid Story Arc beat");
+    }
+    const indices = [...new Set([beatIndex, ...additional as number[]])].sort((a, b) => a - b);
+    const container = String(rawSection?.container ?? "") as typeof NOVEL_LEAF_CONTAINERS[number];
+    const title = String(rawSection?.title ?? "").trim();
+    const dramaticEvent = String(rawSection?.dramaticEvent ?? "").trim();
+    const resultingChange = String(rawSection?.resultingChange ?? "").trim();
+    if (!NOVEL_LEAF_CONTAINERS.includes(container) || !title || title.length > 120 ||
+      usedTitles.has(title.toLowerCase()) ||
+      !dramaticEvent || dramaticEvent.length > 600 ||
+      !resultingChange || resultingChange.length > 450) {
+      throw new Error("architecture section is missing distinct dramatic work or a valid shape");
+    }
+    usedTitles.add(title.toLowerCase());
+    for (const index of indices) covered.add(index);
+    const plan = allocations.get(beats[beatIndex].id)!;
+    plan.plannedSections!.push({
+      sequence, beatIndex, coveredBeatIndices: indices,
+      title, dramaticEvent, resultingChange, container,
+    });
+    plan.minSections++;
+    plan.allocationMinimum = plan.minSections;
+    plan.coverageMinimum = 1;
+    plan.containerCounts![container]++;
+    plan.rationale = plan.plannedSections!.map((unit) =>
+      `${unit.title}: ${unit.dramaticEvent} → ${unit.resultingChange}`).join(" | ");
+  }
+  // Cover each authored movement, allowing one significant scene to realize
+  // neighboring beats without creating a second section or rewriting history.
+  for (const [index, beat] of beats.entries()) {
+    const entry = allocations.get(beat.id)!;
+    if (!covered.has(index)) throw new Error(`architecture omitted Story Arc beat ${index}`);
+    if (entry.minSections === 0) entry.coveredBySharedSection = true;
+    const required = outstandingRequiredFunctionsByBeat(
+      [beat], req.arcTemplate.name, req.existingSections ?? [],
+    ).get(beat.id) ?? [];
+    if (entry.minSections < required.length) {
+      throw new Error(`required dramatic outcome for beat ${index} needs its own section`);
+    }
+  }
+  onArchitecture?.(architecture);
+  return fitAllocationToNovelBudget(allocations, req);
 }
 
 export function buildAllocationPrompt(
