@@ -6665,7 +6665,7 @@ Deno.test("missing authored beat evidence remains a beat-level semantic issue", 
   assertStringIncludes(issues[0], "authored_beat_requirement");
 });
 
-Deno.test("underlength first pass completes after semantic verification without optional expansion", async () => {
+Deno.test("one removed duplicate can leave an underlength beat and still complete after semantic verification", async () => {
   const fullBody = await executableWorkerBody();
   const recipe = fullBody.recipe;
   const plannerItem = (id: string, label: string) => ({ id, label, description: `${label} description`, source: "planner", sourceReference: null });
@@ -6684,11 +6684,12 @@ Deno.test("underlength first pass completes after semantic verification without 
   const body = { ...fullBody, requestedFormat: "novel", storyMaterialEnrichment: material } as any;
   const row: any = checkpointedWorkerRow(body);
   row.story_material = material;
+  row.planning_state.allocationEntries[0][1].minSections = 2;
   const db = new ExecutableRunDb(row);
   const actions: string[] = [];
   const baseSection = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`), entryState: "Prior state", dramaticEvent: `${title} happens`, resultingChange: `${title} changes the pressure`, terminalState: `${title} hands forward pressure` });
   const billable = validatedWorkerBilling(actions, (action) => {
-    if (action === "outline-suggestions") return { beats: { "beat-1": [baseSection("beat-1", "Opening")], "beat-2": [baseSection("beat-2", "Closing")] } };
+    if (action === "outline-suggestions") return { beats: { "beat-1": [baseSection("beat-1", "Opening"), baseSection("beat-1", "Opening")], "beat-2": [baseSection("beat-2", "Closing")] } };
     const beat = action.endsWith("beat-1") ? "beat-1" : "beat-2";
     const count = beat === "beat-1" ? 7 : 2;
     return { suggestions: Array.from({ length: count }, (_, index) => expansionSection(`${action}-${index}`, "scene", beat)) };
@@ -6706,6 +6707,9 @@ Deno.test("underlength first pass completes after semantic verification without 
   assertEquals(db.row.status, "completed");
   assertEquals(db.row.planning_state.phase, "completed");
   assertEquals(db.row.diagnostics.automaticExpansion, "disabled");
+  assertEquals(db.row.diagnostics.structuralDedupedSections.length, 1);
+  assertEquals(db.row.diagnostics.allocationDeficits.length, 1);
+  assertEquals(db.row.diagnostics.allocationReconciliation, "accepted_clean_first_pass");
   assertEquals(db.row.suggestions.length, 2);
   assertEquals(db.row.warnings.some((warning: string) => warning.includes("below the preferred")), false);
   assertEquals(db.row.attempt_count, 0);
@@ -7510,7 +7514,7 @@ Deno.test("provider billing unavailable during allocation bypasses retry and fai
   assertEquals(contexts[0].upstreamStatus, 429);
 });
 
-Deno.test("provider billing unavailable during resumed expansion suppresses raw diagnostics", async () => {
+Deno.test("retired expansion checkpoints complete without another paid provider call suppresses raw diagnostics", async () => {
   const baseBody = await executableWorkerBody();
   const body = { ...baseBody, requestedFormat: "novel", storyMaterialEnrichment: undefined } as any;
   const recoveredNovelMaterial = repairStoryMaterialFromRecipe(baseBody.recipe as any, {
