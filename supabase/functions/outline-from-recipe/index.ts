@@ -859,7 +859,9 @@ export function flattenSuggestionResponse(
     if (!sections) throw new Error(`response missing beat ${beat.id}`);
     const plannedContainers = allocation?.get(beat.id)?.containerCounts
       ? plannedNovelContainerSlots(allocation.get(beat.id)!.containerCounts!,
-        requiredFunctionOrderByBeat?.get(beat.id)?.includes("climax") ?? false)
+        requiredFunctionOrderByBeat?.get(beat.id)?.includes("climax") ?? false,
+        Math.max(0, (requiredFunctionOrderByBeat?.get(beat.id)?.length ?? 0) -
+          (requiredFunctionOrderByBeat?.get(beat.id)?.indexOf("climax") ?? -1) - 1))
       : null;
     if (plannedContainers && sections.length !== plannedContainers.length) {
       throw new Error(`beat ${beat.id} returned ${sections.length} sections but allocation requires ${plannedContainers.length}`);
@@ -3248,7 +3250,8 @@ export function buildPrompt(
         ? `complete first-pass allocation: ${info.minSections} section${info.minSections === 1 ? "" : "s"}`
         : `minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"}`;
       const typePlan = isNovel && info.containerCounts
-        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; beat word budget: ${plannedNovelContainerSlots(info.containerCounts).reduce((sum, type) => sum + NOVEL_CONTAINER_WORD_TARGETS[type], 0).toLocaleString()} words; ordered slots: ${plannedNovelContainerSlots(info.containerCounts, reservedFunctions.get(beatId)?.includes("climax") ?? false).map((type, index) => `${plannedNovelSlotKey(index)}=${type} (~${NOVEL_CONTAINER_WORD_TARGETS[type].toLocaleString()} words)`).join(", ")}`
+        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; beat word budget: ${plannedNovelContainerSlots(info.containerCounts).reduce((sum, type) => sum + NOVEL_CONTAINER_WORD_TARGETS[type], 0).toLocaleString()} words; ordered slots: ${plannedNovelContainerSlots(info.containerCounts, reservedFunctions.get(beatId)?.includes("climax") ?? false,
+          Math.max(0, (reservedFunctions.get(beatId)?.length ?? 0) - (reservedFunctions.get(beatId)?.indexOf("climax") ?? -1) - 1)).map((type, index) => `${plannedNovelSlotKey(index)}=${type} (~${NOVEL_CONTAINER_WORD_TARGETS[type].toLocaleString()} words)`).join(", ")}`
         : "";
       const narrativeCommitment = storyArchitecture && info.rationale
         ? `; planned dramatic movement: ${compactArcNarrativeText(info.rationale)}`
