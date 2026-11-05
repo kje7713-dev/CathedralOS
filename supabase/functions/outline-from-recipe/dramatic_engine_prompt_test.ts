@@ -158,3 +158,16 @@ Deno.test("27 updated wild arc descriptions are mirrored", async () => {
   assertEquals(sql.split("::uuid").length - 1, 27);
   assertStringIncludes(sql, "t.description = v.old_description");
 });
+
+Deno.test("invented supporting people reach first-pass outline as decision candidates", () => {
+  const req = requestFor(arcCases[0]);
+  const material = { characters: [
+    { id: "candidate-A", label: "Cass, a volatile rival", source: "planner",
+      description: "Wants revenge and unexpectedly protects the person she blames." },
+  ] };
+  const prompt = buildPrompt(req, new Map(), [], material as any);
+  assertStringIncludes(prompt.user, "characterDecisionCandidates");
+  assertStringIncludes(prompt.user, "candidate-A");
+  assertStringIncludes(prompt.user, "unexpectedly protects the person");
+  assertStringIncludes(prompt.system, "independent decisions that change the conflict");
+});
