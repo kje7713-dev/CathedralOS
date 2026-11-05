@@ -65,7 +65,7 @@ Deno.test("shared dramatic-engine prompts apply to every genre without adding st
     // Every genre may retain its defining narrative form without promoting enrichment into canon.
     assertStringIncludes(allocation, "Any mode of storytelling, including procedural or investigative storytelling", arc.name);
     assertStringIncludes(allocation, "never the kind of story the model should choose", arc.name);
-    assertStringIncludes(allocation, "Its existence does not determine the story\'s central conflict", arc.name);
+    assertStringIncludes(allocation, "Its existence does not determine the story's central conflict", arc.name);
     assertStringIncludes(allocation, "deepen that chosen story through genuinely different consequential developments", arc.name);
     assertStringIncludes(enrichment, "No element gains narrative authority merely because an earlier model invented it", arc.name);
     assertStringIncludes(outline, "selected architecture, accepted history, allocated slots", arc.name);
