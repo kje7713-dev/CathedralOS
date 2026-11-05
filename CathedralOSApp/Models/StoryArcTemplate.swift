@@ -40,14 +40,14 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Three-Act",
         description: "A versatile three-act engine for vivid, escalating drama: an irresistible rupture, a middle that changes what the struggle means, and a decisive, unforgettable consequence. Let the author's genre choose the intensity and aftertaste, not a tidy default. Wild dust: Let the author's genre unleash reckless decisions, bizarre collisions, breathtaking reversals, and an ending no tidy formula could predict.",
         beats: [
-            .init(role: "setup",              label: "Setup",              description: "Introduce the world, characters, and the ordinary life that will be disrupted."),
-            .init(role: "inciting_incident",  label: "Inciting Incident",  description: "The event that disrupts the ordinary world and sets the story in motion."),
-            .init(role: "first_plot_point",   label: "First Plot Point",   description: "The protagonist commits to the central conflict and the story tilts into Act II."),
-            .init(role: "rising_action",      label: "Rising Action",      description: "Escalating complications, subplots, and stakes as the protagonist pursues the goal."),
-            .init(role: "midpoint",           label: "Midpoint",           description: "Deliver a surprising, character-caused reversal that changes the conflict itself, not merely its difficulty."),
-            .init(role: "crisis",             label: "Crisis",             description: "The lowest point — what looks like defeat, the dark night of the soul."),
-            .init(role: "climax",             label: "Climax",             description: "Force an extraordinary, irreversible, genre-faithful act that transforms the characters' world."),
-            .init(role: "resolution",         label: "Resolution",         description: "Show the changed final situation, what is settled, and what meaningfully remains unresolved."),
+            .init(role: "setup",              label: "Setup",              description: "Introduce the world, characters, and the ordinary life that will be disrupted. Creative progression: Begin with a volatile choice whose personal consequences make the old life unstable, not a neutral inventory of traits."),
+            .init(role: "inciting_incident",  label: "Inciting Incident",  description: "The event that disrupts the ordinary world and sets the story in motion. Creative progression: An unmistakable, genre-specific disruption destroys one ordinary option and unleashes a new desire or danger."),
+            .init(role: "first_plot_point",   label: "First Plot Point",   description: "The protagonist commits to the central conflict and the story tilts into Act II. Creative progression: Let an impulsive commitment sacrifice an escape route and create a problem the opening characters could not anticipate."),
+            .init(role: "rising_action",      label: "Rising Action",      description: "Escalating complications, subplots, and stakes as the protagonist pursues the goal. Creative progression: Build radically different kinds of trouble through clashing appetites, escalating decisions, and independently acting people; each alters the next objective."),
+            .init(role: "midpoint",           label: "Midpoint",           description: "Deliver a surprising, character-caused reversal that changes the conflict itself, not merely its difficulty. Creative progression: Spring an earned, astonishing reversal that changes who holds power, what the goal means, or whom to trust."),
+            .init(role: "crisis",             label: "Crisis",             description: "The lowest point — what looks like defeat, the dark night of the soul. Creative progression: Make accumulated choices annihilate the strategy that has worked so far; no encore of an earlier humiliation or lesson."),
+            .init(role: "climax",             label: "Climax",             description: "Force an extraordinary, irreversible, genre-faithful act that transforms the characters' world. Creative progression: Stage the one decisive, unforgettable outcome in a signature character-caused action; earlier scenes cannot pre-complete it."),
+            .init(role: "resolution",         label: "Resolution",         description: "Show the changed final situation, what is settled, and what meaningfully remains unresolved. Creative progression: Show consequences in a newly altered world through action, loss, pleasure, or revelation; do not replay the climactic choice."),
         ]
     )
 
@@ -56,18 +56,18 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Hero's Journey",
         description: "An extraordinary journey through strange encounters, dangerous bonds, temptation, ordeal, and a changed return. The hero may emerge triumphant, haunted, compromised, or monstrous when the authored story warrants it. Wild dust: Let temptation, monstrous companions, absurd wagers, and disastrous desires transform the journey into something nobody planned.",
         beats: [
-            .init(role: "ordinary_world",        label: "Ordinary World",           description: "The hero's normal life before the adventure begins."),
-            .init(role: "call_to_adventure",    label: "Call to Adventure",        description: "The hero is presented with a problem, challenge, or opportunity."),
-            .init(role: "refusal_of_call",      label: "Refusal of the Call",      description: "The hero hesitates or refuses the adventure, fearing the unknown."),
-            .init(role: "meeting_mentor",       label: "Meeting the Mentor",       description: "The hero meets a guide who gives advice, training, or confidence."),
-            .init(role: "crossing_threshold",   label: "Crossing the Threshold",   description: "The hero commits to the adventure and enters the special world."),
-            .init(role: "tests_allies_enemies", label: "Tests, Allies, Enemies",   description: "The hero faces trials, makes friends, and identifies antagonists."),
-            .init(role: "approach_inmost_cave", label: "Approach to the Inmost Cave", description: "The hero nears the central ordeal, often facing a major fear."),
-            .init(role: "ordeal",               label: "Ordeal",                   description: "The hero's greatest test — a life-or-death moment of transformation."),
-            .init(role: "reward",               label: "Reward",                   description: "The hero claims something of value after surviving the ordeal."),
-            .init(role: "road_back",            label: "The Road Back",            description: "The hero begins the return journey, often with new stakes."),
-            .init(role: "resurrection",         label: "Resurrection",             description: "Force a defining, extreme final test that proves what the journey has made the hero, for good or ill."),
-            .init(role: "return_with_elixir",   label: "Return with the Elixir",   description: "The hero returns to the ordinary world, changed, with something to share."),
+            .init(role: "ordinary_world",        label: "Ordinary World",           description: "The hero's normal life before the adventure begins. Creative progression: Start with a vivid dependency or private appetite that the adventure will make impossible to maintain."),
+            .init(role: "call_to_adventure",    label: "Call to Adventure",        description: "The hero is presented with a problem, challenge, or opportunity. Creative progression: An irresistible or terrifying summons changes an actual relationship and immediately eliminates a familiar option."),
+            .init(role: "refusal_of_call",      label: "Refusal of the Call",      description: "The hero hesitates or refuses the adventure, fearing the unknown. Creative progression: Let refusal trigger an unexpected loss, betrayal, temptation, or complication; mere second thoughts do not fill a beat."),
+            .init(role: "meeting_mentor",       label: "Meeting the Mentor",       description: "The hero meets a guide who gives advice, training, or confidence. Creative progression: Give the guide an independent, flawed agenda and a consequential bargain, not an interchangeable motivational speech."),
+            .init(role: "crossing_threshold",   label: "Crossing the Threshold",   description: "The hero commits to the adventure and enters the special world. Creative progression: Make crossing a point of no return cost a person, privilege, or belief the hero cannot simply recover."),
+            .init(role: "tests_allies_enemies", label: "Tests, Allies, Enemies",   description: "The hero faces trials, makes friends, and identifies antagonists. Creative progression: Each encounter must introduce a different power, bizarre alliance, danger, or temptation that changes the objective."),
+            .init(role: "approach_inmost_cave", label: "Approach to the Inmost Cave", description: "The hero nears the central ordeal, often facing a major fear. Creative progression: Use an intimate betrayal or unnerving discovery to make the anticipated ordeal more dangerous than previously understood."),
+            .init(role: "ordeal",               label: "Ordeal",                   description: "The hero's greatest test — a life-or-death moment of transformation. Creative progression: Break the hero's existing strategy through an extraordinary physical or emotional event, reserving later final transformation."),
+            .init(role: "reward",               label: "Reward",                   description: "The hero claims something of value after surviving the ordeal. Creative progression: Make the reward alter loyalties and tempt a disastrous new choice rather than functioning as a static prize."),
+            .init(role: "road_back",            label: "The Road Back",            description: "The hero begins the return journey, often with new stakes. Creative progression: Let apparent progress unleash a consequence or pursuit that transforms the route home."),
+            .init(role: "resurrection",         label: "Resurrection",             description: "Force a defining, extreme final test that proves what the journey has made the hero, for good or ill. Creative progression: Reserve the final defining choice or ordeal here; it must change who the hero has become, for better or worse."),
+            .init(role: "return_with_elixir",   label: "Return with the Elixir",   description: "The hero returns to the ordinary world, changed, with something to share. Creative progression: Return to transformed relationships and a changed world where the result is enacted, not explained again."),
         ]
     )
 
@@ -76,15 +76,15 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Mystery",
         description: "An irresistible mystery of volatile people, seductive false answers, and revelations that keep changing whom readers trust. Deliver a surprising but fair truth with a personal cost far beyond closing the case. Wild dust: Suspects can be magnetic, outrageous, grotesque, or dangerous; let each fair clue threaten a bond and each revelation detonate an assumption.",
         beats: [
-            .init(role: "the_crime",             label: "The Crime / Hook",         description: "Establish the crime, mystery, or question that drives the story."),
-            .init(role: "investigation_begins",  label: "Investigation Begins",     description: "The detective/protagonist takes the case and starts gathering evidence."),
-            .init(role: "first_suspect",         label: "First Suspect / Red Herring", description: "An early suspect appears strong but is misdirection."),
-            .init(role: "rising_tension",        label: "Rising Tension",           description: "Stakes escalate, more clues surface, complications mount."),
-            .init(role: "key_revelation",        label: "Key Witness / Revelation", description: "A pivotal clue reshapes the investigation."),
-            .init(role: "false_solution",        label: "False Solution",           description: "The protagonist (or reader) is led to a wrong conclusion."),
-            .init(role: "real_clue",             label: "Real Clue Surfaces",       description: "The actual culprit or truth becomes visible."),
-            .init(role: "confrontation",         label: "Confrontation",            description: "Reveal the earned truth in a dangerous, character-specific confrontation that irreversibly changes loyalties or lives."),
-            .init(role: "resolution",            label: "Resolution / Reveal",      description: "The case is closed and the world has changed."),
+            .init(role: "the_crime",             label: "The Crime / Hook",         description: "Establish the crime, mystery, or question that drives the story. Creative progression: Give the opening wrong or impossible question an intimate, irresistible human consequence that creates immediate action."),
+            .init(role: "investigation_begins",  label: "Investigation Begins",     description: "The detective/protagonist takes the case and starts gathering evidence. Creative progression: An early investigative move should cost access, safety, trust, or freedom, establishing why the search cannot be routine."),
+            .init(role: "first_suspect",         label: "First Suspect / Red Herring", description: "An early suspect appears strong but is misdirection. Creative progression: Let a compelling suspect's independent desire produce a consequential misdirection, not just a misleading statement."),
+            .init(role: "rising_tension",        label: "Rising Tension",           description: "Stakes escalate, more clues surface, complications mount. Creative progression: Escalate through varied dangerous encounters and changing relationships rather than another batch of interchangeable clues."),
+            .init(role: "key_revelation",        label: "Key Witness / Revelation", description: "A pivotal clue reshapes the investigation. Creative progression: Use one hard-earned discovery to reverse whom the protagonist trusts or what the underlying question is."),
+            .init(role: "false_solution",        label: "False Solution",           description: "The protagonist (or reader) is led to a wrong conclusion. Creative progression: Make the seductive false answer prompt an irreversible choice whose fallout creates the next mystery state."),
+            .init(role: "real_clue",             label: "Real Clue Surfaces",       description: "The actual culprit or truth becomes visible. Creative progression: Reveal the crucial new evidence through human action or risk, distinct from the earlier false answer."),
+            .init(role: "confrontation",         label: "Confrontation",            description: "Reveal the earned truth in a dangerous, character-specific confrontation that irreversibly changes loyalties or lives. Creative progression: Give the reserved revelation an explosive personal confrontation with one defensible solution; never solve it twice."),
+            .init(role: "resolution",            label: "Resolution / Reveal",      description: "The case is closed and the world has changed. Creative progression: Force a concrete new life or relationship consequence from the truth; no evidence recap or explanatory victory lap."),
         ]
     )
 
@@ -93,21 +93,21 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Save the Cat!",
         description: "A propulsive fifteen-beat story of bold choices, unpredictable encounters, major reversals, and the vivid pleasures or terrors of the authored premise. Its transformation may be exhilarating, grotesque, tragic, tender, or morally dark. Wild dust: Treat familiar beats as launchpads for audacious reversals, vivid chaos, and uniquely character-caused consequences.",
         beats: [
-            .init(role: "opening_image", label: "Opening Image", description: "Show the protagonist and world before the story changes."),
-            .init(role: "theme_stated", label: "Theme Stated", description: "Hint at the central question or tension the protagonist must face; no moral lesson is required."),
-            .init(role: "setup", label: "Setup", description: "Establish the cast, want, flaw, and stakes before the disruption."),
-            .init(role: "catalyst", label: "Catalyst", description: "An event makes the old status quo impossible to maintain."),
-            .init(role: "debate", label: "Debate", description: "The protagonist weighs the risks of responding to the new problem."),
-            .init(role: "break_into_two", label: "Break into Two", description: "The protagonist chooses an approach and enters a changed situation."),
-            .init(role: "b_story", label: "B Story", description: "Introduce the relationship or secondary thread that carries the theme."),
-            .init(role: "fun_and_games", label: "Fun and Games", description: "Deliver imaginative, varied events that embody the unique promise of this premise rather than repeating one type of obstacle."),
-            .init(role: "midpoint", label: "Midpoint", description: "A false victory or defeat raises the stakes and changes the game."),
-            .init(role: "bad_guys_close_in", label: "Bad Guys Close In", description: "External pressure and internal flaws tighten around the protagonist."),
-            .init(role: "all_is_lost", label: "All Is Lost", description: "The protagonist reaches a visible low point and loses a source of hope."),
-            .init(role: "dark_night_of_the_soul", label: "Dark Night of the Soul", description: "The protagonist confronts what must change to move forward."),
-            .init(role: "break_into_three", label: "Break into Three", description: "A realization combines the A and B stories into a new plan."),
-            .init(role: "finale", label: "Finale", description: "Deliver an exceptional, emotionally charged final action whose consequences cannot simply be tidied away."),
-            .init(role: "final_image", label: "Final Image", description: "Echo the opening image to show how the world or protagonist changed.")
+            .init(role: "opening_image", label: "Opening Image", description: "Show the protagonist and world before the story changes. Creative progression: Open on a surprising character action that vividly establishes a status quo already under strain."),
+            .init(role: "theme_stated", label: "Theme Stated", description: "Hint at the central question or tension the protagonist must face; no moral lesson is required. Creative progression: Let an argument, desire, or incident expose an unresolved contradiction without handing down a moral lesson."),
+            .init(role: "setup", label: "Setup", description: "Establish the cast, want, flaw, and stakes before the disruption. Creative progression: Make the ensemble pursue incompatible wants that are poised to collide rather than merely listing their backstories."),
+            .init(role: "catalyst", label: "Catalyst", description: "An event makes the old status quo impossible to maintain. Creative progression: A genre-specific rupture irrevocably changes the options available to everyone who matters."),
+            .init(role: "debate", label: "Debate", description: "The protagonist weighs the risks of responding to the new problem. Creative progression: Put a dangerous bargain or tempting alternative on the table with consequences, not pages of indecision."),
+            .init(role: "break_into_two", label: "Break into Two", description: "The protagonist chooses an approach and enters a changed situation. Creative progression: A bold choice forecloses the earlier route and launches a new arena of action."),
+            .init(role: "b_story", label: "B Story", description: "Introduce the relationship or secondary thread that carries the theme. Creative progression: Give a secondary relationship its own independent gamble that tangles causally with the main conflict."),
+            .init(role: "fun_and_games", label: "Fun and Games", description: "Deliver imaginative, varied events that embody the unique promise of this premise rather than repeating one type of obstacle. Creative progression: Deliver startling and varied premise-specific set pieces; each must create a new opportunity, danger, or broken allegiance."),
+            .init(role: "midpoint", label: "Midpoint", description: "A false victory or defeat raises the stakes and changes the game. Creative progression: Flip the apparent meaning of victory or failure through a spectacular, consequential change of power."),
+            .init(role: "bad_guys_close_in", label: "Bad Guys Close In", description: "External pressure and internal flaws tighten around the protagonist. Creative progression: Allow previously made choices to provoke heterogeneous retaliation, betrayal, and escalating costs, not repeated obstacles."),
+            .init(role: "all_is_lost", label: "All Is Lost", description: "The protagonist reaches a visible low point and loses a source of hope. Creative progression: Take away something genuinely irreplaceable through the character's own flawed action."),
+            .init(role: "dark_night_of_the_soul", label: "Dark Night of the Soul", description: "The protagonist confronts what must change to move forward. Creative progression: Use loss to precipitate a surprising new desire or decision, not another speech about the same truth."),
+            .init(role: "break_into_three", label: "Break into Three", description: "A realization combines the A and B stories into a new plan. Creative progression: Change the strategy through a costly collision of primary and secondary relationships, without completing the reserved finale."),
+            .init(role: "finale", label: "Finale", description: "Deliver an exceptional, emotionally charged final action whose consequences cannot simply be tidied away. Creative progression: Pay off the central conflict only here in an inventive, emotionally seismic action whose consequences endure."),
+            .init(role: "final_image", label: "Final Image", description: "Echo the opening image to show how the world or protagonist changed. Creative progression: Show the final transformed condition through a fresh concrete moment, never a replay of the climax.")
         ]
     )
 
@@ -116,14 +116,14 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Story Circle",
         description: "An eight-movement spiral from familiar desire into startling discovery, costly possession, and a return that cannot restore the old world. Transformation need not equal improvement. Wild dust: Desire may lead through delirious pleasures, impossible bargains, disastrous possession, and a wildly altered return.",
         beats: [
-            .init(role: "you", label: "You", description: "Show the character in a zone of comfort and establish what they want."),
-            .init(role: "need", label: "Need", description: "The character enters an unfamiliar situation to pursue a need."),
-            .init(role: "go", label: "Go", description: "The character adapts while facing escalating obstacles."),
-            .init(role: "search", label: "Search", description: "The character experiments, learns, and pays a price for progress."),
-            .init(role: "find", label: "Find", description: "The character gets what they sought, often with an unexpected cost."),
-            .init(role: "take", label: "Take", description: "The character pays a consequential price for pursuing or possessing what they found."),
-            .init(role: "return", label: "Return", description: "The character returns to a familiar world carrying the consequences."),
-            .init(role: "change", label: "Change", description: "Show the character transformed through a bold, specific choice or consequence, for better, worse, or stranger.")
+            .init(role: "you", label: "You", description: "Show the character in a zone of comfort and establish what they want. Creative progression: Make comfort vivid and compromised by one action that sets an unstable desire in motion."),
+            .init(role: "need", label: "Need", description: "The character enters an unfamiliar situation to pursue a need. Creative progression: An urgent need forces a costly exit rather than a restatement of existing dissatisfaction."),
+            .init(role: "go", label: "Go", description: "The character adapts while facing escalating obstacles. Creative progression: Introduce an unfamiliar, seductive complication that requires a genuinely new tactic or alliance."),
+            .init(role: "search", label: "Search", description: "The character experiments, learns, and pays a price for progress. Creative progression: Make experimentation produce an unexpected cost or reversal that changes the search itself."),
+            .init(role: "find", label: "Find", description: "The character gets what they sought, often with an unexpected cost. Creative progression: Obtaining the prize should reveal an astonishing new consequence, not conclude the entire arc prematurely."),
+            .init(role: "take", label: "Take", description: "The character pays a consequential price for pursuing or possessing what they found. Creative progression: Extract a dangerous, irreversible price for possessing the prize, changing the character's relationships or power."),
+            .init(role: "return", label: "Return", description: "The character returns to a familiar world carrying the consequences. Creative progression: Return to a changed social world where old habits cannot solve the new situation."),
+            .init(role: "change", label: "Change", description: "Show the character transformed through a bold, specific choice or consequence, for better, worse, or stranger. Creative progression: Show transformation through a decisive new act—liberating, ruinous, absurd, or sublime—not a lesson restated.")
         ]
     )
 
@@ -132,11 +132,11 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Freytag's Pyramid",
         description: "Five movements of rising pressure toward a breathtaking dramatic collision, followed by consequences that fracture or remake lives. The author's genre decides whether the climax is horrifying, ecstatic, intimate, or devastating. Wild dust: Escalate beyond polite complications into a volcanic collision whose consequences cannot be neatly cleaned up.",
         beats: [
-            .init(role: "exposition", label: "Exposition", description: "Introduce the world, characters, conflict, and conditions of the story."),
-            .init(role: "rising_action", label: "Rising Action", description: "Complications build as choices intensify the central conflict."),
-            .init(role: "climax", label: "Climax", description: "Deliver an irreversible confrontation or choice at maximum intensity, surprising in its event and inevitable in hindsight."),
-            .init(role: "falling_action", label: "Falling Action", description: "Consequences unfold and remaining conflicts move toward resolution."),
-            .init(role: "denouement", label: "Denouement", description: "Show the changed final situation and what is resolved, uncertain, or unsettled.")
+            .init(role: "exposition", label: "Exposition", description: "Introduce the world, characters, conflict, and conditions of the story. Creative progression: Establish compelling people already making incompatible choices that threaten the existing order."),
+            .init(role: "rising_action", label: "Rising Action", description: "Complications build as choices intensify the central conflict. Creative progression: Let different desires collide in increasingly surprising acts; every escalation must change stakes or alliances."),
+            .init(role: "climax", label: "Climax", description: "Deliver an irreversible confrontation or choice at maximum intensity, surprising in its event and inevitable in hindsight. Creative progression: Reserve the breathtaking irreversible dramatic collision here; no preceding beat may resolve its defining event."),
+            .init(role: "falling_action", label: "Falling Action", description: "Consequences unfold and remaining conflicts move toward resolution. Creative progression: Unleash distinct fallout, reversals of fortune, and new personal costs rather than a subdued replay of the collision."),
+            .init(role: "denouement", label: "Denouement", description: "Show the changed final situation and what is resolved, uncertain, or unsettled. Creative progression: Pay off the changed world through a final consequential choice or image, without tidying away the story's darker implications.")
         ]
     )
 
@@ -145,10 +145,10 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Kishōtenketsu",
         description: "An inventive four-part architecture that builds fascination, then creates a radical change in meaning through juxtaposition rather than mandatory conflict. The turn can be funny, uncanny, devastating, exquisite, or sublime. Wild dust: Use the turn to make readers gasp, howl, ache, or see reality differently; inventive upheaval need not require a fight.",
         beats: [
-            .init(role: "ki", label: "Ki — Introduction", description: "Establish the setting, characters, and initial idea."),
-            .init(role: "sho", label: "Shō — Development", description: "Develop the situation and deepen the world without a major reversal."),
-            .init(role: "ten", label: "Ten — Twist", description: "Introduce a daring new perspective or event that recasts everything established without manufacturing a villain."),
-            .init(role: "ketsu", label: "Ketsu — Conclusion", description: "Connect the elements and reveal a new relationship or meaning between them, without requiring harmony.")
+            .init(role: "ki", label: "Ki — Introduction", description: "Establish the setting, characters, and initial idea. Creative progression: Introduce a vivid pattern or relationship whose beauty, strangeness, or tension promises further change."),
+            .init(role: "sho", label: "Shō — Development", description: "Develop the situation and deepen the world without a major reversal. Creative progression: Deepen through inventive contrast and newly consequential encounters, not a second demonstration of the same motif."),
+            .init(role: "ten", label: "Ten — Twist", description: "Introduce a daring new perspective or event that recasts everything established without manufacturing a villain. Creative progression: An extraordinary juxtaposition or event overturns what the earlier pattern meant without forcing a conventional villain."),
+            .init(role: "ketsu", label: "Ketsu — Conclusion", description: "Connect the elements and reveal a new relationship or meaning between them, without requiring harmony. Creative progression: Create a changed understanding expressed through a new action or relationship, not a repeated explanation of the twist.")
         ]
     )
 
@@ -157,16 +157,16 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Romance / HEA",
         description: "A passionate romance driven by combustible chemistry, clashing desires, revelatory intimacy, costly rupture, and a grand act of choosing love. Deliver the promised HEA/HFN with an exciting, personal route to it—not interchangeable relationship talks. Wild dust: Let lovers make outrageous, costly choices, risk everything for pleasure and attachment, and earn thrilling commitment rather than a sensible negotiation.",
         beats: [
-            .init(role: "ordinary_life", label: "Ordinary Life", description: "Establish each lead's life, unmet need, and emotional defenses before the relationship changes them."),
-            .init(role: "meet_attraction", label: "Meet / Attraction", description: "Bring the leads together and create a meaningful spark, friction, or pull between them."),
-            .init(role: "resistance", label: "Resistance", description: "Give the leads credible internal or external reasons not to pursue the relationship."),
-            .init(role: "connection_deepens", label: "Connection Deepens", description: "Build trust, chemistry, shared experience, and vulnerability through consequential interaction."),
-            .init(role: "midpoint_intimacy", label: "Midpoint Intimacy", description: "Cross an emotional or physical threshold that makes the relationship harder to dismiss."),
-            .init(role: "pressure_test", label: "Pressure Test", description: "Apply outside stakes and personal flaws that strain the growing bond."),
-            .init(role: "rupture", label: "Rupture", description: "Break the relationship or its apparent future through a choice, revelation, fear, or betrayal."),
-            .init(role: "realization", label: "Realization", description: "Force the central emotional truth into view and make avoidance impossible."),
-            .init(role: "grand_choice", label: "Grand Choice", description: "Demand a daring, costly, unmistakably romantic action that transforms both lives and earns the promised future."),
-            .init(role: "hea_hfn", label: "HEA / HFN", description: "Resolve the core romantic conflict with an earned committed future together.")
+            .init(role: "ordinary_life", label: "Ordinary Life", description: "Establish each lead's life, unmet need, and emotional defenses before the relationship changes them. Creative progression: Establish two combustible private lives through different risky choices that make their future collision consequential."),
+            .init(role: "meet_attraction", label: "Meet / Attraction", description: "Bring the leads together and create a meaningful spark, friction, or pull between them. Creative progression: Give attraction an eccentric, difficult, highly specific encounter that changes both leads' immediate plans."),
+            .init(role: "resistance", label: "Resistance", description: "Give the leads credible internal or external reasons not to pursue the relationship. Creative progression: Let conflicting desires provoke new action, temptation, or sacrifice rather than iterative talks about whether to date."),
+            .init(role: "connection_deepens", label: "Connection Deepens", description: "Build trust, chemistry, shared experience, and vulnerability through consequential interaction. Creative progression: Deepen desire through surprising shared gambles and collisions with others' independent agendas, not interchangeable reassurances."),
+            .init(role: "midpoint_intimacy", label: "Midpoint Intimacy", description: "Cross an emotional or physical threshold that makes the relationship harder to dismiss. Creative progression: Make intimacy trigger an irreversible shift in loyalty, power, exposure, or future options; the relationship cannot simply reset."),
+            .init(role: "pressure_test", label: "Pressure Test", description: "Apply outside stakes and personal flaws that strain the growing bond. Creative progression: Apply a fresh, external consequence of loving this person that requires a different choice from earlier resistance."),
+            .init(role: "rupture", label: "Rupture", description: "Break the relationship or its apparent future through a choice, revelation, fear, or betrayal. Creative progression: Break the bond through a character-caused, genuinely new betrayal or loss, not a replay of previous doubts."),
+            .init(role: "realization", label: "Realization", description: "Force the central emotional truth into view and make avoidance impossible. Creative progression: Make the changed understanding compel risky action; realizing the same problem twice is not a separate development."),
+            .init(role: "grand_choice", label: "Grand Choice", description: "Demand a daring, costly, unmistakably romantic action that transforms both lives and earns the promised future. Creative progression: Reserve a bold, costly, unmistakable romantic deed for this beat; it must create the promised relationship outcome once."),
+            .init(role: "hea_hfn", label: "HEA / HFN", description: "Resolve the core romantic conflict with an earned committed future together. Creative progression: Show the earned HEA or HFN through a vivid changed-life action, not another negotiation of already agreed terms.")
         ],
         relationshipFocus: .primary,
         intimacyMilestoneRoles: ["connection_deepens", "midpoint_intimacy", "grand_choice", "hea_hfn"],
@@ -177,16 +177,16 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Psychological / Domestic Thriller",
         description: "A feverish thriller of obsession, intimate treachery, shifting guilt, and revelations that turn familiar people terrifying. Make the final truth shocking, earned, and emotionally destabilizing. Wild dust: Weaponize intimate knowledge, maddening ambiguity, shameful hunger, and impossible reversals until every familiar relationship feels explosive.",
         beats: [
-            .init(role: "normal_surface", label: "Normal Surface", description: "Establish a believable domestic or psychological status quo with subtle fault lines underneath."),
-            .init(role: "destabilizing_incident", label: "Destabilizing Incident", description: "Introduce the event, discovery, or behavior that makes the protagonist question what is real or safe."),
-            .init(role: "suspicion_grows", label: "Suspicion Grows", description: "Accumulate contradictions, evasions, and threatening details without resolving them too early."),
-            .init(role: "first_reveal", label: "First Reveal", description: "Confirm that an important assumption was wrong and reframe the danger."),
-            .init(role: "isolation", label: "Isolation", description: "Reduce the protagonist's reliable support, credibility, options, or sense of control."),
-            .init(role: "midpoint_truth_shift", label: "Midpoint Truth Shift", description: "Reveal a larger truth that changes who appears dangerous and what is at stake."),
-            .init(role: "apparent_answer", label: "Apparent Answer", description: "Offer a convincing explanation or temporary solution that seems to settle the central suspicion."),
-            .init(role: "deeper_betrayal", label: "Deeper Betrayal", description: "Expose the hidden betrayal, manipulation, or threat beneath the apparent answer."),
-            .init(role: "final_confrontation", label: "Final Confrontation", description: "Force a genuinely unnerving clash with the true source of danger and a revelation that changes the protagonist's world."),
-            .init(role: "aftermath", label: "Aftermath", description: "Resolve the immediate threat and show the psychological or relational cost of what was uncovered.")
+            .init(role: "normal_surface", label: "Normal Surface", description: "Establish a believable domestic or psychological status quo with subtle fault lines underneath. Creative progression: Begin with a magnetic, plausible relationship already shaped by one disturbing, consequential contradiction."),
+            .init(role: "destabilizing_incident", label: "Destabilizing Incident", description: "Introduce the event, discovery, or behavior that makes the protagonist question what is real or safe. Creative progression: An unsettling incident changes what the protagonist can safely believe or do, not just their level of anxiety."),
+            .init(role: "suspicion_grows", label: "Suspicion Grows", description: "Accumulate contradictions, evasions, and threatening details without resolving them too early. Creative progression: Let specific evasions and an independently motivated person's actions produce escalating, different dangers."),
+            .init(role: "first_reveal", label: "First Reveal", description: "Confirm that an important assumption was wrong and reframe the danger. Creative progression: Confirm a shocking misjudgment that makes the next threat fundamentally unlike the first."),
+            .init(role: "isolation", label: "Isolation", description: "Reduce the protagonist's reliable support, credibility, options, or sense of control. Creative progression: Cut off real allies, credibility, or freedom through human decisions; avoid repeating the same suspicious conversation."),
+            .init(role: "midpoint_truth_shift", label: "Midpoint Truth Shift", description: "Reveal a larger truth that changes who appears dangerous and what is at stake. Creative progression: Unmask a deeply personal truth that shifts guilt, leverage, or desire and drives a new action."),
+            .init(role: "apparent_answer", label: "Apparent Answer", description: "Offer a convincing explanation or temporary solution that seems to settle the central suspicion. Creative progression: Make the persuasive false answer induce a costly, irreversible mistake rather than a temporary feeling of relief."),
+            .init(role: "deeper_betrayal", label: "Deeper Betrayal", description: "Expose the hidden betrayal, manipulation, or threat beneath the apparent answer. Creative progression: Turn apparent safety into intimate betrayal through a different character's active agenda and unexpected choice."),
+            .init(role: "final_confrontation", label: "Final Confrontation", description: "Force a genuinely unnerving clash with the true source of danger and a revelation that changes the protagonist's world. Creative progression: Reserve the one dreadful, explosive confrontation and central revelation for this beat; its outcome cannot occur earlier."),
+            .init(role: "aftermath", label: "Aftermath", description: "Resolve the immediate threat and show the psychological or relational cost of what was uncovered. Creative progression: Leave a changed psychological and relational reality enacted through a final fresh consequence, not exposition.")
         ]
     )
 
