@@ -51,14 +51,20 @@ function requestFor(arc: typeof arcCases[number]) {
 
 Deno.test("shared dramatic-engine prompts apply to every genre without adding stages or schema", () => {
   assertStringIncludes(RECIPE_CREATIVE_AUTHORITY_DIRECTIVE, "NOT an independent requirement to invent that machinery");
+  assertStringIncludes(RECIPE_CREATIVE_AUTHORITY_DIRECTIVE, "Emotional and interpersonal causality is the dramatic foundation");
+  assertStringIncludes(RECIPE_CREATIVE_AUTHORITY_DIRECTIVE, "without imposing romance, redemption, reconciliation");
   for (const arc of arcCases) {
     const req = requestFor(arc);
     const enrichment = buildEnrichmentPrompt(req).system;
     const allocation = buildAllocationPrompt(req).system;
     const outline = buildPrompt(req, new Map()).system;
     assertStringIncludes(enrichment, "Creative independence of generated material", arc.name);
+    assertStringIncludes(enrichment, "Make emotional and interpersonal dynamics the source of the proposed drama", arc.name);
     assertStringIncludes(allocation, "Select the strongest author-and-arc-driven dramatic engine", arc.name);
+    assertStringIncludes(allocation, "dramatic engine is the evolving emotional and interpersonal conflict", arc.name);
+    assertStringIncludes(allocation, "emotionally charged interpersonal decisions", arc.name);
     assertStringIncludes(outline, "Dramatize the chosen story", arc.name);
+    assertStringIncludes(outline, "The plot and relationships should evolve through the SAME actions", arc.name);
     assertStringIncludes(allocation, "Within THIS EXISTING planning response", arc.name);
     assertStringIncludes(allocation, "not a new validity gate or failure path", arc.name);
     assertStringIncludes(outline, "without additional stages, sections, or repair", arc.name);
