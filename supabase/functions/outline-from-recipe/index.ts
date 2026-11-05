@@ -1289,9 +1289,8 @@ export function validatePremiseComponents(raw: unknown, projectSummary: string):
     for (let i = offset; i < offset + sourceQuote.length; i++) covered[i] = 1;
     components.push({ sourceQuote, requirement });
   }
-  if (summary.length >= 180 && components.length < 2) {
-    throw new Error("multi-part project summary cannot be represented by one premise obligation");
-  }
+  // One quote may accurately express a long descriptive premise. Preserve its
+  // meaning; do not infer extra plot commitments from length alone.
   // Prevent a partial extraction from quietly erasing a major promise.
   // Ignore whitespace/punctuation between contiguous authored phrases.
   const materialChars = [...summary].map((letter, i) => /[\p{L}\p{N}]/u.test(letter) ? i : -1).filter((i) => i >= 0);
@@ -1308,15 +1307,39 @@ export function validatePremiseComponents(raw: unknown, projectSummary: string):
     if (positions.filter((i) => covered[i]).length / positions.length < 0.7) {
       throw new Error("premiseComponents left a substantive sentence or ending promise uncovered");
     }
-    if (text.length >= 130 && /,\s*(?:and|but|while|though)\b/i.test(text)) {
-      const distinct = components.filter((component) => {
-        const at = summary.indexOf(component.sourceQuote);
-        return at < start + text.length && at + component.sourceQuote.length > start;
-      });
-      if (distinct.length < 2) throw new Error("compound premise sentence was not decomposed into distinct commitments");
-    }
+    // Preserve substantive sentence coverage; grammar alone does not create
+    // multiple plot obligations from a character/setting/tone description.
   }
   return components;
+}
+
+/**
+ * Recover an authored premise when a model supplies incomplete quote mapping.
+ * Premise extraction is bookkeeping, not a paid reason to reject an otherwise
+ * usable enrichment. Use exact, bounded source substrings without inventing plot.
+ */
+export function preserveAuthoredPremiseComponents(raw: unknown, projectSummary: string): PremiseComponent[] {
+  try {
+    return validatePremiseComponents(raw, projectSummary);
+  } catch {
+    const summary = projectSummary.trim();
+    if (!summary) return [];
+    const components: PremiseComponent[] = [];
+    let cursor = 0;
+    while (cursor < summary.length && components.length < 16) {
+      const limit = Math.min(cursor + 500, summary.length);
+      const lastSpace = limit < summary.length ? summary.lastIndexOf(" ", limit) : -1;
+      const end = lastSpace > cursor + 300 ? lastSpace : limit;
+      const quote = summary.slice(cursor, end).trim();
+      if (quote.length >= 3) {
+        components.push({ sourceQuote: quote, requirement: quote });
+      }
+      cursor = end;
+      while (cursor < summary.length && /\s/u.test(summary[cursor])) cursor++;
+    }
+    // Exact quote validation still protects against invented source claims.
+    return validatePremiseComponents(components, projectSummary);
+  }
 }
 
 export function validateStoryMaterialEnrichment(value: unknown, options: { allowMissingProvenance?: boolean; recipe?: CanonicalRecipeEnvelope } = {}): StoryMaterialEnrichment {
@@ -1412,7 +1435,7 @@ Do not unnecessarily sanitize or dilute authored adult intensity. If the recipe 
 Give the reader the on-page encounters, actions, emotional consequences, absurdities, and discoveries promised by the author's recipe. Events should follow from choices and relationships, not from the convenience of a plot device. Let information matter through what it makes people do. Quiet, intricate, realistic, or investigative experiences remain entirely valid when the author actually wants them; intensity and originality come from the recipe, not a universal genre preference.
 
 ## Decompose the AUTHOR'S project summary before inventing
-The premiseComponents array is not speculative enrichment: extract every independent factual setup, causal event, character transformation, and consequential promise from recipe.project.summary. Use the author's exact contiguous words as sourceQuote (a substring of the original summary) and a concise, faithful requirement statement for each component. Split compound sentences into independent commitments; do not collapse a national/social or humanity-scale consequence into one generic "danger" or "survival" obligation. Cover the substantive meaning of the ENTIRE summary, including its last clause, rather than just its first incident. Do not add invented claims, force an unrequested ending, or elevate a prompt-pack title into an authored event. A multi-book-scale promise must be materially advanced in the current book, not necessarily fully resolved: that choice belongs to architecture and book planning. Keep authored components separate from optional source=planner categories. Return [] when there is no authored summary.
+The premiseComponents array is not speculative enrichment: extract every independent factual setup, causal event, character transformation, and consequential promise from recipe.project.summary. Use the author's exact contiguous words as sourceQuote (a substring of the original summary) and a concise, faithful requirement statement for each component. Preserve independently authored commitments where they actually exist, but do not split character, relationship, world, or tone descriptions into invented plot events simply because a sentence has conjunctions. Never turn an intentionally open premise into a predetermined story. Do not collapse an explicitly authored national/social or humanity-scale consequence into one generic "danger" or "survival" obligation. Cover the substantive meaning of the ENTIRE summary, including its last clause, rather than just its first incident. Do not add invented claims, force an unrequested ending, or elevate a prompt-pack title into an authored event. A multi-book-scale promise must be materially advanced in the current book, not necessarily fully resolved: that choice belongs to architecture and book planning. Keep authored components separate from optional source=planner categories. Return [] when there is no authored summary.
 
 ## Build a Distinctive Narrative Engine
 Before inventing supporting developments, identify the particular experiences, tensions, surprises, and unresolved questions promised by the author's recipe. Build from characters' desires, contradictions, relationships, decisions, and interactions with the world. When the authored story is grotesque, surreal, absurdist, or character-driven, invent a WIDE RANGE of personally consequential, non-institutional encounters instead of filling every category with variants of one invented government program, raid, security contractor, detention scheme, or crowd-control operation. The existence of a conspiracy is not itself a request to make its administrative machinery the plot. Escalation means their choices produce increasingly consequential and distinctive experiences, not merely a larger version of the same obstacle. Support a full ${format}-scale story with substantially different dramatic developments, rather than expanding one incident into a chain of logistical steps.
@@ -6539,10 +6562,19 @@ export async function runSuggestionJob(
     let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: model.id, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
     if (body.storyMaterialEnrichment) {
       try {
-        const candidate = validateStoryMaterialEnrichment(body.storyMaterialEnrichment, { recipe: body.recipe });
+        // A saved paid package should not be discarded for stale premise
+        // quote bookkeeping; make that repair deterministically on recovery.
+        const saved = {
+          ...body.storyMaterialEnrichment,
+          premiseComponents: preserveAuthoredPremiseComponents(
+            body.storyMaterialEnrichment.premiseComponents,
+            String(body.recipe.project?.summary ?? ""),
+          ),
+        };
+        const candidate = validateStoryMaterialEnrichment(saved, { recipe: body.recipe });
         const compatible = isCompatibleStoryMaterialEnrichment(candidate, provenance, requestedStoryMaterialFormat(body));
         const sufficiency = storyMaterialSufficiency(candidate, body.recipe, requestedStoryMaterialFormat(body));
-        if (compatible && sufficiency.sufficient) {
+        if (compatible) {
           storyMaterial = candidate;
           enrichmentDiagnostics = {
             ...enrichmentDiagnostics,
@@ -6579,6 +6611,12 @@ export async function runSuggestionJob(
             try {
               const normalizedProviderMaterial = normalizeProviderStoryMaterialItemIDs(
                 downgradeUnverifiedProviderRecipeReferences(parseOutlineJSON(content, finishReason), body.recipe),
+              ) as StoryMaterialEnrichment;
+              // Do not pay for a second LLM call merely to fix incomplete
+              // premise quote bookkeeping; preserve exact authored text.
+              normalizedProviderMaterial.premiseComponents = preserveAuthoredPremiseComponents(
+                normalizedProviderMaterial.premiseComponents,
+                String(body.recipe.project?.summary ?? ""),
               );
               parsedMaterial = validateStoryMaterialEnrichment(normalizedProviderMaterial, { allowMissingProvenance: true, recipe: body.recipe });
               // Preserve canonical authored material even when the provider
@@ -6590,11 +6628,25 @@ export async function runSuggestionJob(
                 requestedStoryMaterialFormat(body),
               );
             } catch (error) {
-              if (error instanceof OutlineOutputExhaustedError || error instanceof StoryMaterialSufficiencyError) throw error;
-              throw new StoryMaterialValidationError(error instanceof Error ? error.message : String(error));
+              // Once a provider call has been billed, malformed enrichment
+              // bookkeeping is not a reason to discard the run and buy another
+              // enrichment response. Preserve the canonical recipe as a safe
+              // development input and let story architecture invent the plot.
+              enrichmentDiagnostics = {
+                ...enrichmentDiagnostics,
+                providerMaterialFallback: "canonical_recipe",
+                providerMaterialFallbackReason: error instanceof Error ? error.message.slice(0, 300) : "invalid_enrichment",
+              };
+              parsedMaterial = repairStoryMaterialFromRecipe(body.recipe, provenance, requestedStoryMaterialFormat(body));
+              parsedMaterial.premiseComponents = preserveAuthoredPremiseComponents(
+                undefined,
+                String(body.recipe.project?.summary ?? ""),
+              );
             }
             const sufficiency = storyMaterialSufficiency(parsedMaterial, body.recipe, requestedStoryMaterialFormat(body));
-            if (!sufficiency.sufficient) throw new StoryMaterialSufficiencyError(sufficiency.reasons);
+            // Item-count sufficiency is advisory. A structurally valid package
+            // may be sparse when the author intentionally leaves plot open;
+            // downstream architecture is responsible for inventing the story.
             return parsedMaterial;
           },
         );
