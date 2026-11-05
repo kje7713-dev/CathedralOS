@@ -100,6 +100,7 @@ import {
   downgradeUnverifiedProviderRecipeReferences,
   validateStoryMaterialEnrichment,
   validatePremiseComponents,
+  preserveAuthoredPremiseComponents,
   storyMaterialSufficiency,
   recipeProvenance,
   attachRecipeProvenance,
@@ -6425,6 +6426,34 @@ Deno.test("authored premise is decomposed into independent source-backed obligat
   assertStringIncludes(buildEnrichmentPrompt(request).system, "Decompose the AUTHOR'S project summary");
   assertStringIncludes(buildAllocationPrompt(request, decomposed).user, "preventing humanity");
   assertStringIncludes(buildPrompt(request, new Map(), decomposed, material).user, "preventing humanity");
+});
+
+Deno.test("descriptive premise is not forced into separate plot commitments", () => {
+  const summary = "Two drug-addicted friends maintain a volatile relationship, while a secretive operative with divided loyalties remains embedded in their lives. Contemporary America is presented through a grotesque, absurdist, satirical lens. Hidden nonhuman presences have uncertain motives, with no established sequence of events or required ending.";
+  const result = validatePremiseComponents([
+    { sourceQuote: summary.slice(0, summary.indexOf(".") + 1), requirement: "The friends and operative have these established relationships." },
+    { sourceQuote: summary.slice(summary.indexOf(".") + 2), requirement: "The setting, genre and open mystery are authored constraints." },
+  ], summary);
+  assertEquals(result.length, 2);
+  const firstSentence = summary.slice(0, summary.indexOf(".") + 1);
+  assertEquals(validatePremiseComponents([{ sourceQuote: firstSentence, requirement: firstSentence }], firstSentence).length, 1);
+});
+
+Deno.test("incomplete paid premise extraction recovers from exact author quotes without a new plot", async () => {
+  const summary = [
+    "Two close friends have a deeply conflicted history, while their companion conceals a second identity and conflicting loyalties.",
+    "Their environment is a grotesque and absurd contemporary society, with recognizable institutions and no predetermined central plot.",
+    "An unexplained nonhuman presence exists underneath ordinary life, although its goals, methods and significance remain deliberately uncertain.",
+    "The writing should emphasize disturbing comedy, volatile relationships, and flawed people without specifying a climax or ultimate outcome.",
+  ].join(" ");
+  const raw = [{ sourceQuote: "Two close friends", requirement: "Two friends travel and become revolutionaries." }];
+  const recovered = preserveAuthoredPremiseComponents(raw, summary);
+  assertEquals(recovered.length >= 1, true);
+  assertEquals(validatePremiseComponents(recovered, summary), recovered);
+  assertEquals(recovered.every((component) => summary.includes(component.sourceQuote)), true);
+  assertEquals(recovered.every((component) => component.requirement === component.sourceQuote), true);
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes("if (!sufficiency.sufficient) throw new StoryMaterialSufficiencyError(sufficiency.reasons)"), false);
 });
 
 Deno.test("premise extraction rejects invented source claims and omitted large promises", () => {
