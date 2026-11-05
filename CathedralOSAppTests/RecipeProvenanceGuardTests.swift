@@ -126,6 +126,34 @@ final class RecipeProvenanceGuardTests: XCTestCase {
         XCTAssertTrue(description.contains("7"))
     }
 
+    func test_serverRecipeConflictShowsRebuildActionInsteadOfRaw409() {
+        let data = Data(#"{"errorCode":"recipe_provenance_conflict","message":"Recipe changed after sections were planned"}"#.utf8)
+        let error = OutlineSuggestionService.errorFromResponse(
+            statusCode: 409,
+            data: data,
+            existingSectionCount: 30
+        )
+        if case .recipeProvenanceConflict(_, _, let count) = error {
+            XCTAssertEqual(count, 30)
+        } else {
+            XCTFail("Expected a typed recipe conflict, not a generic server error")
+        }
+        let message = error.localizedDescription
+        XCTAssertTrue(message.hasPrefix(OutlineSuggestionError.recipeConflictPrefix))
+        XCTAssertTrue(message.contains("Rebuild"))
+        XCTAssertFalse(message.contains("errorCode"))
+    }
+
+    func test_other409StillUsesNormalErrorHandling() {
+        let data = Data(#"{"errorCode":"unrelated_conflict"}"#.utf8)
+        let error = OutlineSuggestionService.errorFromResponse(statusCode: 409, data: data)
+        if case .serverError(let code, _) = error {
+            XCTAssertEqual(code, 409)
+        } else {
+            XCTFail("Unrelated conflicts must not trigger destructive rebuild")
+        }
+    }
+
     // MARK: - Fixtures
 
     private func makeFixture(

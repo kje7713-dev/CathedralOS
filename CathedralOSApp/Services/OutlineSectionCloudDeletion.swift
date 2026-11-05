@@ -37,6 +37,16 @@ struct OutlineSectionCloudDeletion {
     }
 
     func deleteSection(id: UUID) async throws {
+        try await deleteSections(filter: "id", value: id)
+    }
+
+    /// Delete every server-side section of an outline in one request, so a
+    /// rebuild cannot leave a partially deleted outline after a network error.
+    func deleteAllSections(outlineID: UUID) async throws {
+        try await deleteSections(filter: "outline_id", value: outlineID)
+    }
+
+    private func deleteSections(filter: String, value: UUID) async throws {
         guard let client = try? SupabaseBackendClient() else {
             throw OutlineSectionCloudDeletionError.notConfigured(reason: "Supabase client not configured")
         }
@@ -50,7 +60,7 @@ struct OutlineSectionCloudDeletion {
             .appendingPathComponent("outline_sections")
 
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "id", value: "eq.\(id.uuidString)")]
+        components.queryItems = [URLQueryItem(name: filter, value: "eq.\(value.uuidString)")]
         let finalURL = components.url!
 
         var request = client.authorizedRequest(for: finalURL, userAccessToken: token)

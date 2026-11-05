@@ -59,6 +59,8 @@ enum OutlineSuggestionError: Error, LocalizedError {
         sectionCount: Int,
     )
 
+    static let recipeConflictPrefix = "The recipe changed since this outline was planned"
+
     var errorDescription: String? {
         switch self {
         case .notConfigured(let r): return "Suggestions backend not configured. \(r)"
@@ -82,7 +84,8 @@ enum OutlineSuggestionError: Error, LocalizedError {
         case .recipeIntegrityMissing(let missing):
             return RecipeIntegrityValidator.errorMessage(for: missing)
         case .recipeProvenanceConflict(_, _, let count):
-            return "This outline was planned against a different recipe (\(count) section\(count == 1 ? "" : "s") already accepted). Edit the outline to start fresh, or open the recipe to confirm it matches before re-planning."
+            let savedSections = count > 0 ? " (\(count) saved sections)" : ""
+            return "\(Self.recipeConflictPrefix)\(savedSections). Rebuild the outline to plan from the updated recipe."
         }
     }
 }
@@ -242,7 +245,7 @@ struct OutlineSuggestionService {
         case 200...299:
             return try decodeJob(data)
         case 401: throw OutlineSuggestionError.notAuthenticated
-        default: throw Self.errorFromResponse(statusCode: httpResponse.statusCode, data: data)
+        default: throw Self.errorFromResponse(statusCode: httpResponse.statusCode, data: data, existingSectionCount: request.existingSections?.count ?? 0)
         }
     }
 
@@ -297,11 +300,13 @@ struct OutlineSuggestionService {
         return "suggestion-" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func errorFromResponse(statusCode: Int, data: Data) -> OutlineSuggestionError {
+    static func errorFromResponse(statusCode: Int, data: Data, existingSectionCount: Int = 0) -> OutlineSuggestionError {
         let body = String(data: data, encoding: .utf8)
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         let code = object?["errorCode"] as? String ?? object?["error_code"] as? String
         switch code {
+        case "recipe_provenance_conflict":
+            return .recipeProvenanceConflict(frozenRecipeHash: "", currentRecipeHash: "", sectionCount: existingSectionCount)
         case "insufficient_credits": return .insufficientCredits(needed: object?["requiredCredits"] as? Double, available: object?["availableCredits"] as? Double, message: "Insufficient credits for this outline estimate.")
         case "provider_billing_unavailable": return .providerBillingUnavailable
         case "invalid_request", "model_unavailable": return .unsupportedModelConfiguration

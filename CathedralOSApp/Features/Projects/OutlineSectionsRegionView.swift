@@ -262,6 +262,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     @State private var embedError: String?
     @State private var deleteError: String?
     @State private var showingDeleteAllConfirm = false
+    @State private var rebuildAfterDelete = false
 
     /// At most one Outline per project in Phase 0/1.
     private var currentOutline: Outline? {
@@ -493,6 +494,13 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
             Text(suggestionsFeedback ?? "Suggestions are ready.")
         }
         .alert(suggestionsAlertTitle, isPresented: suggestionsAlertPresented) {
+            if suggestionsError?.hasPrefix(OutlineSuggestionError.recipeConflictPrefix) == true {
+                Button("Rebuild with Updated Recipe") {
+                    suggestionsError = nil
+                    rebuildAfterDelete = true
+                    showingDeleteAllConfirm = true
+                }
+            }
             Button("OK", role: .cancel) {
                 suggestionsError = nil
                 suggestionsNotice = nil
@@ -522,11 +530,15 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         } message: {
             Text(deleteError ?? "")
         }
-        .alert("Delete All Sections?", isPresented: $showingDeleteAllConfirm) {
-            Button("Delete All", role: .destructive) { deleteAllSections() }
-            Button("Cancel", role: .cancel) { }
+        .alert(rebuildAfterDelete ? "Rebuild Outline?" : "Delete All Sections?", isPresented: $showingDeleteAllConfirm) {
+            Button(rebuildAfterDelete ? "Delete & Rebuild" : "Delete All", role: .destructive) {
+                deleteAllSections(replanAfterDeletion: rebuildAfterDelete)
+            }
+            Button("Cancel", role: .cancel) { rebuildAfterDelete = false }
         } message: {
-            Text("This will permanently delete all \(sectionsOrder.count) section\(sectionsOrder.count == 1 ? "" : "s") from the server. This cannot be undone.")
+            Text(rebuildAfterDelete
+                ? "This permanently deletes the \(sectionsOrder.count) existing outline sections and starts a new plan using the updated recipe. Attached work may lose its section link. This cannot be undone."
+                : "This will permanently delete all \(sectionsOrder.count) section\(sectionsOrder.count == 1 ? "" : "s") from the server. This cannot be undone.")
         }
         .sheet(isPresented: $showingSuggestionSheet) {
             suggestionReviewContent(
@@ -1031,6 +1043,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     .font(CathedralTheme.Typography.headline(20, weight: .semibold))
                 Spacer()
                 Button {
+                    rebuildAfterDelete = false
                     showingDeleteAllConfirm = true
                 } label: {
                     Image(systemName: "trash")
@@ -1336,33 +1349,40 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         }
     }
 
-    /// Bulk-delete all top-level sections. Used when the user wants to
-    /// re-suggest from scratch after iterating on the recipe or arc —
-    /// avoids the duplicate-suggestions problem from PR #296's first
-    /// planner test (37 of 39 accepted cleanly, but the next Suggest
-    /// appended duplicates instead of replacing).
-    /// PR-XXX-K: cloud DELETE per section first, then local mirror.
-    /// "Cannot be undone" alert is now honest — the server rows are gone
-    /// before the local mirror fires.
-    private func deleteAllSections() {
-        let sections = sectionsOrder
+    /// Explicit, destructive rebuild after a recipe change. The bulk server
+    /// delete is one transaction; never start a new billable plan until it
+    /// succeeds. The backend's recipe-provenance guard remains unchanged.
+    private func deleteAllSections(replanAfterDeletion: Bool = false) {
+        guard let outline = currentOutline else { return }
+        guard !suggestionRunActive, !(projectRunStatus?.blocksNewGeneration ?? false) else {
+            deleteError = "Finish the active generation before replacing outline sections."
+            return
+        }
         Task {
-            let deletion = OutlineSectionCloudDeletion()
-            for section in sections {
-                do {
-                    try await deletion.deleteSection(id: section.id)
-                } catch {
-                    deleteError = error.localizedDescription
+            do {
+                // Fetch independently of the SwiftData relationship cache, which
+                // can lag behind a server refresh after Accept All.
+                let localSections = try modelContext.fetch(FetchDescriptor<OutlineSection>())
+                    .filter { $0.outline?.id == outline.id }
+                try await OutlineSectionCloudDeletion().deleteAllSections(outlineID: outline.id)
+                for section in localSections {
+                    modelContext.delete(section)
+                }
+                try modelContext.save()
+                syncSectionsOrder()
+                guard sectionsOrder.isEmpty else {
+                    deleteError = "Could not finish clearing the old outline. Refresh the project before rebuilding."
                     return
                 }
+                await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
+                if replanAfterDeletion {
+                    await loadSuggestions(modelID: OutlineSectionsModelCatalog.defaultID)
+                } else {
+                    durabilityCoordinator.beginNewSuggestionGeneration(for: project.stableLineageID)
+                }
+            } catch {
+                deleteError = error.localizedDescription
             }
-            for section in sections {
-                modelContext.delete(section)
-            }
-            try? modelContext.save()
-            syncSectionsOrder()
-            durabilityCoordinator.beginNewSuggestionGeneration(for: project.stableLineageID)
-            await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext)
         }
     }
 
