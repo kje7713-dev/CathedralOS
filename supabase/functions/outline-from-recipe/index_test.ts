@@ -444,12 +444,30 @@ Deno.test("outline prompts distinguish substantial dramatic developments from fr
   const allocationPrompt = buildAllocationPrompt(request).system;
   assertStringIncludes(allocationPrompt, "Allocate sections according to distinct dramatic developments, not the number of steps, conversations, or locations involved in one development.");
   assertStringIncludes(allocationPrompt, "Consecutive preparations for the same confrontation");
-  assertStringIncludes(allocationPrompt, "Prefer appropriately substantial containers over fragmenting a single causal unit");
+  assertStringIncludes(allocationPrompt, "Select dramatic shape BEFORE doing container arithmetic");
+  assertStringIncludes(allocationPrompt, "A chapter is not merely a 4,200-word slot.");
+  assertStringIncludes(allocationPrompt, "Do not select chapters just because they make the 115,000–125,000-WORD arithmetic easy.");
+  assertStringIncludes(allocationPrompt, "Do not force artificial variety or fixed percentages");
   assertStringIncludes(allocationPrompt, "minimum objective of 115,000 WORDS");
   assertStringIncludes(allocationPrompt, "hard maximum of 125,000 words");
   assertStringIncludes(allocationPrompt, "container");
   assertStringIncludes(allocationPrompt, "Story Arc");
   assertStringIncludes(allocationPrompt, "Recipe obligations");
+});
+
+Deno.test("novel container planning avoids 29-chapter word-budget shortcut without imposing a mix", () => {
+  const request = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const allocation = buildAllocationPrompt(request).system;
+  const outlining = buildPrompt(request, new Map()).system;
+  assertStringIncludes(allocation, "Select dramatic shape BEFORE doing container arithmetic");
+  assertStringIncludes(allocation, "Each planned chapter must contain enough connected-but-distinct developments");
+  assertStringIncludes(allocation, "Do not force artificial variety or fixed percentages");
+  assertStringIncludes(allocation, "If the resulting material cannot sustain the full novel, deepen the actual causal story");
+  assertStringIncludes(outlining, "do NOT default to the chapter container merely because it has the largest finished-prose WORD budget");
+  assertStringIncludes(outlining, "Choose the format of each distinct dramatic unit from the material");
+  assertEquals(outlining.includes("For a new novel, prefer the chapter container"), false);
+  assertStringIncludes(allocation, "115,000");
+  assertStringIncludes(allocation, "125,000");
 });
 
 Deno.test("existing accepted sections satisfy obligation coverage", () => {
@@ -1303,6 +1321,37 @@ Deno.test("selected book-level climax persists into outline without forcing the 
   assertStringIncludes(outlinePrompt.system, savedArchitecture.deliberatelyOpenThreads);
   assertStringIncludes(outlinePrompt.system, "not necessarily resolve every external threat");
   assertStringIncludes(outlinePrompt.system, "the decisive BOOK-level outcome must be DRAMATIZED as the climax section's dramaticEvent");
+});
+
+Deno.test("climax causality is carried through existing planning, first pass, and semantic review", async () => {
+  const request = { ...sparseRequest, requestedFormat: "novel",
+    recipe: { ...sparseRequest.recipe,
+      project: { ...sparseRequest.recipe.project, audienceNotes: "The reader should feel the personal cost of the protagonist's choice." } },
+    arcTemplate: { ...sparseRequest.arcTemplate, name: "Coming-of-Age / Bildungsroman" } } as any;
+  const architecture = {
+    arcExperience: "A consequential choice changes how the protagonists see themselves.",
+    centralQuestion: "Will a protagonist take a personal risk for someone else?",
+    characterCausality: "Earlier choices make the later risk meaningful and possible.",
+    decisiveClimax: "The protagonist chooses to act, removing a concrete danger at real cost.",
+    endingConsequence: "The immediate danger is gone, but the larger mystery remains.",
+    deliberatelyOpenThreads: "The source of the wider threat remains unknown.",
+  };
+  const allocation = buildAllocationPrompt(request);
+  const outline = buildPrompt(request, new Map(), [], undefined, architecture);
+  const verification = semanticVerificationInput([], request.arcTemplate, request.recipe, [], architecture) as any;
+  assertStringIncludes(allocation.system, "Establish the climax's causal chain inside the EXISTING story architecture");
+  assertStringIncludes(allocation.system, "the concrete mechanism by which that action changes what would otherwise happen");
+  assertStringIncludes(allocation.system, "Allocate the specific earlier developments that establish the stakes");
+  assertStringIncludes(outline.system, "Causal payoff realized in the first-pass Section Contracts");
+  assertStringIncludes(outline.system, "show the protagonist's specific action and its *observable* effect");
+  assertEquals(verification.committedDecisiveClimax, architecture.decisiveClimax);
+  assertEquals(verification.committedEndingConsequence, architecture.endingConsequence);
+  const creative = verification.arcWideObligations.find((item: any) => item.obligationID === "creative_fidelity");
+  assertEquals(Boolean(creative), true);
+  assertStringIncludes(creative.instruction, "claimed climax payoff is actually caused by earlier established stakes");
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertStringIncludes(source, "Independently assess committedDecisiveClimax and committedEndingConsequence against the actual Section Contracts");
+  assertStringIncludes(source, "do not require an external victory, over-explained mechanism, or a new failure path");
 });
 
 Deno.test("explicitly authored external victory and relationship resolution remain permitted in all genres", () => {
