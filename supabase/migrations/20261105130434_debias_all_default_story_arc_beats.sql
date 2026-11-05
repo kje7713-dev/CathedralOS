@@ -52,3 +52,39 @@ UPDATE public.story_arc_templates
 SET description = 'A dual-engine fantasy arc in which external fantasy stakes and central romance escalate together and become inseparable at the climax.'
 WHERE id = 'a0000001-0000-0000-0000-000000000010'::uuid
   AND description = 'A dual-engine fantasy arc in which the external quest and central romance escalate together and become inseparable at the climax.';
+
+-- Keep displayed beat labels aligned with the same non-prescriptive contracts.
+-- Roles and UUIDs are stable so existing arc assignments remain compatible.
+WITH label_rewrites (template_id, beat_role, original_label, revised_label) AS (
+  VALUES
+    ('a0000001-0000-0000-0000-000000000010'::uuid, 'quest_and_bond', 'Quest and Bond', 'Fantasy Pressure and Bond'),
+    ('a0000001-0000-0000-0000-000000000010'::uuid, 'final_battle_and_choice', 'Final Battle and Choice', 'Defining Stakes and Choice'),
+    ('a0000001-0000-0000-0000-000000000011'::uuid, 'first_pursuit', 'First Pursuit', 'Threat Tightens'),
+    ('a0000001-0000-0000-0000-000000000011'::uuid, 'final_lead', 'Final Lead', 'Last Opening'),
+    ('a0000001-0000-0000-0000-000000000017'::uuid, 'rules_discovered', 'Rules Discovered', 'Threat Pattern'),
+    ('a0000001-0000-0000-0000-000000000027'::uuid, 'buried_conflict', 'Buried Conflict', 'Inherited Pressure'),
+    ('a0000001-0000-0000-0000-000000000027'::uuid, 'inherited_truth_revealed', 'Inherited Truth Revealed', 'Inheritance Reframed')
+)
+UPDATE public.story_arc_templates AS t
+SET beats = (
+  SELECT jsonb_agg(
+    CASE WHEN r.revised_label IS NOT NULL
+      THEN jsonb_set(b.beat, '{label}', to_jsonb(r.revised_label), false)
+      ELSE b.beat
+    END ORDER BY b.position
+  )
+  FROM jsonb_array_elements(t.beats) WITH ORDINALITY AS b(beat, position)
+  LEFT JOIN label_rewrites AS r
+    ON r.template_id = t.id
+   AND r.beat_role = b.beat->>'role'
+   AND r.original_label = b.beat->>'label'
+)
+WHERE jsonb_typeof(t.beats) = 'array'
+  AND EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(t.beats) AS beat
+    JOIN label_rewrites AS r
+      ON r.template_id = t.id
+     AND r.beat_role = beat->>'role'
+     AND r.original_label = beat->>'label'
+  );
