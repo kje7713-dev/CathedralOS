@@ -361,16 +361,16 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Romantic Suspense",
         description: "A combustible romance under mounting peril, where chemistry, secrets, betrayal, and risky trust reshape the danger itself. Deliver a thrilling, earned joint climax that makes the relationship essential to survival. Wild dust: Desire must provoke dangerous gambles, electric reversals, startling betrayals, and a climax where love transforms survival.",
         beats: [
-            .init(role: "danger_hook", label: "Danger Hook", description: "Introduce the threat that forces the leads into the same problem."),
-            .init(role: "forced_alliance", label: "Forced Alliance", description: "Make cooperation necessary even though trust is incomplete."),
-            .init(role: "distrust", label: "Distrust", description: "Expose reasons the leads cannot yet fully rely on one another."),
-            .init(role: "intimacy_under_pressure", label: "Intimacy Under Pressure", description: "Deepen attraction and vulnerability while danger keeps increasing."),
-            .init(role: "threat_escalates", label: "Threat Escalates", description: "Make the antagonist or danger more immediate, capable, and personal."),
-            .init(role: "midpoint_reveal", label: "Midpoint Reveal", description: "Reveal a truth that changes both the danger and the relationship."),
-            .init(role: "betrayal_or_misread", label: "Betrayal / Misread", description: "Break trust or make one lead appear complicit with the threat."),
-            .init(role: "trust_choice", label: "Trust Choice", description: "Make an active, risky decision to trust based on earned knowledge rather than convenience."),
-            .init(role: "joint_showdown", label: "Joint Showdown", description: "Resolve the danger through surprising coordinated action driven by an emotionally costly romantic decision, not just exposure or outside rescue."),
-            .init(role: "safety_and_commitment", label: "Safety and Commitment", description: "Resolve the threat and establish the earned romantic future.")
+            .init(role: "danger_hook", label: "Danger Hook", description: "Introduce the threat that forces the leads into the same problem. Creative progression: Open with intimate jeopardy that destroys one lead's previous freedom and makes the other personally consequential."),
+            .init(role: "forced_alliance", label: "Forced Alliance", description: "Make cooperation necessary even though trust is incomplete. Creative progression: Make an uneasy alliance arise from a dangerous irreversible compromise rather than convenient cooperation."),
+            .init(role: "distrust", label: "Distrust", description: "Expose reasons the leads cannot yet fully rely on one another. Creative progression: An independent secret or gamble should cause a specific breach of trust and a newly dangerous choice."),
+            .init(role: "intimacy_under_pressure", label: "Intimacy Under Pressure", description: "Deepen attraction and vulnerability while danger keeps increasing. Creative progression: Let desire trigger an audacious risk that changes the threat's reach, not just soften a chase."),
+            .init(role: "threat_escalates", label: "Threat Escalates", description: "Make the antagonist or danger more immediate, capable, and personal. Creative progression: Introduce a genuinely different attack, betrayal, or peril that demands a new joint tactic."),
+            .init(role: "midpoint_reveal", label: "Midpoint Reveal", description: "Reveal a truth that changes both the danger and the relationship. Creative progression: Reveal a personal truth that changes the enemy's plan and the lovers' power over each other."),
+            .init(role: "betrayal_or_misread", label: "Betrayal / Misread", description: "Break trust or make one lead appear complicit with the threat. Creative progression: Break trust through a consequential misreading or betrayal caused by the established danger, not another argument."),
+            .init(role: "trust_choice", label: "Trust Choice", description: "Make an active, risky decision to trust based on earned knowledge rather than convenience. Creative progression: Force a risky protective choice that forfeits a safe option and makes the final showdown possible."),
+            .init(role: "joint_showdown", label: "Joint Showdown", description: "Resolve the danger through surprising coordinated action driven by an emotionally costly romantic decision, not just exposure or outside rescue. Creative progression: Reserve the one inventive, breathtaking resolution of peril intertwined with the decisive romantic act for this beat."),
+            .init(role: "safety_and_commitment", label: "Safety and Commitment", description: "Resolve the threat and establish the earned romantic future. Creative progression: Show the resulting relationship and safety through an action neither lead could have taken before the climax.")
         ],
         relationshipFocus: .primary,
         intimacyMilestoneRoles: ["intimacy_under_pressure", "trust_choice", "joint_showdown", "safety_and_commitment"],
@@ -381,17 +381,17 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Conspiracy / Artifact Thriller",
         description: "A thrilling rabbit hole of dangerous discoveries, hidden power, treacherous allies, astonishing connections, and revelations that redraw reality. Clues must unleash human danger and consequential action, not paperwork. Wild dust: Make rabbit-hole revelations bizarre, perilous, personally devastating, and reality-shattering, not an audit of documents and procedures.",
         beats: [
-            .init(role: "discovery", label: "Discovery", description: "Uncover the object, document, secret, or anomaly that opens the larger mystery."),
-            .init(role: "pursuit_begins", label: "Pursuit Begins", description: "Make possession of the discovery dangerous and force the protagonist to act."),
-            .init(role: "first_clue", label: "First Clue", description: "Resolve the first layer while pointing toward a larger hidden system."),
-            .init(role: "conspiracy_expands", label: "Conspiracy Expands", description: "Reveal that the opposition is broader, older, or more powerful than expected."),
-            .init(role: "ally_or_betrayal", label: "Ally / Betrayal", description: "Complicate the pursuit by changing who can be trusted."),
-            .init(role: "hidden_history_reveal", label: "Hidden History Reveal", description: "Expose the deeper origin or meaning of the artifact, conspiracy, or secret."),
-            .init(role: "apparent_defeat", label: "Apparent Defeat", description: "Put the antagonist in control and remove the protagonist's obvious path forward."),
-            .init(role: "final_decoding", label: "Final Decoding", description: "Complete the insight that reveals what must happen next and why."),
-            .init(role: "race_to_prevent", label: "Race to Prevent", description: "Escalate toward the irreversible consequence the conspiracy is trying to cause."),
-            .init(role: "confrontation_and_truth", label: "Confrontation and Truth", description: "Turn the astonishing but earned truth into irreversible upheaval through a high-stakes confrontation, not revelation alone."),
-            .init(role: "aftermath", label: "Aftermath", description: "Resolve the immediate conspiracy and show what the revealed truth changes.")
+            .init(role: "discovery", label: "Discovery", description: "Uncover the object, document, secret, or anomaly that opens the larger mystery. Creative progression: Introduce a bizarre or seductive discovery with immediate consequences for a living relationship, not just an object inventory."),
+            .init(role: "pursuit_begins", label: "Pursuit Begins", description: "Make possession of the discovery dangerous and force the protagonist to act. Creative progression: Make an independently motivated person's action turn knowledge into dangerous pursuit and irreversibly close an option."),
+            .init(role: "first_clue", label: "First Clue", description: "Resolve the first layer while pointing toward a larger hidden system. Creative progression: Let the first clue reverse a specific belief and unleash a new human conflict."),
+            .init(role: "conspiracy_expands", label: "Conspiracy Expands", description: "Reveal that the opposition is broader, older, or more powerful than expected. Creative progression: Expand the conspiracy through a startling betrayal or new force that changes who has power."),
+            .init(role: "ally_or_betrayal", label: "Ally / Betrayal", description: "Complicate the pursuit by changing who can be trusted. Creative progression: Have an ally pursue a selfish, plausible agenda and provoke an unforeseen loss or new possibility."),
+            .init(role: "hidden_history_reveal", label: "Hidden History Reveal", description: "Expose the deeper origin or meaning of the artifact, conspiracy, or secret. Creative progression: Reveal a world-altering history that recasts present loyalties rather than furnishing an evidence packet."),
+            .init(role: "apparent_defeat", label: "Apparent Defeat", description: "Put the antagonist in control and remove the protagonist's obvious path forward. Creative progression: Destroy a critical belief, refuge, or ally through a shocking, causal move by the opposition."),
+            .init(role: "final_decoding", label: "Final Decoding", description: "Complete the insight that reveals what must happen next and why. Creative progression: Earn an astonishing new interpretation that changes what the protagonists must do next, not a second clue reading."),
+            .init(role: "race_to_prevent", label: "Race to Prevent", description: "Escalate toward the irreversible consequence the conspiracy is trying to cause. Creative progression: Make the approaching catastrophe provoke varied irreversible choices, not an endless sequence of logistical checkpoints."),
+            .init(role: "confrontation_and_truth", label: "Confrontation and Truth", description: "Turn the astonishing but earned truth into irreversible upheaval through a high-stakes confrontation, not revelation alone. Creative progression: Deliver the one grand, shocking truth and its decisive human consequences in a singular confrontation."),
+            .init(role: "aftermath", label: "Aftermath", description: "Resolve the immediate conspiracy and show what the revealed truth changes. Creative progression: Show how reality and relationships actually changed through a fresh final consequence, not another reveal.")
         ]
     )
 
@@ -400,17 +400,17 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Progression Fantasy / LitRPG",
         description: "An electrifying climb through imaginative power systems, spectacular trials, fierce rivals, and costly breakthroughs. Each tier unlocks different dangers and freedoms, not merely bigger numbers. Wild dust: Each new power should open exhilarating, terrifying, and morally dangerous possibilities nobody could foresee from the previous tier.",
         beats: [
-            .init(role: "weak_start", label: "Weak Start", description: "Establish the protagonist's limitations, status, and the hierarchy they cannot yet overcome."),
-            .init(role: "system_discovered", label: "System Discovered", description: "Reveal the rules, power system, progression path, or game-like structure that makes advancement possible."),
-            .init(role: "first_gain", label: "First Gain", description: "Earn the first meaningful improvement and commit to progression."),
-            .init(role: "training_and_trials", label: "Training and Trials", description: "Build competence through increasingly costly practice, quests, tests, or fights."),
-            .init(role: "first_boss", label: "First Major Test", description: "Measure progress against an opponent or challenge that exposes remaining weaknesses."),
-            .init(role: "new_tier", label: "New Tier", description: "Achieve a breakthrough that changes the protagonist's options and status."),
-            .init(role: "stronger_rival", label: "Stronger Rival", description: "Introduce an opponent, faction, or challenge that makes the new level insufficient."),
-            .init(role: "major_defeat", label: "Major Defeat", description: "Inflict a loss that exposes a fundamental weakness in the current path."),
-            .init(role: "breakthrough", label: "Breakthrough", description: "Earn a new understanding, technique, alliance, or evolution through the consequences of defeat."),
-            .init(role: "tier_climax", label: "Tier Climax", description: "Pay off hard-won powers and relationships in a spectacular, inventive trial with lasting consequences beyond a level increase."),
-            .init(role: "next_horizon", label: "Next Horizon", description: "Resolve the current progression arc while revealing the larger level still ahead.")
+            .init(role: "weak_start", label: "Weak Start", description: "Establish the protagonist's limitations, status, and the hierarchy they cannot yet overcome. Creative progression: Give low status a strange, humiliating, personal cost that drives a consequential act."),
+            .init(role: "system_discovered", label: "System Discovered", description: "Reveal the rules, power system, progression path, or game-like structure that makes advancement possible. Creative progression: Reveal the system through a thrilling experiment or encounter that changes the protagonist's choices."),
+            .init(role: "first_gain", label: "First Gain", description: "Earn the first meaningful improvement and commit to progression. Creative progression: Make the first gain produce a startling new obligation or enemy, not merely a number increase."),
+            .init(role: "training_and_trials", label: "Training and Trials", description: "Build competence through increasingly costly practice, quests, tests, or fights. Creative progression: Vary training with perilous bargains, rival gambles, bizarre quests, and distinct changes of power."),
+            .init(role: "first_boss", label: "First Major Test", description: "Measure progress against an opponent or challenge that exposes remaining weaknesses. Creative progression: Use a spectacular test to reveal a different flaw than the protagonist has already faced."),
+            .init(role: "new_tier", label: "New Tier", description: "Achieve a breakthrough that changes the protagonist's options and status. Creative progression: Let the new tier unlock a shocking freedom, temptation, or threat that transforms the central objective."),
+            .init(role: "stronger_rival", label: "Stronger Rival", description: "Introduce an opponent, faction, or challenge that makes the new level insufficient. Creative progression: Give the rival an original appetite and a dangerous choice that redefines the meaning of strength."),
+            .init(role: "major_defeat", label: "Major Defeat", description: "Inflict a loss that exposes a fundamental weakness in the current path. Creative progression: Break the current progression strategy with a costly defeat and irreversible loss."),
+            .init(role: "breakthrough", label: "Breakthrough", description: "Earn a new understanding, technique, alliance, or evolution through the consequences of defeat. Creative progression: Earn a radically different approach through changed loyalties or an inventive discovery, not repeat training."),
+            .init(role: "tier_climax", label: "Tier Climax", description: "Pay off hard-won powers and relationships in a spectacular, inventive trial with lasting consequences beyond a level increase. Creative progression: Reserve one dazzling culmination of new powers and relationships; its outcome must be irrevocable."),
+            .init(role: "next_horizon", label: "Next Horizon", description: "Resolve the current progression arc while revealing the larger level still ahead. Creative progression: Reveal the next horizon as a transformed world and new desire, not another copy of the prior boss.")
         ]
     )
 
@@ -419,16 +419,16 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Historical War / Survival",
         description: "A raw historical survival saga of desperation, fragile loyalty, savage irony, heartbreaking courage, and irreversible choices. Let lived history collide with unpredictable human decisions rather than procedural campaign summaries. Wild dust: Give period-credible people ferocious appetites, savage luck, outrageous survival gambles, and choices that remake their private history.",
         beats: [
-            .init(role: "life_before", label: "Life Before", description: "Establish the social world, relationships, duties, and historical conditions before open rupture."),
-            .init(role: "war_arrives", label: "War Arrives", description: "Bring the historical conflict directly into the protagonist's life."),
-            .init(role: "adaptation", label: "Adaptation", description: "Force new roles, routines, allegiances, or survival strategies."),
-            .init(role: "first_loss", label: "First Loss", description: "Make the cost of the conflict personal and irreversible."),
-            .init(role: "deepening_conflict", label: "Deepening Conflict", description: "Escalate scarcity, danger, displacement, duty, or divided loyalties."),
-            .init(role: "impossible_choice", label: "Impossible Choice", description: "Force a decision in which every available option carries serious moral or personal cost."),
-            .init(role: "major_loss_or_betrayal", label: "Major Loss / Betrayal", description: "Destroy a major source of safety, trust, or hope."),
-            .init(role: "final_endurance", label: "Final Endurance", description: "Commit to the final course of action under the harshest conditions."),
-            .init(role: "decisive_event", label: "Decisive Event", description: "Deliver a historically grounded, extraordinary decisive event whose survival, betrayal, or loss changes everything."),
-            .init(role: "aftermath_and_memory", label: "Aftermath and Memory", description: "Show survival, grief, change, and what the historical experience leaves behind.")
+            .init(role: "life_before", label: "Life Before", description: "Establish the social world, relationships, duties, and historical conditions before open rupture. Creative progression: Establish period-specific desire, loyalty, and frailty through a choice that history will make costly."),
+            .init(role: "war_arrives", label: "War Arrives", description: "Bring the historical conflict directly into the protagonist's life. Creative progression: Let war destroy one intimate arrangement through an unforgettable, historically plausible event."),
+            .init(role: "adaptation", label: "Adaptation", description: "Force new roles, routines, allegiances, or survival strategies. Creative progression: Force a desperate new role or dangerous compromise that changes relationships rather than merely routines."),
+            .init(role: "first_loss", label: "First Loss", description: "Make the cost of the conflict personal and irreversible. Creative progression: Inflict a singular personal loss whose consequences drive the next conflict, not recurring anonymous casualties."),
+            .init(role: "deepening_conflict", label: "Deepening Conflict", description: "Escalate scarcity, danger, displacement, duty, or divided loyalties. Creative progression: Escalate through varied scarcity, passion, absurd luck, treachery, and unpredictable human decisions."),
+            .init(role: "impossible_choice", label: "Impossible Choice", description: "Force a decision in which every available option carries serious moral or personal cost. Creative progression: Demand an impossible moral or survival act that forfeits something specific and beloved."),
+            .init(role: "major_loss_or_betrayal", label: "Major Loss / Betrayal", description: "Destroy a major source of safety, trust, or hope. Creative progression: Destroy a different refuge or loyalty through a shocking betrayal that alters the route ahead."),
+            .init(role: "final_endurance", label: "Final Endurance", description: "Commit to the final course of action under the harshest conditions. Creative progression: Make endurance a reckless, costly human decision that sets up but does not resolve the final event."),
+            .init(role: "decisive_event", label: "Decisive Event", description: "Deliver a historically grounded, extraordinary decisive event whose survival, betrayal, or loss changes everything. Creative progression: Reserve a historically grounded, extraordinarily consequential victory, escape, death, or betrayal for this beat."),
+            .init(role: "aftermath_and_memory", label: "Aftermath and Memory", description: "Show survival, grief, change, and what the historical experience leaves behind. Creative progression: Show the transformed survivor and community through lived action, not a history lecture or another sacrifice.")
         ]
     )
 
@@ -437,16 +437,16 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Coming-of-Age / Bildungsroman",
         description: "An unruly journey of intoxicating discovery, humiliation, dangerous belonging, fierce attachments, and irreversible self-definition. Growing up may be ecstatic, ugly, strange, or morally compromised rather than wholesome. Wild dust: Build identity through reckless belonging, astonishing mistakes, sudden ecstasy, humiliating reversals, and irreversible personal consequences.",
         beats: [
-            .init(role: "sheltered_identity", label: "Sheltered Identity", description: "Establish the protagonist's inherited identity, assumptions, and limited understanding of the world."),
-            .init(role: "first_disruption", label: "First Disruption", description: "Introduce an experience that makes the old identity insufficient."),
-            .init(role: "experimentation", label: "Experimentation", description: "Let the protagonist test new roles, freedoms, relationships, or beliefs."),
-            .init(role: "belonging_and_conflict", label: "Belonging and Conflict", description: "Offer meaningful belonging while exposing the compromises it demands."),
-            .init(role: "first_consequence", label: "First Consequence", description: "Make a choice produce an irreversible emotional, social, or practical cost."),
-            .init(role: "disillusionment", label: "Disillusionment", description: "Break an important idealization of a person, institution, relationship, or self-image."),
-            .init(role: "self_recognition", label: "Self-Recognition", description: "Bring the protagonist to a clearer understanding of who they are and what they value."),
-            .init(role: "adult_choice", label: "Adult Choice", description: "Make a consequential decision based on the emerging self rather than inherited expectations."),
-            .init(role: "leaving_or_returning", label: "Leaving / Returning", description: "Show the immediate consequence of the adult choice in relation to the old world."),
-            .init(role: "integrated_identity", label: "Integrated Identity", description: "Reveal the emerging self through a startling, costly choice, whether admirable, damaged, or unsettling.")
+            .init(role: "sheltered_identity", label: "Sheltered Identity", description: "Establish the protagonist's inherited identity, assumptions, and limited understanding of the world. Creative progression: Open with a magnetic young person making a compromised choice inside the inherited world."),
+            .init(role: "first_disruption", label: "First Disruption", description: "Introduce an experience that makes the old identity insufficient. Creative progression: An exhilarating or catastrophic experience should permanently change what belonging is possible."),
+            .init(role: "experimentation", label: "Experimentation", description: "Let the protagonist test new roles, freedoms, relationships, or beliefs. Creative progression: Let experimentation lead to bizarre friendships, intoxicating freedom, and a costly new consequence."),
+            .init(role: "belonging_and_conflict", label: "Belonging and Conflict", description: "Offer meaningful belonging while exposing the compromises it demands. Creative progression: Make a seductive group or relationship demand a real betrayal, gamble, or sacrifice."),
+            .init(role: "first_consequence", label: "First Consequence", description: "Make a choice produce an irreversible emotional, social, or practical cost. Creative progression: Force the first irreversible consequence of an original mistake, not another embarrassment."),
+            .init(role: "disillusionment", label: "Disillusionment", description: "Break an important idealization of a person, institution, relationship, or self-image. Creative progression: Destroy a treasured ideal through a person's self-interested action, changing what the protagonist believes."),
+            .init(role: "self_recognition", label: "Self-Recognition", description: "Bring the protagonist to a clearer understanding of who they are and what they value. Creative progression: Earn self-recognition through a startling choice that creates a new risk, not a reflective monologue."),
+            .init(role: "adult_choice", label: "Adult Choice", description: "Make a consequential decision based on the emerging self rather than inherited expectations. Creative progression: Make an audacious adult act foreclose the old identity and transform a relationship."),
+            .init(role: "leaving_or_returning", label: "Leaving / Returning", description: "Show the immediate consequence of the adult choice in relation to the old world. Creative progression: Leave or return to a changed family or community where old permissions no longer apply."),
+            .init(role: "integrated_identity", label: "Integrated Identity", description: "Reveal the emerging self through a startling, costly choice, whether admirable, damaged, or unsettling. Creative progression: Show the new identity in an extraordinary, consequential action; the character need not be morally improved.")
         ]
     )
 
@@ -455,16 +455,16 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Revenge",
         description: "A savage vengeance tale of obsession, inventive retaliation, treacherous alliances, escalating counterstrikes, and a victory that may taste monstrous. Revenge must change its pursuer and the world they injure. Wild dust: Let the avenger's most ingenious move create a stranger monster, temptation, or betrayal, with consequences beyond settling accounts.",
         beats: [
-            .init(role: "injury", label: "Injury", description: "Inflict the wrong, loss, humiliation, or betrayal that creates the desire for revenge."),
-            .init(role: "vow", label: "Vow", description: "Turn pain into a concrete commitment to retaliate."),
-            .init(role: "preparation", label: "Preparation", description: "Acquire knowledge, access, allies, skills, or leverage needed to act."),
-            .init(role: "first_retribution", label: "First Retribution", description: "Deliver an early success that proves revenge is possible and raises the stakes."),
-            .init(role: "cost_revealed", label: "Cost Revealed", description: "Show collateral damage or personal corruption caused by the pursuit."),
-            .init(role: "counterstrike", label: "Counterstrike", description: "Let the target or system retaliate effectively and put the avenger in danger."),
-            .init(role: "moral_crossroads", label: "Moral Crossroads", description: "Force recognition of what revenge is demanding and whether the original goal still justifies it."),
-            .init(role: "final_hunt", label: "Final Hunt", description: "Commit to the last pursuit with no illusion about its cost."),
-            .init(role: "reckoning", label: "Reckoning", description: "Force a fierce, unforgettable final confrontation; mercy, ruin, violence, or reversal must carry irrevocable costs."),
-            .init(role: "consequence", label: "Consequence", description: "Resolve what revenge achieved, destroyed, or failed to repair.")
+            .init(role: "injury", label: "Injury", description: "Inflict the wrong, loss, humiliation, or betrayal that creates the desire for revenge. Creative progression: Establish a particular, devastating injury that binds the wrong to a living relationship."),
+            .init(role: "vow", label: "Vow", description: "Turn pain into a concrete commitment to retaliate. Creative progression: Convert pain into an audacious irreversible commitment with an unexpected first price."),
+            .init(role: "preparation", label: "Preparation", description: "Acquire knowledge, access, allies, skills, or leverage needed to act. Creative progression: Build capacity through uneasy alliances and treacherous bargains that already change the avenger."),
+            .init(role: "first_retribution", label: "First Retribution", description: "Deliver an early success that proves revenge is possible and raises the stakes. Creative progression: Give the first retaliation a thrilling, shocking result that creates an unintended new enemy or debt."),
+            .init(role: "cost_revealed", label: "Cost Revealed", description: "Show collateral damage or personal corruption caused by the pursuit. Creative progression: Let collateral harm produce an independent betrayal or twisted new appetite, not another guilty thought."),
+            .init(role: "counterstrike", label: "Counterstrike", description: "Let the target or system retaliate effectively and put the avenger in danger. Creative progression: Have the target retaliate with a brilliant, intimate countermove that changes the campaign."),
+            .init(role: "moral_crossroads", label: "Moral Crossroads", description: "Force recognition of what revenge is demanding and whether the original goal still justifies it. Creative progression: Force a costly action with morally dangerous options, not another speech about whether revenge is right."),
+            .init(role: "final_hunt", label: "Final Hunt", description: "Commit to the last pursuit with no illusion about its cost. Creative progression: Make the final pursuit transform alliances and expose a new devastating vulnerability."),
+            .init(role: "reckoning", label: "Reckoning", description: "Force a fierce, unforgettable final confrontation; mercy, ruin, violence, or reversal must carry irrevocable costs. Creative progression: Reserve a ferocious, surprising confrontation whose result can never be played twice."),
+            .init(role: "consequence", label: "Consequence", description: "Resolve what revenge achieved, destroyed, or failed to repair. Creative progression: Show the new world revenge created through a fresh consequence, even if victory feels monstrous.")
         ]
     )
 
@@ -473,17 +473,17 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Heist / Caper",
         description: "An audacious caper of impossible ambition, eccentric specialists, clashing loyalties, outrageous complications, clever improvisation, and double-crosses that change the job itself. The story must thrill, not read like a logistics plan. Wild dust: Unleash eccentric accomplices, outrageous gambles, seductive double-crosses, improvisational catastrophes, and a twist that transforms the score.",
         beats: [
-            .init(role: "target", label: "The Target", description: "Establish the prize, obstacle, and why taking it matters."),
-            .init(role: "motive", label: "The Motive", description: "Create the pressure or opportunity that makes the heist worth attempting."),
-            .init(role: "crew_assembled", label: "Crew Assembled", description: "Recruit the specialized people and define the tensions inside the team."),
-            .init(role: "plan_and_prep", label: "Plan and Prep", description: "Build the operation, gather tools and intelligence, and expose likely failure points."),
-            .init(role: "first_complication", label: "First Complication", description: "Introduce a change that invalidates part of the plan before or during execution."),
-            .init(role: "execution_begins", label: "Execution Begins", description: "Cross the point of no return and put the plan into motion."),
-            .init(role: "plan_breaks", label: "The Plan Breaks", description: "Destroy the expected path to success and force live improvisation."),
-            .init(role: "betrayal_or_twist", label: "Betrayal / Twist", description: "Reveal hidden motives, double-crosses, or a truth about the target that changes the job."),
-            .init(role: "improvisation", label: "Improvisation", description: "Use the crew's earned skills and relationships to create a new route through the failure."),
-            .init(role: "escape_or_capture", label: "Escape / Capture", description: "Pay off the heist through a daring, earned final gambit that transforms who gets the prize and whom the crew can trust."),
-            .init(role: "division_and_aftermath", label: "Division and Aftermath", description: "Settle the prize, loyalties, consequences, and what remains of the crew.")
+            .init(role: "target", label: "The Target", description: "Establish the prize, obstacle, and why taking it matters. Creative progression: Make the prize dangerously personal or outrageous and show why a particular character would risk everything."),
+            .init(role: "motive", label: "The Motive", description: "Create the pressure or opportunity that makes the heist worth attempting. Creative progression: Give the crew's motive a scandalous complication that alters whom they trust."),
+            .init(role: "crew_assembled", label: "Crew Assembled", description: "Recruit the specialized people and define the tensions inside the team. Creative progression: Assemble volatile specialists whose independent appetites create a new problem before the job begins."),
+            .init(role: "plan_and_prep", label: "Plan and Prep", description: "Build the operation, gather tools and intelligence, and expose likely failure points. Creative progression: Let preparation involve a brilliant gamble or betrayal that permanently changes the plan."),
+            .init(role: "first_complication", label: "First Complication", description: "Introduce a change that invalidates part of the plan before or during execution. Creative progression: Destroy one planned advantage through a surprising character action; do not merely list new security obstacles."),
+            .init(role: "execution_begins", label: "Execution Begins", description: "Cross the point of no return and put the plan into motion. Creative progression: Cross the point of no return with a daring, irreversible move that triggers unforeseen opposition."),
+            .init(role: "plan_breaks", label: "The Plan Breaks", description: "Destroy the expected path to success and force live improvisation. Creative progression: Collapse the original method in a spectacular, personally consequential way."),
+            .init(role: "betrayal_or_twist", label: "Betrayal / Twist", description: "Reveal hidden motives, double-crosses, or a truth about the target that changes the job. Creative progression: Let a double-cross or new truth change who wants the prize and why."),
+            .init(role: "improvisation", label: "Improvisation", description: "Use the crew's earned skills and relationships to create a new route through the failure. Creative progression: Create an inventive route from established skills and enemies' desires, not a second version of the old plan."),
+            .init(role: "escape_or_capture", label: "Escape / Capture", description: "Pay off the heist through a daring, earned final gambit that transforms who gets the prize and whom the crew can trust. Creative progression: Reserve a breathtaking, hard-earned decisive gambit whose result changes possession and loyalty once."),
+            .init(role: "division_and_aftermath", label: "Division and Aftermath", description: "Settle the prize, loyalties, consequences, and what remains of the crew. Creative progression: Pay off personal consequences through a fresh scene that remakes the crew, rather than an inventory of shares.")
         ]
     )
 
@@ -492,16 +492,16 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Redemption / Rebirth",
         description: "A dangerous, hard-fought rebirth where a compromised person faces temptation, catastrophic relapse, and the ultimate cost of acting against their old self. Redemption must be proven through stunning action, not declarations. Wild dust: Let temptation be feral and transformation costly, startling, and spectacular; a neat confession is never the whole change.",
         beats: [
-            .init(role: "broken_state", label: "Broken State", description: "Establish the protagonist's damaged pattern, moral failure, or self-defeating way of living."),
-            .init(role: "chance_to_change", label: "Chance to Change", description: "Introduce the person, event, responsibility, or consequence that makes another path possible."),
-            .init(role: "refusal_or_old_pattern", label: "Refusal / Old Pattern", description: "Show the protagonist retreating into the familiar behavior that created the problem."),
-            .init(role: "first_good_choice", label: "First Good Choice", description: "Make a meaningful but incomplete choice toward change."),
-            .init(role: "progress", label: "Progress", description: "Build evidence of change through repeated costly choices rather than declarations."),
-            .init(role: "relapse", label: "Relapse", description: "Return the protagonist to the old pattern at serious cost."),
-            .init(role: "truth_faced", label: "Truth Faced", description: "Force full recognition of the harm, lie, or fear beneath the old identity."),
-            .init(role: "sacrifice", label: "Sacrifice", description: "Give up something genuinely valued in order to act according to the new truth."),
-            .init(role: "redemptive_act", label: "Redemptive Act", description: "Demand an extraordinary, costly deed that proves genuine change under maximum temptation; confession alone is insufficient."),
-            .init(role: "changed_life", label: "Changed Life", description: "Resolve with the consequences of the redemptive choice and a demonstrably different way of living.")
+            .init(role: "broken_state", label: "Broken State", description: "Establish the protagonist's damaged pattern, moral failure, or self-defeating way of living. Creative progression: Open on a vivid, damaging choice whose cost makes the character's old pattern unmistakable."),
+            .init(role: "chance_to_change", label: "Chance to Change", description: "Introduce the person, event, responsibility, or consequence that makes another path possible. Creative progression: Let a strange person or event offer a seductive alternative that changes what is at stake."),
+            .init(role: "refusal_or_old_pattern", label: "Refusal / Old Pattern", description: "Show the protagonist retreating into the familiar behavior that created the problem. Creative progression: Make refusal cause a distinct, irreversible new injury, not another demonstration of the same flaw."),
+            .init(role: "first_good_choice", label: "First Good Choice", description: "Make a meaningful but incomplete choice toward change. Creative progression: Show a tentative change through an expensive, surprising action that complicates relationships."),
+            .init(role: "progress", label: "Progress", description: "Build evidence of change through repeated costly choices rather than declarations. Creative progression: Build progress across radically different temptations and choices, not a repetitive series of apologies."),
+            .init(role: "relapse", label: "Relapse", description: "Return the protagonist to the old pattern at serious cost. Creative progression: Make relapse transform the problem and harm someone new in a way the character cannot erase."),
+            .init(role: "truth_faced", label: "Truth Faced", description: "Force full recognition of the harm, lie, or fear beneath the old identity. Creative progression: Force recognition through a new person's consequential action, not a repeat of the earlier confession."),
+            .init(role: "sacrifice", label: "Sacrifice", description: "Give up something genuinely valued in order to act according to the new truth. Creative progression: Give up a singular source of pleasure, power, or attachment through an irreversible gamble."),
+            .init(role: "redemptive_act", label: "Redemptive Act", description: "Demand an extraordinary, costly deed that proves genuine change under maximum temptation; confession alone is insufficient. Creative progression: Reserve the extraordinary defining deed that proves or destroys change under maximum temptation."),
+            .init(role: "changed_life", label: "Changed Life", description: "Resolve with the consequences of the redemptive choice and a demonstrably different way of living. Creative progression: Show a life demonstrably transformed through new action, without a sentimental second climax.")
         ]
     )
 
@@ -510,16 +510,16 @@ struct StoryArcTemplate: Identifiable, Hashable {
         name: "Family Saga / Generational",
         description: "An unruly generational epic of consuming love, inherited shame, fierce ambition, rivalries, secrets, and choices that echo catastrophically through time. Legacy may be triumph, curse, or a startling mixture. Wild dust: Encourage extravagant passions, absurd feuds, inherited appetites, betrayals across eras, and revelations that recast the family myth.",
         beats: [
-            .init(role: "founding_choice", label: "Founding Choice", description: "Establish the consequential decision, relationship, wound, or ambition that shapes the family system."),
-            .init(role: "first_inheritance", label: "First Inheritance", description: "Show how the founding generation's choices become conditions imposed on the next."),
-            .init(role: "family_expands", label: "Family Expands", description: "Develop alliances, marriages, rivalries, resources, and competing visions across the family."),
-            .init(role: "buried_conflict", label: "Inherited Pressure", description: "Deepen a resentment, inherited pressure, unresolved wrong, or recurring choice carried across time; a buried secret is optional."),
-            .init(role: "generational_turn", label: "Generational Turn", description: "Shift power or perspective to a new generation that interprets the inheritance differently."),
-            .init(role: "fracture", label: "Fracture", description: "Break the family system through a death, betrayal, succession fight, revelation, or separation."),
-            .init(role: "inherited_truth_revealed", label: "Inheritance Reframed", description: "Reveal or reinterpret the inherited pattern through decisions, memory, or discovery; no hidden document is required."),
-            .init(role: "reckoning_across_generations", label: "Reckoning Across Generations", description: "Force living generations to confront the inherited pattern and one another."),
-            .init(role: "reconciliation_or_repeat", label: "Reconciliation / Repeat", description: "Show whether the family transforms the pattern or consciously repeats it."),
-            .init(role: "legacy", label: "Legacy", description: "Show an unforgettable inheritance or rupture that transforms how the reader understands every generation's choices.")
+            .init(role: "founding_choice", label: "Founding Choice", description: "Establish the consequential decision, relationship, wound, or ambition that shapes the family system. Creative progression: Begin with an extravagant ambition, love, or betrayal whose effect can be inherited."),
+            .init(role: "first_inheritance", label: "First Inheritance", description: "Show how the founding generation's choices become conditions imposed on the next. Creative progression: Make one generation's compromise become a sharply different dilemma for another through real events."),
+            .init(role: "family_expands", label: "Family Expands", description: "Develop alliances, marriages, rivalries, resources, and competing visions across the family. Creative progression: Build new alliances, appetites, and feuds whose independent choices disrupt the family story."),
+            .init(role: "buried_conflict", label: "Inherited Pressure", description: "Deepen a resentment, inherited pressure, unresolved wrong, or recurring choice carried across time; a buried secret is optional. Creative progression: Have an inherited pressure cause a surprising action, not just another retelling of the same secret."),
+            .init(role: "generational_turn", label: "Generational Turn", description: "Shift power or perspective to a new generation that interprets the inheritance differently. Creative progression: Let a new generation commit a shocking reversal that redefines what inheritance means."),
+            .init(role: "fracture", label: "Fracture", description: "Break the family system through a death, betrayal, succession fight, revelation, or separation. Creative progression: Shatter a previously important bond through a scandalous, irreversible rupture."),
+            .init(role: "inherited_truth_revealed", label: "Inheritance Reframed", description: "Reveal or reinterpret the inherited pattern through decisions, memory, or discovery; no hidden document is required. Creative progression: Reveal or reinterpret the legacy through a consequential choice, not a repeated document discovery."),
+            .init(role: "reckoning_across_generations", label: "Reckoning Across Generations", description: "Force living generations to confront the inherited pattern and one another. Creative progression: Make living generations take different, incompatible actions that transform their shared conflict."),
+            .init(role: "reconciliation_or_repeat", label: "Reconciliation / Repeat", description: "Show whether the family transforms the pattern or consciously repeats it. Creative progression: Force one distinct act of reunion, estrangement, or repetition whose outcome changes the family structure."),
+            .init(role: "legacy", label: "Legacy", description: "Show an unforgettable inheritance or rupture that transforms how the reader understands every generation's choices. Creative progression: Leave an unforgettable inheritance or catastrophe lived in a new generation's choices, not a recap.")
         ]
     )
 
