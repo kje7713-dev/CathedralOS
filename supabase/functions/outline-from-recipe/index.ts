@@ -639,7 +639,7 @@ export function validateNovelLeafContainers(
 
 /** Interleave a beat's planned containers rather than grouping similar
  * sizes together. Counts and slot names remain deterministic on replay. */
-export function plannedNovelContainerSlots(counts: NovelContainerCounts): Array<typeof NOVEL_LEAF_CONTAINERS[number]> {
+export function plannedNovelContainerSlots(counts: NovelContainerCounts, reserveClimaxSetPiece = false): Array<typeof NOVEL_LEAF_CONTAINERS[number]> {
   const total = NOVEL_LEAF_CONTAINERS.reduce((sum, type) => sum + counts[type], 0);
   const used = Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((type) => [type, 0])) as NovelContainerCounts;
   const slots: Array<typeof NOVEL_LEAF_CONTAINERS[number]> = [];
@@ -650,6 +650,12 @@ export function plannedNovelContainerSlots(counts: NovelContainerCounts): Array<
         (i + 1) * counts[best] / total - used[best] ? type : best);
     slots.push(chosen);
     used[chosen]++;
+  }
+  // The structural climax must occupy its reserved final slot. Interleaving
+  // container sizes must never move the planned climactic set piece earlier.
+  if (reserveClimaxSetPiece && counts.setPiece > 0 && slots.at(-1) !== "setPiece") {
+    const setPieceIndex = slots.lastIndexOf("setPiece");
+    [slots[setPieceIndex], slots[slots.length - 1]] = [slots[slots.length - 1], slots[setPieceIndex]];
   }
   return slots;
 }
@@ -851,7 +857,8 @@ export function flattenSuggestionResponse(
       : null;
     if (!sections) throw new Error(`response missing beat ${beat.id}`);
     const plannedContainers = allocation?.get(beat.id)?.containerCounts
-      ? plannedNovelContainerSlots(allocation.get(beat.id)!.containerCounts!)
+      ? plannedNovelContainerSlots(allocation.get(beat.id)!.containerCounts!,
+        requiredFunctionOrderByBeat?.get(beat.id)?.includes("climax") ?? false)
       : null;
     if (plannedContainers && sections.length !== plannedContainers.length) {
       throw new Error(`beat ${beat.id} returned ${sections.length} sections but allocation requires ${plannedContainers.length}`);
@@ -3232,6 +3239,7 @@ export function buildPrompt(
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
   // A recipe-grounded causal architecture now precedes allocation; its selected
   // beat rationales are intentionally passed to the global outline generator.
+  const reservedFunctions = outstandingRequiredFunctionsByBeat(req.arcTemplate.beats, req.arcTemplate.name, req.existingSections ?? []);
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
       const beat = req.arcTemplate.beats.find((b) => b.id === beatId);
@@ -3239,7 +3247,7 @@ export function buildPrompt(
         ? `complete first-pass allocation: ${info.minSections} section${info.minSections === 1 ? "" : "s"}`
         : `minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"}`;
       const typePlan = isNovel && info.containerCounts
-        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; beat word budget: ${plannedNovelContainerSlots(info.containerCounts).reduce((sum, type) => sum + NOVEL_CONTAINER_WORD_TARGETS[type], 0).toLocaleString()} words; ordered slots: ${plannedNovelContainerSlots(info.containerCounts).map((type, index) => `${plannedNovelSlotKey(index)}=${type} (~${NOVEL_CONTAINER_WORD_TARGETS[type].toLocaleString()} words)`).join(", ")}`
+        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; beat word budget: ${plannedNovelContainerSlots(info.containerCounts).reduce((sum, type) => sum + NOVEL_CONTAINER_WORD_TARGETS[type], 0).toLocaleString()} words; ordered slots: ${plannedNovelContainerSlots(info.containerCounts, reservedFunctions.get(beatId)?.includes("climax") ?? false).map((type, index) => `${plannedNovelSlotKey(index)}=${type} (~${NOVEL_CONTAINER_WORD_TARGETS[type].toLocaleString()} words)`).join(", ")}`
         : "";
       const narrativeCommitment = storyArchitecture && info.rationale
         ? `; planned dramatic movement: ${compactArcNarrativeText(info.rationale)}`
@@ -3248,7 +3256,7 @@ export function buildPrompt(
     })
     .join("\n");
   const allocationDirective = isNovel
-    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections, except when a beat has outstanding required dramatic functions. For those beats return an object with "sections" (the ordinary sections in order) and "required" (one named section per required dramatic function, such as "climax" or "resolution"). Those required sections occupy the final ordered slots, in the order the functions are listed below. ONLY the reserved section may perform its one-time required dramatic event. This reserves the EVENT AND OUTCOME, not merely the dramaticFunction label: an ordinary section must not confess, reveal, defeat, choose, or resolve the exact decisive event that the reserved section is assigned to perform. Even an earlier setPiece or transformation in that SAME beat may only create distinct prerequisites, crises, reversals, costs, or consequences. If two slots would do the same dramatic work, redesign the NON-OWNING slot to create genuinely new story, regardless of which slot comes first. No duplicate events or outcomes anywhere in the returned outline, including paraphrases with different titles or labels. Write each section for its exact ordered container slot above. Omit "container" from every planned novel section: the server assigns it from the slot. Give each section enough distinct dramatic development to justify its planned scale; never pass off a brief event as a chapter. The allocator already assigned an explicit WORD budget to every section. Each budget is the intended size of the eventual written section, not the length of this outline JSON. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
+    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Do not manufacture extra sections solely to hit a numeric target: each allocated section must correspond to a different planned dramatic contribution with its own cause, effect, and inherited state. If a beat's rationale describes fewer events than its slots, develop distinct story BEFORE generating the outline, not an encore of a completed event. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections, except when a beat has outstanding required dramatic functions. For those beats return an object with "sections" (the ordinary sections in order) and "required" (one named section per required dramatic function, such as "climax" or "resolution"). Those required sections occupy the final ordered slots, in the order the functions are listed below. ONLY the reserved section may perform its one-time required dramatic event. This reserves the EVENT AND OUTCOME, not merely the dramaticFunction label: an ordinary section must not confess, reveal, defeat, choose, or resolve the exact decisive event that the reserved section is assigned to perform. Even an earlier setPiece or transformation in that SAME beat may only create distinct prerequisites, crises, reversals, costs, or consequences. If two slots would do the same dramatic work, redesign the NON-OWNING slot to create genuinely new story, regardless of which slot comes first. No duplicate events or outcomes anywhere in the returned outline, including paraphrases with different titles or labels. Write each section for its exact ordered container slot above. Omit "container" from every planned novel section: the server assigns it from the slot. Give each section enough distinct dramatic development to justify its planned scale; never pass off a brief event as a chapter. The allocator already assigned an explicit WORD budget to every section. Each budget is the intended size of the eventual written section, not the length of this outline JSON. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
     : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
@@ -3631,35 +3639,12 @@ export function fitAllocationToNovelBudget(
     selected.plan.minSections--;
   }
 
-  // The provider chooses the actual story structure. Respect any plan already
-  // within 115k–125k finished-prose words; 121k is a creative AIM, not permission
-  // to invent an extra chapter. Only bring objectively short plans to the floor.
-  const desiredTotalWords = Math.min(NOVEL_PREFERRED_MIN_WORDS, NOVEL_MAX_WORDS);
-  const startingCounts = new Map(Array.from(normalized.entries()).map(([id, plan]) => [id, plan.minSections]));
-  const addedCounts = new Map<string, number>();
-  while ((req.existingSections?.length ?? 0) === 0 &&
-    existingWords + plannedWords() < desiredTotalWords && sectionCount() < MAX_PLANNED_SECTIONS &&
-    (missingMixBeatIDs.length === 0 || existingWords + plannedWords() < NOVEL_PREFERRED_MIN_WORDS)) {
-    const availableWords = nominalRemainingWords - plannedWords();
-    const container = (["chapter", "sceneSequence", "setPiece", "developedScene", "scene"] as const)
-      .find((type) => NOVEL_CONTAINER_WORD_TARGETS[type] <= availableWords);
-    if (!container) break;
-    const eligible = Array.from(normalized.entries())
-      .filter(([, plan]) => plan.minSections > 0 && plan.minSections < 20)
-      .sort(([a, ap], [b, bp]) => {
-        const aBase = Math.max(1, startingCounts.get(a) ?? 1);
-        const bBase = Math.max(1, startingCounts.get(b) ?? 1);
-        // Allocate additional dramatic space proportionally to already
-        // developed beats rather than creating a generic post-climax tail.
-        return ((addedCounts.get(a) ?? 0) + 1) / aBase -
-          ((addedCounts.get(b) ?? 0) + 1) / bBase || bp.minSections - ap.minSections;
-      });
-    if (!eligible.length) break;
-    const [beatID, plan] = eligible[0];
-    plan.containerCounts![container]++;
-    plan.minSections++;
-    addedCounts.set(beatID, (addedCounts.get(beatID) ?? 0) + 1);
-  }
+  // Preserve model-authored section count, dramatic assignments, and section
+  // types. A word-count shortfall is internal QA, not license to synthesize
+  // another empty narrative slot. The planning model must provide enough
+  // distinct dramatic substance in its FIRST allocation response; downstream
+  // fitting may recover legacy malformed container mixes but never pad a valid
+  // first-pass outline with additional sections.
 
   // The returned plan remains recoverable even for impossible one-beat/fully
   // accepted corner cases; never introduce a new terminal failure condition.
