@@ -40,6 +40,7 @@ import {
   renderRequiredRecipeCoverage,
   renderStoryNonNegotiableMustDos,
 } from "./_recipe_obligations.ts";
+import { canonicalizeLegacyArcTemplate, type TemplateBeatDefault } from "../sync-story-arc/_template_defaults.ts";
 import {
   notifyProviderBillingUnavailable,
   type ProviderBillingUnavailableContext,
@@ -7540,6 +7541,24 @@ Deno.serve(async (req: Request) => {
   // outline-from-recipe request with a brand-new idempotency key.
   body = canonicalBody;
   identity = identityResolution.canonicalIdentity;
+  // Rebase exact, unchanged default text from older iOS builds for NEW
+  // runs only, before billing. Preserve project edits, deleted beats, and
+  // original idempotency identity for matching reconnects to earlier runs.
+  if (/^a0000001-0000-0000-0000-0000000000[0-9]{2}$/i.test(body.arcTemplate.id)) {
+    const { data: catalogTemplate, error: catalogError } = await db
+      .from("story_arc_templates")
+      .select("name, description, beats")
+      .eq("id", body.arcTemplate.id)
+      .maybeSingle();
+    if (catalogError) {
+      console.error("[outline-from-recipe] catalog lookup failed", catalogError.message);
+    } else if (catalogTemplate && Array.isArray(catalogTemplate.beats)) {
+      body = { ...body, arcTemplate: canonicalizeLegacyArcTemplate(
+        body.arcTemplate,
+        { ...catalogTemplate, beats: catalogTemplate.beats as TemplateBeatDefault[] },
+      ) };
+    }
+  }
   const selectedModel = await new SupabaseGenerationModelStore(db).getEnabledModelById(body.modelID!);
   if (!selectedModel) {
     return errorResponse("model_unavailable", `Selected outline model is unavailable: ${body.modelID}`, 422);
