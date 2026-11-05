@@ -546,4 +546,14 @@ struct StoryArcBeatTemplate: Identifiable, Hashable {
     let label: String
     let description: String
     var id: String { role }
+
+    /// Upgrade only the exact prior built-in default. Treat renamed beats and
+    /// all other details as intentional author changes, even if they are short.
+    /// Never create missing beats or change a project's selected template.
+    func upgradedDetailsIfUnmodified(_ current: String, label currentLabel: String) -> String? {
+        guard currentLabel == label,
+              let marker = description.range(of: " Creative progression: ") else { return nil }
+        let earlierDefault = String(description[..<marker.lowerBound])
+        return current == earlierDefault ? description : nil
+    }
 }
