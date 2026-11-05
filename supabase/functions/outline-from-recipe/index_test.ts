@@ -1537,11 +1537,8 @@ Deno.test("malformed mixes recover first-pass novel length without changing vali
   }
 });
 
-Deno.test("November 4 typed 28-section allocation is reconciled in WORDS before the paid first pass", () => {
-  // Actual production mix: 14 chapters, eight sequences, three set pieces,
-  // three developed scenes. This previously bypassed the <=3-chapter repair
-  // and forced expansion from ~103k words.
-  const beats = Array.from({ length: 10 }, (_, i) => ({ id: `arc-${i}` }));
+Deno.test("short first-pass allocations preserve model-authored dramatic section count", () => {
+  const beats = Array.from({length:10},(_,i)=>({id:`beat-${i}`}));
   const mix = [
     {chapter:2,sceneSequence:0,setPiece:0,developedScene:0,scene:0},
     {chapter:1,sceneSequence:1,setPiece:0,developedScene:0,scene:0},
@@ -1554,34 +1551,19 @@ Deno.test("November 4 typed 28-section allocation is reconciled in WORDS before 
     {chapter:1,sceneSequence:1,setPiece:0,developedScene:0,scene:0},
     {chapter:1,sceneSequence:1,setPiece:0,developedScene:0,scene:0},
   ];
-  const allocation = new Map(beats.map((beat,i) => [beat.id,{
+  const plan = new Map(beats.map((beat,i)=>[beat.id,{
     minSections:Object.values(mix[i]).reduce((a,b)=>a+b,0),
-    containerCounts:{...mix[i]},rationale:`Distinct dramatic shift for ${beat.id}`,
+    containerCounts:{...mix[i]},rationale:`Unique action in ${beat.id}`,
   }]));
-  const original = Array.from(allocation.values()).flatMap((plan) =>
-    Object.entries(plan.containerCounts).flatMap(([container,count]) =>
-      Array.from({length:count},()=>({container}))));
-  assertEquals(original.length,28);
-  assertEquals(projectedExpectedWords(original),102950);
-  const req = {...sparseRequest,requestedFormat:"novel",
-    arcTemplate:{...sparseRequest.arcTemplate,beats},existingSections:[]} as any;
-  const fitted = fitAllocationToNovelBudget(allocation as any,req);
-  const full = Array.from(fitted.values()).flatMap((plan) =>
-    Object.entries(plan.containerCounts!).flatMap(([container,count]) =>
-      Array.from({length:count},()=>({container}))));
-  assertEquals(full.length,31,"three additional chapters close the true 115k minimum gap");
-  assertEquals(projectedExpectedWords(full),115550);
-  assertEquals(evaluateNovelScale(full).meetsMinimum,true);
-  assertEquals(evaluateNovelScale(full).exceedsMaximum,false);
-  assertEquals(evaluateNovelScale(full.filter((s)=>s.container!=="chapter")
-    .concat(full.filter((s)=>s.container==="chapter").slice(2))).meetsMinimum,false,
-    "post-dedup shortfalls are accepted without later expansion; do not add padding upfront");
-  assertEquals(Array.from(allocation.values()).reduce((n,p)=>n+p.minSections,0),28,
-    "the original model allocation remains unchanged");
-  const prompt = buildPrompt(req,fitted as any).system;
-  assertEquals(prompt.includes("beat word budget"),true);
-  assertEquals(prompt.includes("words)"),true);
-  assertEquals(NOVEL_FIRST_PASS_WORD_GOAL,121000);
+  const req={...sparseRequest,requestedFormat:"novel",arcTemplate:{...sparseRequest.arcTemplate,beats},existingSections:[]} as any;
+  const output=fitAllocationToNovelBudget(plan as any,req);
+  assertEquals(Array.from(plan.values()).reduce((n,p)=>n+p.minSections,0),28);
+  assertEquals(Array.from(output.values()).reduce((n,p)=>n+p.minSections,0),28);
+  for(const [id,value] of plan){
+    assertEquals(output.get(id)?.containerCounts,value.containerCounts);
+    assertEquals(output.get(id)?.rationale,value.rationale);
+  }
+  assertEquals(buildPrompt(req,output as any).system.includes("Do not manufacture extra sections solely to hit a numeric target"),true);
 });
 
 Deno.test("valid 118,100-word 29-section model allocation passes through unchanged", () => {
