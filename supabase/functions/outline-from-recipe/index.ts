@@ -3571,7 +3571,7 @@ const NOVEL_ARCHITECTURE_PLAN_SCHEMA = {
     storyArchitecture: STORY_ARCHITECTURE_SCHEMA,
     sections: {
       type: "array",
-      minItems: 1,
+      minItems: 0,
       maxItems: MAX_PLANNED_SECTIONS,
       items: {
         type: "object",
@@ -4061,6 +4061,11 @@ export function parseNovelArchitecturePlan(
       containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 },
       plannedSections: [], rationale: "" }]));
   const covered = new Set<number>();
+  // Accepted sections are already authored work and satisfy their own beats;
+  // a continuation must never invent replacements merely to cover them again.
+  const existingCovered = new Set((req.existingSections ?? [])
+    .map((section) => beats.findIndex((beat) => beat.id === section.storyArcBeatID))
+    .filter((index) => index >= 0));
   let lastPrimary = -1;
   const usedTitles = new Set<string>();
   for (const [sequence, rawSection] of parsed.sections.entries()) {
@@ -4103,8 +4108,10 @@ export function parseNovelArchitecturePlan(
   // neighboring beats without creating a second section or rewriting history.
   for (const [index, beat] of beats.entries()) {
     const entry = allocations.get(beat.id)!;
-    if (!covered.has(index)) throw new Error(`architecture omitted Story Arc beat ${index}`);
-    if (entry.minSections === 0) entry.coveredBySharedSection = true;
+    if (!covered.has(index) && !existingCovered.has(index)) {
+      throw new Error(`architecture omitted Story Arc beat ${index}`);
+    }
+    if (entry.minSections === 0 && covered.has(index)) entry.coveredBySharedSection = true;
     const required = outstandingRequiredFunctionsByBeat(
       [beat], req.arcTemplate.name, req.existingSections ?? [],
     ).get(beat.id) ?? [];
