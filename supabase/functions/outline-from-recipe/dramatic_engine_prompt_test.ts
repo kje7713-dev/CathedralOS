@@ -75,6 +75,18 @@ Deno.test("shared dramatic-engine prompts apply to every genre without adding st
     assertStringIncludes(allocation, "deepen that chosen story through genuinely different consequential developments", arc.name);
     assertStringIncludes(enrichment, "No element gains narrative authority merely because an earlier model invented it", arc.name);
     assertStringIncludes(outline, "selected architecture, accepted history, allocated slots", arc.name);
+    // Plot-open and genre-specific recipes share the same creative range rules.
+    assertStringIncludes(enrichment, "Independent dramatic agency and surprising possibilities", arc.name);
+    assertStringIncludes(enrichment, "independent appetites, contradictions, loyalties, blind spots", arc.name);
+    assertStringIncludes(enrichment, "provisional possibilities", arc.name);
+    assertStringIncludes(allocation, "Book-scale transformations before section allocation", arc.name);
+    assertStringIncludes(allocation, "next dramatic problem is meaningfully different from the last", arc.name);
+    assertStringIncludes(allocation, "Map these transformations into the EXISTING ordered arc beats", arc.name);
+    assertStringIncludes(allocation, "Do not create mandatory twist counts, schema fields, model calls, validation gates, or repair stages", arc.name);
+    assertStringIncludes(outline, "Fresh dramatic work across the complete outline", arc.name);
+    assertStringIncludes(outline, "Recurring emotional themes are welcome", arc.name);
+    assertStringIncludes(outline, "climax must deliver an exceptional, emotionally powerful and causally earned change", arc.name);
+    assertStringIncludes(outline, "not a request for extra sections, another pass, or new rules", arc.name);
   }
 });
 
