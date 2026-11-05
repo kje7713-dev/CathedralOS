@@ -98,6 +98,11 @@ struct StoryArcRegionView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, CathedralTheme.Spacing.base)
         .task {
+            refreshUnmodifiedBeatDefaults()
+            syncBeatsOrder()
+        }
+        .onChange(of: currentArc?.templateID) { _, _ in
+            refreshUnmodifiedBeatDefaults()
             syncBeatsOrder()
         }
         .onChange(of: beatsKey) { _, _ in
@@ -159,6 +164,24 @@ struct StoryArcRegionView: View {
     /// beats are added or removed (not on every label/details edit).
     private var beatsKey: [UUID] {
         (currentArc?.beats ?? []).map { $0.id }
+    }
+
+    /// Show the currently bundled template requirements in already-saved
+    /// projects without overwriting anything the author actually edited.
+    /// The migration is idempotent and does not add back deleted beats.
+    private func refreshUnmodifiedBeatDefaults() {
+        guard let arc = currentArc else { return }
+        do {
+            let changed = try StoryArcSyncService.refreshUnmodifiedTemplateBeats(
+                arc: arc, modelContext: modelContext
+            )
+            if changed {
+                syncState.syncImmediately(arc, modelContext: modelContext)
+                Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+            }
+        } catch {
+            print("[StoryArcRegionView] default beat refresh failed: \(error)")
+        }
     }
 
     private func syncBeatsOrder() {
