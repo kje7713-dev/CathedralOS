@@ -106,6 +106,40 @@ static func fetchAuthoritativeBeats(
     return (try? modelContext.fetch(descriptor)) ?? []
 }
 
+    /// Bring previously materialized default beats up to the current bundled
+    /// template before displaying, syncing, or generating from SwiftData.
+    /// Root-fetch prevents accidentally restoring user-deleted beat objects.
+    /// Exact legacy-text matching preserves custom descriptions and labels.
+    @discardableResult
+    static func refreshUnmodifiedTemplateBeats(
+        arc: StoryArc,
+        modelContext: ModelContext
+    ) throws -> Bool {
+        guard let templateID = arc.templateID,
+              let template = StoryArcTemplate.allTemplates.first(where: { $0.id == templateID })
+        else { return false }
+
+        let arcID = arc.id
+        let beats = try modelContext.fetch(FetchDescriptor<StoryArcBeat>(
+            predicate: #Predicate<StoryArcBeat> { beat in beat.storyArc?.id == arcID },
+            sortBy: [SortDescriptor(\.position)]
+        ))
+        var changed = false
+        for beat in beats {
+            guard let standard = template.beats.first(where: { $0.role == beat.role }),
+                  let updated = standard.upgradedDetailsIfUnmodified(
+                    beat.details, label: beat.label
+                  ) else { continue }
+            beat.details = updated
+            changed = true
+        }
+        if changed {
+            arc.lastSyncedAt = nil
+            try modelContext.save()
+        }
+        return changed
+    }
+
     func syncArc(
         arc: StoryArc,
         modelContext: ModelContext
@@ -113,6 +147,11 @@ static func fetchAuthoritativeBeats(
         guard let project = arc.project else {
             throw StoryArcSyncError.arcMissingProject
         }
+
+        // The mobile store may have been saved before the creative beat
+        // templates were revised. Persist exact-default upgrades BEFORE
+        // serializing the payload so future edits/syncs cannot undo them.
+        try Self.refreshUnmodifiedTemplateBeats(arc: arc, modelContext: modelContext)
 
         // Fetch beats as root models instead of traversing arc.beats. SwiftData's
         // relationship collection can retain deleted objects after save; using it

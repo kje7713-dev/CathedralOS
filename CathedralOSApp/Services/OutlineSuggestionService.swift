@@ -441,7 +441,8 @@ struct OutlineSuggestionService {
                     id: beat.id.uuidString,
                     role: beat.role,
                     label: beat.label,
-                    description: beat.details
+                    description: template.beats.first(where: { $0.role == beat.role })?
+                        .upgradedDetailsIfUnmodified(beat.details, label: beat.label) ?? beat.details
                 )
             }
 

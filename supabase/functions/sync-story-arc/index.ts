@@ -32,6 +32,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { canonicalUUID, uuidSetsEqual } from "../_shared/uuid.ts";
+import { canonicalizeUnmodifiedBeatDetails, type TemplateBeatDefault } from "./_template_defaults.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -231,6 +232,25 @@ Deno.serve(async (req: Request) => {
     `[sync-story-arc] beats incoming=${beats.length} existing=${existingIds.size} toDelete=${toDelete.length}`,
   );
 
+  // Older installed clients may still carry the PRE-upgrade built-in beat
+  // descriptions. Preserve the new canonical creative progression on sync
+  // only when the incoming description and label EXACTLY match that prior
+  // default. Never alter explicitly customized beats or resurrect deletions.
+  let templateBeats: TemplateBeatDefault[] = [];
+  if (body.template_id && beats.length > 0) {
+    const { data: template, error: templateErr } = await adminClient
+      .from("story_arc_templates")
+      .select("beats")
+      .eq("id", body.template_id)
+      .maybeSingle();
+    if (templateErr) {
+      // Don't introduce a new failure path for otherwise valid beat syncs.
+      console.error("[sync-story-arc] default lookup failed:", templateErr.message);
+    } else if (Array.isArray(template?.beats)) {
+      templateBeats = template.beats as TemplateBeatDefault[];
+    }
+  }
+
   // --- Step 3: UPSERT beats. ---
   let beatsUpserted = 0;
   if (beats.length > 0) {
@@ -240,7 +260,7 @@ Deno.serve(async (req: Request) => {
       position: b.position,
       role: b.role ?? "",
       label: b.label ?? "",
-      details: b.details ?? "",
+      details: canonicalizeUnmodifiedBeatDetails(b, templateBeats),
     }));
     const { error: beatsErr } = await adminClient.from("story_arc_beats")
       .upsert(rows, { onConflict: "id" });
