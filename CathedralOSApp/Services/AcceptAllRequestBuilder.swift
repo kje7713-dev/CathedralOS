@@ -45,6 +45,10 @@ struct AcceptAllRequestBuilder {
                 "resultingChange:\(s.resultingChange ?? "")",
                 "terminalState:\(s.terminalState ?? "")",
                 "storyArcBeatID:\(s.storyArcBeatID)",
+                "targetWords:\(s.targetWords.map(String.init) ?? "")",
+                "targetWordsMin:\(s.targetWordsMin.map(String.init) ?? "")",
+                "targetWordsMax:\(s.targetWordsMax.map(String.init) ?? "")",
+                "coveredStoryArcBeatIDs:\((s.coveredStoryArcBeatIDs ?? []).joined(separator: ","))",
                 "recipeRequirementIDs:\(((s.recipeRequirementIDs ?? []).sorted().joined(separator: ",")))",
             ].joined(separator: "|")
         }.joined(separator: "\n")
