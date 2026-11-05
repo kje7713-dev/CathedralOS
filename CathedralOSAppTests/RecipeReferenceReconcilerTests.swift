@@ -457,4 +457,46 @@ private func makeInMemoryContext() throws -> ModelContext {
     let config = ModelConfiguration(isStoredInMemoryOnly: true)
     let container = try ModelContainer(for: schema, configurations: [config])
     return ModelContext(container)
+    // MARK: - Default Story Arc beat migration
+
+    func testSavedDefaultBeatsUpgradeButCustomizationsAndDeletionsSurvive() throws {
+        let template = try XCTUnwrap(StoryArcTemplate.allTemplates.first {
+            $0.name == "Historical War / Survival"
+        })
+        let firstLoss = try XCTUnwrap(template.beats.first { $0.role == "first_loss" })
+        let nextBeat = try XCTUnwrap(template.beats.first { $0.role == "deepening_conflict" })
+        let earlier = String(firstLoss.description.split(separator: " Creative progression: ")[0])
+        let arc = StoryArc()
+        arc.templateID = template.id
+        arc.project = project
+        context.insert(arc)
+
+        let oldDefault = StoryArcBeat(position: 3, role: firstLoss.role,
+                                      label: firstLoss.label, details: earlier)
+        oldDefault.storyArc = arc
+        context.insert(oldDefault)
+        let authorModified = StoryArcBeat(position: 4, role: nextBeat.role,
+                                          label: nextBeat.label,
+                                          details: "My different and intentional next conflict")
+        authorModified.storyArc = arc
+        context.insert(authorModified)
+        let customBeat = StoryArcBeat(position: 5, role: "",
+                                       label: "My added beat", details: "Do not touch")
+        customBeat.storyArc = arc
+        context.insert(customBeat)
+        try context.save()
+
+        XCTAssertTrue(try StoryArcSyncService.refreshUnmodifiedTemplateBeats(
+            arc: arc, modelContext: context))
+        XCTAssertEqual(oldDefault.details, firstLoss.description)
+        XCTAssertEqual(authorModified.details, "My different and intentional next conflict")
+        XCTAssertEqual(customBeat.details, "Do not touch")
+        XCTAssertFalse(try StoryArcSyncService.refreshUnmodifiedTemplateBeats(
+            arc: arc, modelContext: context), "migration must be idempotent")
+        let beatRows = try context.fetch(FetchDescriptor<StoryArcBeat>())
+            .filter { $0.storyArc?.id == arc.id }
+        XCTAssertEqual(beatRows.count, 3, "do not materialize deleted template beats")
+        XCTAssertEqual(beatRows.map(\.id).count, Set(beatRows.map(\.id)).count)
+    }
+
 }
