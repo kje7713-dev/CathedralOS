@@ -106,9 +106,9 @@ struct AcceptAllRequestBuilder {
                 dramaticEvent: suggestion.dramaticEvent,
                 resultingChange: suggestion.resultingChange,
                 terminalState: suggestion.terminalState,
-                targetWords: nil,
-                targetWordsMin: nil,
-                targetWordsMax: nil,
+                targetWords: suggestion.targetWords,
+                targetWordsMin: suggestion.targetWordsMin,
+                targetWordsMax: suggestion.targetWordsMax,
                 storyArcBeatID: suggestion.storyArcBeatID,
                 recipeRequirementIDs: suggestion.recipeRequirementIDs
             )
