@@ -792,7 +792,7 @@ Deno.test("genre-bearing Story Arcs explicitly govern the reader experience and 
     ["Coming-of-Age / Bildungsroman", "PRIMARY reading experience is identity formation", "climax MUST be the character's consequential Adult Choice"],
     ["Romantasy", "both emotionally central romance", "climax must settle the book's defining romantic choice"],
     ["Romantic Suspense", "genuine danger and mounting suspense", "climax must resolve the central danger"],
-    ["Dark Romance", "psychologically charged desire", "climax must force a consequential reckoning"],
+    ["Dark Romance", "obsessive, emotionally dangerous attraction", "climax must force a breathtaking, earned choice"],
     ["Sports Romance", "Athletic ambition", "climax must make the defining sporting stakes"],
     ["Revenge", "obsession, retaliation", "climax must settle the defining revenge question"],
     ["Heist / Caper", "risky teamwork, misdirection", "climax must resolve the heist"],
