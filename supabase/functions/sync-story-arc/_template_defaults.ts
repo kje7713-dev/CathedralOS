@@ -34,3 +34,30 @@ export function canonicalizeUnmodifiedBeatDetails(
   const earlierDefault = description.slice(0, marker);
   return current === earlierDefault ? description : current;
 }
+
+export function canonicalizeLegacyArcTemplate<T extends {
+  name: string;
+  description: string;
+  beats: Array<{ role: string; label: string; description: string }>;
+}>(
+  incoming: T,
+  catalog: { name?: string; description?: string; beats?: TemplateBeatDefault[] },
+): T {
+  if (catalog.name !== incoming.name || !Array.isArray(catalog.beats)) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    // For a matching built-in catalog identity the description is fixed
+    // template metadata, not an editable, project-specific Story Arc beat.
+    description: catalog.description ?? incoming.description,
+    beats: incoming.beats.map((beat) => ({
+      ...beat,
+      description: canonicalizeUnmodifiedBeatDetails({
+        role: beat.role,
+        label: beat.label,
+        details: beat.description,
+      }, catalog.beats!),
+    })),
+  };
+}
