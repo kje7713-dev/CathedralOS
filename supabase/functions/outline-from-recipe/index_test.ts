@@ -1596,46 +1596,32 @@ Deno.test("valid 118,100-word 29-section model allocation passes through unchang
   assertEquals(Array.from(fitted.values()).reduce((n, plan) => n + plan.minSections, 0), 29);
 });
 
-Deno.test("valid near-target 26-chapter allocation is reconciled before first-pass generation", () => {
-  const beats = Array.from({ length: 10 }, (_, index) => ({ id: `beat-${index + 1}` }));
-  const allocation = new Map(beats.map((beat, index) => {
-    const chapters = index < 6 ? 3 : 2;
-    return [beat.id, {
-      minSections: chapters, rationale: `Distinct character-caused development in ${beat.id}`,
-      containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: chapters },
-    }] as const;
+Deno.test("never invent chapters for an otherwise valid short outline",()=>{
+  const beats=Array.from({length:10},(_,i)=>({id:`beat-${i}`}));
+  const allocation=new Map(beats.map((b,i)=>{
+    const n=i<6?3:2;
+    return [b.id,{minSections:n,rationale:`Distinct action ${i}`,containerCounts:{
+      scene:0,developedScene:0,setPiece:0,sceneSequence:0,chapter:n,
+    }}] as const;
   }));
-  const req = { ...sparseRequest, requestedFormat: "novel",
-    existingSections: [], arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
-  assertEquals(evaluateNovelScale(Array.from({ length: 26 }, () => ({ container: "chapter" }))).projectedWords, 109200);
-  const fitted = fitAllocationToNovelBudget(allocation as any, req);
-  const all = Array.from(fitted.values()).flatMap((plan) =>
-    Array.from({ length: plan.containerCounts!.chapter }, () => ({ container: "chapter" })));
-  assertEquals(all.length, 28, "stop at the 115k minimum instead of filling toward the 121k aim");
-  assertEquals(evaluateNovelScale(all).meetsMinimum, true);
-  assertEquals(evaluateNovelScale(all).projectedWords <= 125000, true);
-  assertEquals(evaluateNovelScale(all.slice(1)).projectedWords, 113400,
-    "a discarded duplicate may leave a deliverable shortfall without forcing expansion");
-  assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections <= 20), true);
-  assertEquals(Array.from(fitted.values()).every((plan) => plan.containerCounts!.chapter === plan.minSections), true);
-  assertEquals(Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0), 26,
-    "never mutate the original model allocation");
+  const req={...sparseRequest,requestedFormat:"novel",
+    arcTemplate:{...sparseRequest.arcTemplate,beats},existingSections:[]} as any;
+  const fitted=fitAllocationToNovelBudget(allocation as any,req);
+  assertEquals(Array.from(fitted.values()).reduce((n,p)=>n+p.minSections,0),26);
+  assertEquals(evaluateNovelScale(Array.from({length:26},()=>({container:"chapter"}))).projectedWords,109200);
+  const short=new Map([["short",{minSections:1,rationale:"One authored event",
+    containerCounts:{scene:1,developedScene:0,setPiece:0,sceneSequence:0,chapter:0}}]]);
+  const output=fitAllocationToNovelBudget(short as any,req);
+  assertEquals(output.get("short")?.minSections,1);
+  assertEquals(output.get("short")?.containerCounts?.scene,1);
+  const legacy=new Map([["legacy",{minSections:1,rationale:"Legacy event"}]]);
+  assertEquals(fitAllocationToNovelBudget(legacy as any,req).get("legacy")?.minSections,1);
 });
-Deno.test("valid short plans must be grown within the per-beat safety cap, without new errors", () => {
-  const counts = { scene: 1, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 };
-  const valid = new Map([["beat-1", { minSections: 1, containerCounts: counts, rationale: "intentionally short" }]]);
-  const req = { ...sparseRequest, requestedFormat: "novel", existingSections: [] } as any;
-  const unchanged = fitAllocationToNovelBudget(valid, req);
-  assertEquals(unchanged.get("beat-1")?.containerCounts?.scene, 1,
-    "original model-authored scene is not silently converted into a chapter");
-  assertEquals(unchanged.get("beat-1")?.minSections, 20,
-    "even severely short but valid plans are no longer blindly trusted; per-beat cap remains");
 
-  const missing = new Map([["beat-1", { minSections: 1, rationale: "only one slot available" }]]);
-  const recovered = fitAllocationToNovelBudget(missing, req);
-  assertEquals(recovered.get("beat-1")?.minSections, 20);
-  assertEquals(recovered.get("beat-1")?.containerCounts?.chapter, 20);
-  assertEquals(evaluateNovelScale([{ container: "chapter" }]).meetsMinimum, false);
+Deno.test("final required climax reserves the set-piece container",()=>{
+  const counts={scene:0,developedScene:0,sceneSequence:0,setPiece:1,chapter:3};
+  assertEquals(plannedNovelContainerSlots(counts,true),["chapter","chapter","chapter","setPiece"]);
+  assertEquals(plannedNovelContainerSlots(counts,false).filter(c=>c==="setPiece").length,1);
 });
 
 Deno.test("container-aware allocation completes and trims incomplete or oversized mixes", () => {
