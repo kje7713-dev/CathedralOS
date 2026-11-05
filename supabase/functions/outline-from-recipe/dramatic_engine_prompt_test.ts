@@ -150,3 +150,11 @@ Deno.test("fresh built-in Story Arc selections receive 27 distinct creative prom
   assertStringIncludes(promise, "do not turn an extreme relationship into therapy exercises");
   assertStringIncludes(promise, "romantic future may be troubled, ferocious, transgressive, or unconventional");
 });
+
+Deno.test("27 updated wild arc descriptions are mirrored", async () => {
+  const swift = await Deno.readTextFile("./CathedralOSApp/Models/StoryArcTemplate.swift");
+  const sql = await Deno.readTextFile("./supabase/migrations/20261105193000_story_arc_wild_dust_promises.sql");
+  assertEquals(swift.split("Wild dust:").length - 1, 27);
+  assertEquals(sql.split("::uuid").length - 1, 27);
+  assertStringIncludes(sql, "t.description = v.old_description");
+});
