@@ -1621,6 +1621,7 @@ Deno.test("never invent chapters for an otherwise valid short outline",()=>{
 Deno.test("final required climax reserves the set-piece container",()=>{
   const counts={scene:0,developedScene:0,sceneSequence:0,setPiece:1,chapter:3};
   assertEquals(plannedNovelContainerSlots(counts,true),["chapter","chapter","chapter","setPiece"]);
+  assertEquals(plannedNovelContainerSlots(counts,true,1),["chapter","chapter","setPiece","chapter"]);
   assertEquals(plannedNovelContainerSlots(counts,false).filter(c=>c==="setPiece").length,1);
 });
 
