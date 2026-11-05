@@ -4266,6 +4266,7 @@ Output JSON only. No commentary, no prose.`;
 
 /** Non-novel allocations retain their existing three-field strict contract. */
 function allocationSchemaForFormat(req: OutlineFromRecipeRequest) {
+  if (requestedStoryMaterialFormat(req) === "novel") return NOVEL_ARCHITECTURE_PLAN_SCHEMA;
   const allocations = requestedStoryMaterialFormat(req) === "novel"
     ? ALLOCATION_SCHEMA.properties.allocations
     : (() => {
@@ -4311,20 +4312,24 @@ export async function planSectionAllocation(
   let correctionReason = "";
   const call = async (correction: boolean): Promise<string> => {
     const callSystem = correction
-      ? `${system}\n\nThe previous allocation was invalid. The exact validation error was: ${correctionReason || "the response did not satisfy the complete allocation contract"}. Return a complete corrected allocation for every beatIndex from 0 through ${req.arcTemplate.beats.length - 1}; never omit, duplicate, or invent a beat. Re-check the count against the supplied ordered beat list before returning JSON.`
+      ? requestedStoryMaterialFormat(req) === "novel"
+        ? `${system}\n\nThe previous architecture section plan was invalid: ${correctionReason || "invalid response"}. Return a complete, causally ordered list of REAL sections with beat coverage; never fill missing beats with duplicate events or invented numerical quotas.`
+        : `${system}\n\nThe previous allocation was invalid. The exact validation error was: ${correctionReason || "the response did not satisfy the complete allocation contract"}. Return a complete corrected allocation for every beatIndex from 0 through ${req.arcTemplate.beats.length - 1}; never omit, duplicate, or invent a beat. Re-check the count against the supplied ordered beat list before returning JSON.`
       : system;
     const rawResult = billableCall
       ? await billableCall(
         callSystem,
         user,
-        3600,
+        requestedStoryMaterialFormat(req) === "novel" ? 7500 : 3600,
         responseFormat,
         correction ? "outline-plan-retry" : "outline-plan",
-        (content, finishReason) => parseAndValidateAllocation(content, req.arcTemplate.beats, finishReason),
+        (content, finishReason) => requestedStoryMaterialFormat(req) === "novel"
+          ? parseNovelArchitecturePlan(content, req)
+          : parseAndValidateAllocation(content, req.arcTemplate.beats, finishReason),
       )
       : {
         content: await callOpenAI(callSystem, user, apiKey, {
-          maxTokens: 3600,
+          maxTokens: requestedStoryMaterialFormat(req) === "novel" ? 7500 : 3600,
           useJsonSchema: true,
           jsonSchemaName: "outline_section_allocations",
           jsonSchema: allocationSchema,
@@ -4340,11 +4345,14 @@ export async function planSectionAllocation(
   for (const correction of corrections) {
     try {
       let architecture: StoryArchitecture | undefined;
-      const parsed = parseAndValidateAllocation(
-        await call(correction), req.arcTemplate.beats, undefined,
-        (value) => { architecture = value; },
-      );
-      const fitted = fitAllocationToNovelBudget(parsed, req);
+      const rawPlan = await call(correction);
+      const parsed = requestedStoryMaterialFormat(req) === "novel"
+        ? parseNovelArchitecturePlan(rawPlan, req, (value) => { architecture = value; })
+        : parseAndValidateAllocation(
+          rawPlan, req.arcTemplate.beats, undefined,
+          (value) => { architecture = value; },
+        );
+      const fitted = requestedStoryMaterialFormat(req) === "novel" ? parsed : fitAllocationToNovelBudget(parsed, req);
       if (architecture) options.onArchitecture?.(architecture);
       return fitted;
     } catch (error) {
