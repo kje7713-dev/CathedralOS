@@ -3637,6 +3637,65 @@ export function fitAllocationToNovelBudget(
 ): Map<string, Allocation> {
   if (requestedStoryMaterialFormat(req) !== "novel") return allocation;
 
+  // Architecture-first novels: NEVER change the architect's dramatic units,
+  // beat ownership, order, or natural containers. Size their prose development
+  // AFTER the structure is fixed. The generation pipeline already accepts
+  // per-section targetWords; a chapter need not mean exactly 4,200 words.
+  const storyUnits = Array.from(allocation.values()).flatMap((plan) => plan.plannedSections ?? [])
+    .sort((a, b) => a.sequence - b.sequence);
+  if (storyUnits.length > 0) {
+    const maxByContainer: Record<typeof NOVEL_LEAF_CONTAINERS[number], number> = {
+      scene: 3000, developedScene: 5200, setPiece: 7000,
+      sceneSequence: 9000, chapter: 10500,
+    };
+    const existingWords = projectedExpectedWords(req.existingSections ?? []);
+    const goal = Math.max(0, Math.min(NOVEL_FIRST_PASS_WORD_GOAL - existingWords,
+      NOVEL_MAX_WORDS - existingWords));
+    const targets = storyUnits.map((unit) => NOVEL_CONTAINER_WORD_TARGETS[unit.container]);
+    let total = targets.reduce((sum, words) => sum + words, 0);
+    // Spread available development space according to each container's
+    // headroom, not the beat index or number of arbitrarily invented chapters.
+    if (total < goal) {
+      const capacities = storyUnits.map((unit, index) =>
+        Math.max(0, maxByContainer[unit.container] - targets[index]));
+      const available = capacities.reduce((sum, capacity) => sum + capacity, 0);
+      const deficit = Math.min(goal - total, available);
+      if (available > 0 && deficit > 0) {
+        for (let i = 0; i < targets.length; i++) {
+          const increase = Math.floor(deficit * capacities[i] / available);
+          targets[i] += increase;
+          capacities[i] -= increase;
+          total += increase;
+        }
+        // Round fractional targets deterministically without changing shape.
+        for (let i = 0; total < goal && i < targets.length; i++) {
+          if (capacities[i] > 0) { targets[i]++; total++; }
+        }
+      }
+    } else if (total > goal) {
+      const minimums = storyUnits.map((unit) =>
+        Math.max(500, Math.floor(NOVEL_CONTAINER_WORD_TARGETS[unit.container] * 0.65)));
+      const available = targets.reduce((sum, words, index) => sum + words - minimums[index], 0);
+      const excess = Math.min(total - goal, available);
+      if (available > 0) {
+        for (let i = 0; i < targets.length; i++) {
+          const decrease = Math.floor(excess *
+            (targets[i] - minimums[i]) / available);
+          targets[i] -= decrease;
+          total -= decrease;
+        }
+        for (let i = 0; total > goal && i < targets.length; i++) {
+          if (targets[i] > minimums[i]) { targets[i]--; total--; }
+        }
+      }
+    }
+    // If there are too few genuinely distinct story units to develop into
+    // 115k words even at their safe capacities, report the real projection.
+    // Never manufacture a plot event or silently relabel a scene as a chapter.
+    storyUnits.forEach((unit, index) => { unit.targetWords = targets[index]; });
+    return allocation;
+  }
+
   const normalized = new Map<string, Allocation>();
   const missingMixBeatIDs: string[] = [];
   for (const [beatID, plan] of allocation.entries()) {
