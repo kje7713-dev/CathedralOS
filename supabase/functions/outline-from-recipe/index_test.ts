@@ -888,7 +888,7 @@ Deno.test("first-pass event ownership is arc-neutral and does not create repair 
     assertStringIncludes(outline.system, "dramaticEvent → resultingChange → terminalState");
     assertStringIncludes(outline.system, "every later section inherits that changed state");
     assertStringIncludes(outline.system, "An intentional callback, an evolving relationship");
-    assertStringIncludes(outline.system, "redesign the LATER section in its existing allocation");
+    assertStringIncludes(outline.system, "redesign the NON-OWNING section, even if it appears earlier");
     assertStringIncludes(outline.system, "not an output field, validator, additional call, or failure condition");
     assertStringIncludes(outline.system, architecture.decisiveClimax);
     assertEquals(JSON.parse(planning.user).planningContext.arc.beats.length, 4);
