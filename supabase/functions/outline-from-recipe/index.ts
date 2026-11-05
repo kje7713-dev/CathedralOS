@@ -6619,8 +6619,20 @@ export async function runSuggestionJob(
                 requestedStoryMaterialFormat(body),
               );
             } catch (error) {
-              if (error instanceof OutlineOutputExhaustedError || error instanceof StoryMaterialSufficiencyError) throw error;
-              throw new StoryMaterialValidationError(error instanceof Error ? error.message : String(error));
+              // Once a provider call has been billed, malformed enrichment
+              // bookkeeping is not a reason to discard the run and buy another
+              // enrichment response. Preserve the canonical recipe as a safe
+              // development input and let story architecture invent the plot.
+              enrichmentDiagnostics = {
+                ...enrichmentDiagnostics,
+                providerMaterialFallback: "canonical_recipe",
+                providerMaterialFallbackReason: error instanceof Error ? error.message.slice(0, 300) : "invalid_enrichment",
+              };
+              parsedMaterial = repairStoryMaterialFromRecipe(body.recipe, provenance, requestedStoryMaterialFormat(body));
+              parsedMaterial.premiseComponents = preserveAuthoredPremiseComponents(
+                undefined,
+                String(body.recipe.project?.summary ?? ""),
+              );
             }
             const sufficiency = storyMaterialSufficiency(parsedMaterial, body.recipe, requestedStoryMaterialFormat(body));
             // Item-count sufficiency is advisory. A structurally valid package
