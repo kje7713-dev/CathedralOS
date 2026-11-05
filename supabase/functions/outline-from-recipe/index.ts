@@ -1528,6 +1528,11 @@ interface Suggestion {
   terminalState?: string;
   dramaticFunction?: DramaticFunction;
   plannedWordRange?: { minWords: number; maxWords: number };
+  targetWords?: number;
+  targetWordsMin?: number;
+  targetWordsMax?: number;
+  /** Covers other contiguous arc movements without cloning the section. */
+  coveredStoryArcBeatIDs?: string[];
   storyArcBeatID: string;
   recipeRequirementIDs?: string[];
   arcObligationEvidence?: Record<string, Array<{ field: "dramaticEvent" | "resultingChange" | "terminalState"; quote: string }>>;
@@ -2260,7 +2265,7 @@ export function projectedTokenRange(suggestions: Array<{ container: string }>): 
   }, [0, 0]);
 }
 
-export type PlannedSectionLike = { container?: string | null };
+export type PlannedSectionLike = { container?: string | null; targetWords?: number | null };
 
 export function projectedExpectedTokens(suggestions: PlannedSectionLike[]): number {
   // Provider and legacy telemetry only. Do not use these token estimates to
@@ -2273,6 +2278,8 @@ export function projectedExpectedTokens(suggestions: PlannedSectionLike[]): numb
 
 export function projectedExpectedWords(suggestions: PlannedSectionLike[]): number {
   return suggestions.reduce((total, suggestion) => {
+    if (typeof suggestion.targetWords === "number" && Number.isFinite(suggestion.targetWords) &&
+      suggestion.targetWords > 0) return total + suggestion.targetWords;
     const container = suggestion.container ?? "";
     if (Object.hasOwn(NOVEL_CONTAINER_WORD_TARGETS, container)) {
       return total + NOVEL_CONTAINER_WORD_TARGETS[container as typeof NOVEL_LEAF_CONTAINERS[number]];
@@ -3530,8 +3537,24 @@ const ALLOCATION_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+export type PlannedStorySection = {
+  /** Global sequence from the architecture, not a position invented by the fitter. */
+  sequence: number;
+  beatIndex: number;
+  coveredBeatIndices: number[];
+  title: string;
+  dramaticEvent: string;
+  resultingChange: string;
+  container: typeof NOVEL_LEAF_CONTAINERS[number];
+  targetWords?: number;
+};
+
 type Allocation = {
   minSections: number;
+  /** Ordered dramatic units are selected by architecture before word sizing. */
+  plannedSections?: PlannedStorySection[];
+  /** True when this beat is delivered by another beat's shared section. */
+  coveredBySharedSection?: boolean;
   /** At least one new section is required for every previously uncovered beat. */
   coverageMinimum?: number;
   /** The planner's requested minimum, retained when budgeting scales extras. */
@@ -4437,6 +4460,12 @@ export function validateSuggestions(
       ...(DRAMATIC_FUNCTIONS.includes(s.dramaticFunction) ? { dramaticFunction: s.dramaticFunction as DramaticFunction } : {}),
       ...(groundedEvidence.value ? { arcObligationEvidence: groundedEvidence.value } : {}),
       plannedWordRange: plannedWordRangeForContainer(s.container),
+      ...(typeof s.targetWords === "number" && Number.isFinite(s.targetWords) && s.targetWords > 0
+        ? { targetWords: Math.round(s.targetWords),
+          targetWordsMin: Math.max(1, Math.round(s.targetWords * 0.9)),
+          targetWordsMax: Math.max(1, Math.round(s.targetWords * 1.1)) }
+        : {}),
+      ...(Array.isArray(s.coveredStoryArcBeatIDs) ? { coveredStoryArcBeatIDs: s.coveredStoryArcBeatIDs } : {}),
       storyArcBeatID: s.storyArcBeatID,
       ...(validRequirementIDs.length > 0 ? { recipeRequirementIDs: validRequirementIDs } : {}),
     });
