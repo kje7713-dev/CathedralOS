@@ -175,8 +175,8 @@ Deno.test("invented supporting people reach first-pass outline as decision candi
 Deno.test("all 27 default arcs require 262 different creative causal beat advances", async () => {
   const swift = await Deno.readTextFile("./CathedralOSApp/Models/StoryArcTemplate.swift");
   const migration = await Deno.readTextFile("./supabase/migrations/20261105195900_arc_beat_creative_progression.sql");
-  const templates = [...swift.matchAll(/static let (\\w+) = StoryArcTemplate\\(/g)];
-  const beats = [...swift.matchAll(/\\.init\\(\\s*role:\\s*"([^"]+)",\\s*label:\\s*"([^"]+)",\\s*description:\\s*"([^"]+)"\\)/g)];
+  const templates = [...swift.matchAll(/static let (\w+) = StoryArcTemplate\(/g)];
+  const beats = [...swift.matchAll(/\.init\(\s*role:\s*"([^"]+)",\s*label:\s*"([^"]+)",\s*description:\s*"([^"]+)"\)/g)];
   const progressions = beats.map((beat) => beat[3].split(" Creative progression: ")[1]);
   assertEquals(templates.length, 27);
   assertEquals(beats.length, 262);
