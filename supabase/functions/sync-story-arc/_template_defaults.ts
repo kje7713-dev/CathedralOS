@@ -37,8 +37,8 @@ export function canonicalizeUnmodifiedBeatDetails(
 
 export function canonicalizeLegacyArcTemplate<T extends {
   name: string;
-  description: string;
-  beats: Array<{ role: string; label: string; description: string }>;
+  description?: string;
+  beats: Array<{ role: string; label: string; description?: string }>;
 }>(
   incoming: T,
   catalog: { name?: string; description?: string; beats?: TemplateBeatDefault[] },
