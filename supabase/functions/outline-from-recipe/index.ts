@@ -1435,7 +1435,7 @@ Do not unnecessarily sanitize or dilute authored adult intensity. If the recipe 
 Give the reader the on-page encounters, actions, emotional consequences, absurdities, and discoveries promised by the author's recipe. Events should follow from choices and relationships, not from the convenience of a plot device. Let information matter through what it makes people do. Quiet, intricate, realistic, or investigative experiences remain entirely valid when the author actually wants them; intensity and originality come from the recipe, not a universal genre preference.
 
 ## Decompose the AUTHOR'S project summary before inventing
-The premiseComponents array is not speculative enrichment: extract every independent factual setup, causal event, character transformation, and consequential promise from recipe.project.summary. Use the author's exact contiguous words as sourceQuote (a substring of the original summary) and a concise, faithful requirement statement for each component. Split compound sentences into independent commitments; do not collapse a national/social or humanity-scale consequence into one generic "danger" or "survival" obligation. Cover the substantive meaning of the ENTIRE summary, including its last clause, rather than just its first incident. Do not add invented claims, force an unrequested ending, or elevate a prompt-pack title into an authored event. A multi-book-scale promise must be materially advanced in the current book, not necessarily fully resolved: that choice belongs to architecture and book planning. Keep authored components separate from optional source=planner categories. Return [] when there is no authored summary.
+The premiseComponents array is not speculative enrichment: extract every independent factual setup, causal event, character transformation, and consequential promise from recipe.project.summary. Use the author's exact contiguous words as sourceQuote (a substring of the original summary) and a concise, faithful requirement statement for each component. Preserve independently authored commitments where they actually exist, but do not split character, relationship, world, or tone descriptions into invented plot events simply because a sentence has conjunctions. Never turn an intentionally open premise into a predetermined story. Do not collapse an explicitly authored national/social or humanity-scale consequence into one generic "danger" or "survival" obligation. Cover the substantive meaning of the ENTIRE summary, including its last clause, rather than just its first incident. Do not add invented claims, force an unrequested ending, or elevate a prompt-pack title into an authored event. A multi-book-scale promise must be materially advanced in the current book, not necessarily fully resolved: that choice belongs to architecture and book planning. Keep authored components separate from optional source=planner categories. Return [] when there is no authored summary.
 
 ## Build a Distinctive Narrative Engine
 Before inventing supporting developments, identify the particular experiences, tensions, surprises, and unresolved questions promised by the author's recipe. Build from characters' desires, contradictions, relationships, decisions, and interactions with the world. When the authored story is grotesque, surreal, absurdist, or character-driven, invent a WIDE RANGE of personally consequential, non-institutional encounters instead of filling every category with variants of one invented government program, raid, security contractor, detention scheme, or crowd-control operation. The existence of a conspiracy is not itself a request to make its administrative machinery the plot. Escalation means their choices produce increasingly consequential and distinctive experiences, not merely a larger version of the same obstacle. Support a full ${format}-scale story with substantially different dramatic developments, rather than expanding one incident into a chain of logistical steps.
@@ -6565,7 +6565,7 @@ export async function runSuggestionJob(
         const candidate = validateStoryMaterialEnrichment(body.storyMaterialEnrichment, { recipe: body.recipe });
         const compatible = isCompatibleStoryMaterialEnrichment(candidate, provenance, requestedStoryMaterialFormat(body));
         const sufficiency = storyMaterialSufficiency(candidate, body.recipe, requestedStoryMaterialFormat(body));
-        if (compatible && sufficiency.sufficient) {
+        if (compatible) {
           storyMaterial = candidate;
           enrichmentDiagnostics = {
             ...enrichmentDiagnostics,
@@ -6623,7 +6623,9 @@ export async function runSuggestionJob(
               throw new StoryMaterialValidationError(error instanceof Error ? error.message : String(error));
             }
             const sufficiency = storyMaterialSufficiency(parsedMaterial, body.recipe, requestedStoryMaterialFormat(body));
-            if (!sufficiency.sufficient) throw new StoryMaterialSufficiencyError(sufficiency.reasons);
+            // Item-count sufficiency is advisory. A structurally valid package
+            // may be sparse when the author intentionally leaves plot open;
+            // downstream architecture is responsible for inventing the story.
             return parsedMaterial;
           },
         );
