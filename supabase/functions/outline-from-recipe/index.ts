@@ -1289,9 +1289,8 @@ export function validatePremiseComponents(raw: unknown, projectSummary: string):
     for (let i = offset; i < offset + sourceQuote.length; i++) covered[i] = 1;
     components.push({ sourceQuote, requirement });
   }
-  if (summary.length >= 180 && components.length < 2) {
-    throw new Error("multi-part project summary cannot be represented by one premise obligation");
-  }
+  // One quote may accurately express a long descriptive premise. Preserve its
+  // meaning; do not infer extra plot commitments from length alone.
   // Prevent a partial extraction from quietly erasing a major promise.
   // Ignore whitespace/punctuation between contiguous authored phrases.
   const materialChars = [...summary].map((letter, i) => /[\p{L}\p{N}]/u.test(letter) ? i : -1).filter((i) => i >= 0);
@@ -1312,6 +1311,35 @@ export function validatePremiseComponents(raw: unknown, projectSummary: string):
     // multiple plot obligations from a character/setting/tone description.
   }
   return components;
+}
+
+/**
+ * Recover an authored premise when a model supplies incomplete quote mapping.
+ * Premise extraction is bookkeeping, not a paid reason to reject an otherwise
+ * usable enrichment. Use exact, bounded source substrings without inventing plot.
+ */
+export function preserveAuthoredPremiseComponents(raw: unknown, projectSummary: string): PremiseComponent[] {
+  try {
+    return validatePremiseComponents(raw, projectSummary);
+  } catch {
+    const summary = projectSummary.trim();
+    if (!summary) return [];
+    const components: PremiseComponent[] = [];
+    let cursor = 0;
+    while (cursor < summary.length && components.length < 16) {
+      const limit = Math.min(cursor + 500, summary.length);
+      const lastSpace = limit < summary.length ? summary.lastIndexOf(" ", limit) : -1;
+      const end = lastSpace > cursor + 300 ? lastSpace : limit;
+      const quote = summary.slice(cursor, end).trim();
+      if (quote.length >= 3) {
+        components.push({ sourceQuote: quote, requirement: quote });
+      }
+      cursor = end;
+      while (cursor < summary.length && /\s/u.test(summary[cursor])) cursor++;
+    }
+    // Exact quote validation still protects against invented source claims.
+    return validatePremiseComponents(components, projectSummary);
+  }
 }
 
 export function validateStoryMaterialEnrichment(value: unknown, options: { allowMissingProvenance?: boolean; recipe?: CanonicalRecipeEnvelope } = {}): StoryMaterialEnrichment {
@@ -6574,6 +6602,12 @@ export async function runSuggestionJob(
             try {
               const normalizedProviderMaterial = normalizeProviderStoryMaterialItemIDs(
                 downgradeUnverifiedProviderRecipeReferences(parseOutlineJSON(content, finishReason), body.recipe),
+              ) as StoryMaterialEnrichment;
+              // Do not pay for a second LLM call merely to fix incomplete
+              // premise quote bookkeeping; preserve exact authored text.
+              normalizedProviderMaterial.premiseComponents = preserveAuthoredPremiseComponents(
+                normalizedProviderMaterial.premiseComponents,
+                String(body.recipe.project?.summary ?? ""),
               );
               parsedMaterial = validateStoryMaterialEnrichment(normalizedProviderMaterial, { allowMissingProvenance: true, recipe: body.recipe });
               // Preserve canonical authored material even when the provider
