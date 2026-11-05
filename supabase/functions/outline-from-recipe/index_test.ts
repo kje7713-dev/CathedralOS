@@ -969,6 +969,20 @@ Deno.test("high-impact endings preserve existing architecture schema and one-cal
   assertEquals(result.size, 2);
 });
 
+Deno.test("first-pass and allocation prompts reserve actual climax action against all duplicate slots", () => {
+  const req = { ...sparseRequest, requestedFormat: "novel" } as any;
+  const allocationPrompt = buildAllocationPrompt(req).system;
+  assertStringIncludes(allocationPrompt, "The final required climax section alone owns the complete action and outcome.");
+  assertStringIncludes(allocationPrompt, "Do not allocate two versions of one confession, broadcast");
+  const outline = buildPrompt(req, new Map([["beat-1", {
+    minSections: 2, rationale: "Crisis sets up the decisive character action.",
+    containerCounts: { scene: 0, developedScene: 0, setPiece: 1, sceneSequence: 0, chapter: 1 },
+  }]]) as any).system;
+  assertStringIncludes(outline, "This reserves the EVENT AND OUTCOME, not merely the dramaticFunction label");
+  assertStringIncludes(outline, "redesign the NON-OWNING section, even if it appears earlier");
+  assertStringIncludes(outline, "No duplicate events or outcomes anywhere in the returned outline");
+});
+
 Deno.test("same authored recipe with different arcs reaches the payoff handoff", () => {
   const constantRecipe = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project,
     summary: "Two estranged travelers discover a secret. Their painful loyalty, dangerous choices, and growing notoriety threaten their future.",
@@ -1554,19 +1568,49 @@ Deno.test("November 4 typed 28-section allocation is reconciled in WORDS before 
   const full = Array.from(fitted.values()).flatMap((plan) =>
     Object.entries(plan.containerCounts!).flatMap(([container,count]) =>
       Array.from({length:count},()=>({container}))));
-  assertEquals(full.length,33,"five added chapters close the first-pass WORD gap");
-  assertEquals(projectedExpectedWords(full),123950);
+  assertEquals(full.length,31,"three additional chapters close the true 115k minimum gap");
+  assertEquals(projectedExpectedWords(full),115550);
   assertEquals(evaluateNovelScale(full).meetsMinimum,true);
   assertEquals(evaluateNovelScale(full).exceedsMaximum,false);
   assertEquals(evaluateNovelScale(full.filter((s)=>s.container!=="chapter")
-    .concat(full.filter((s)=>s.container==="chapter").slice(2))).meetsMinimum,true,
-    "two duplicate chapters can be removed without invoking length expansion");
+    .concat(full.filter((s)=>s.container==="chapter").slice(2))).meetsMinimum,false,
+    "post-dedup shortfalls are accepted without later expansion; do not add padding upfront");
   assertEquals(Array.from(allocation.values()).reduce((n,p)=>n+p.minSections,0),28,
     "the original model allocation remains unchanged");
   const prompt = buildPrompt(req,fitted as any).system;
   assertEquals(prompt.includes("beat word budget"),true);
   assertEquals(prompt.includes("words)"),true);
   assertEquals(NOVEL_FIRST_PASS_WORD_GOAL,121000);
+});
+
+Deno.test("valid 118,100-word 29-section model allocation passes through unchanged", () => {
+  const chaptersByBeat = [3, 1, 3, 3, 3, 3, 3, 2, 2, 2];
+  const sequenceBeats = new Set([3, 5]);
+  const setPieceBeats = new Set([1, 7]);
+  const beats = chaptersByBeat.map((_, index) => ({ id: `arc-${index}` }));
+  const allocation = new Map(beats.map((beat, index) => {
+    const counts = { scene: 0, developedScene: 0,
+      setPiece: setPieceBeats.has(index) ? 1 : 0,
+      sceneSequence: sequenceBeats.has(index) ? 1 : 0,
+      chapter: chaptersByBeat[index] };
+    return [beat.id, { minSections: Object.values(counts).reduce((a, b) => a + b, 0),
+      containerCounts: counts, rationale: `Model-selected distinct dramatic movements in ${beat.id}` }] as const;
+  }));
+  const req = { ...sparseRequest, requestedFormat: "novel",
+    existingSections: [], arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  const initial = Array.from(allocation.values()).flatMap((plan) =>
+    Object.entries(plan.containerCounts).flatMap(([container, count]) =>
+      Array.from({ length: count }, () => ({ container }))));
+  assertEquals(initial.length, 29);
+  assertEquals(projectedExpectedWords(initial), 118100);
+  const fitted = fitAllocationToNovelBudget(allocation as any, req);
+  for (const [beatID, planned] of allocation) {
+    const result = fitted.get(beatID)!;
+    assertEquals(result.minSections, planned.minSections);
+    assertEquals(result.containerCounts, planned.containerCounts);
+    assertEquals(result.rationale, planned.rationale);
+  }
+  assertEquals(Array.from(fitted.values()).reduce((n, plan) => n + plan.minSections, 0), 29);
 });
 
 Deno.test("valid near-target 26-chapter allocation is reconciled before first-pass generation", () => {
@@ -1584,11 +1628,11 @@ Deno.test("valid near-target 26-chapter allocation is reconciled before first-pa
   const fitted = fitAllocationToNovelBudget(allocation as any, req);
   const all = Array.from(fitted.values()).flatMap((plan) =>
     Array.from({ length: plan.containerCounts!.chapter }, () => ({ container: "chapter" })));
-  assertEquals(all.length, 29, "recover scale with only three additional substantive first-pass chapters");
+  assertEquals(all.length, 28, "stop at the 115k minimum instead of filling toward the 121k aim");
   assertEquals(evaluateNovelScale(all).meetsMinimum, true);
   assertEquals(evaluateNovelScale(all).projectedWords <= 125000, true);
-  assertEquals(evaluateNovelScale(all.slice(1)).meetsMinimum, true,
-    "one exact repeated chapter can be removed without forcing length expansion");
+  assertEquals(evaluateNovelScale(all.slice(1)).projectedWords, 113400,
+    "a discarded duplicate may leave a deliverable shortfall without forcing expansion");
   assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections <= 20), true);
   assertEquals(Array.from(fitted.values()).every((plan) => plan.containerCounts!.chapter === plan.minSections), true);
   assertEquals(Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0), 26,
