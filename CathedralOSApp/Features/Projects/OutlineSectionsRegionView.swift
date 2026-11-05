@@ -1360,8 +1360,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         }
         Task {
             do {
+                // Fetch independently of the SwiftData relationship cache, which
+                // can lag behind a server refresh after Accept All.
+                let localSections = try modelContext.fetch(FetchDescriptor<OutlineSection>())
+                    .filter { $0.outline?.id == outline.id }
                 try await OutlineSectionCloudDeletion().deleteAllSections(outlineID: outline.id)
-                for section in outline.sections {
+                for section in localSections {
                     modelContext.delete(section)
                 }
                 try modelContext.save()
