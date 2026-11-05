@@ -47,7 +47,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "midpoint",           label: "Midpoint",           description: "A reversal or revelation that doubles the stakes and reframes the conflict."),
             .init(role: "crisis",             label: "Crisis",             description: "The lowest point — what looks like defeat, the dark night of the soul."),
             .init(role: "climax",             label: "Climax",             description: "The decisive confrontation where the protagonist's arc turns."),
-            .init(role: "resolution",         label: "Resolution",         description: "The new normal. Loose threads are tied. The world has changed."),
+            .init(role: "resolution",         label: "Resolution",         description: "Show the changed final situation, what is settled, and what meaningfully remains unresolved."),
         ]
     )
 
@@ -94,7 +94,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
         description: "A practical fifteen-beat structure for commercial, character-driven stories with a clear emotional arc.",
         beats: [
             .init(role: "opening_image", label: "Opening Image", description: "Show the protagonist and world before the story changes."),
-            .init(role: "theme_stated", label: "Theme Stated", description: "Hint at the lesson or central question the protagonist must face."),
+            .init(role: "theme_stated", label: "Theme Stated", description: "Hint at the central question or tension the protagonist must face; no moral lesson is required."),
             .init(role: "setup", label: "Setup", description: "Establish the cast, want, flaw, and stakes before the disruption."),
             .init(role: "catalyst", label: "Catalyst", description: "An event makes the old status quo impossible to maintain."),
             .init(role: "debate", label: "Debate", description: "The protagonist weighs the risks of responding to the new problem."),
@@ -106,7 +106,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "all_is_lost", label: "All Is Lost", description: "The protagonist reaches a visible low point and loses a source of hope."),
             .init(role: "dark_night_of_the_soul", label: "Dark Night of the Soul", description: "The protagonist confronts what must change to move forward."),
             .init(role: "break_into_three", label: "Break into Three", description: "A realization combines the A and B stories into a new plan."),
-            .init(role: "finale", label: "Finale", description: "The protagonist applies the lesson and resolves the central conflict."),
+            .init(role: "finale", label: "Finale", description: "The protagonist acts on changed understanding or commitment, bringing the central conflict to a consequential turning point."),
             .init(role: "final_image", label: "Final Image", description: "Echo the opening image to show how the world or protagonist changed.")
         ]
     )
@@ -121,9 +121,9 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "go", label: "Go", description: "The character adapts while facing escalating obstacles."),
             .init(role: "search", label: "Search", description: "The character experiments, learns, and pays a price for progress."),
             .init(role: "find", label: "Find", description: "The character gets what they sought, often with an unexpected cost."),
-            .init(role: "take", label: "Take", description: "The character sacrifices or suffers to bring the prize home."),
+            .init(role: "take", label: "Take", description: "The character pays a consequential price for pursuing or possessing what they found."),
             .init(role: "return", label: "Return", description: "The character returns to a familiar world carrying the consequences."),
-            .init(role: "change", label: "Change", description: "The character demonstrates what they learned and how they are different.")
+            .init(role: "change", label: "Change", description: "The character shows how the experience has changed their choices, for better or worse.")
         ]
     )
 
@@ -136,7 +136,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "rising_action", label: "Rising Action", description: "Complications build as choices intensify the central conflict."),
             .init(role: "climax", label: "Climax", description: "The decisive turning point where the conflict reaches maximum intensity."),
             .init(role: "falling_action", label: "Falling Action", description: "Consequences unfold and remaining conflicts move toward resolution."),
-            .init(role: "denouement", label: "Denouement", description: "The final situation settles and the meaning of the events becomes clear.")
+            .init(role: "denouement", label: "Denouement", description: "Show the changed final situation and what is resolved, uncertain, or unsettled.")
         ]
     )
 
@@ -148,7 +148,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "ki", label: "Ki — Introduction", description: "Establish the setting, characters, and initial idea."),
             .init(role: "sho", label: "Shō — Development", description: "Develop the situation and deepen the world without a major reversal."),
             .init(role: "ten", label: "Ten — Twist", description: "Introduce a surprising new element or perspective that reframes what came before."),
-            .init(role: "ketsu", label: "Ketsu — Conclusion", description: "Connect the elements and show the new understanding or harmony.")
+            .init(role: "ketsu", label: "Ketsu — Conclusion", description: "Connect the elements and reveal a new relationship or meaning between them, without requiring harmony.")
         ]
     )
 
@@ -193,18 +193,18 @@ struct StoryArcTemplate: Identifiable, Hashable {
     static let romantasy = StoryArcTemplate(
         id: UUID(uuidString: "A0000001-0000-0000-0000-000000000010")!,
         name: "Romantasy",
-        description: "A dual-engine fantasy arc in which the external quest and central romance escalate together and become inseparable at the climax.",
+        description: "A dual-engine fantasy arc in which external fantasy stakes and central romance escalate together and become inseparable at the climax.",
         beats: [
             .init(role: "ordinary_world", label: "Ordinary World", description: "Establish the protagonist, the fantasy world, and the emotional conditions before disruption."),
             .init(role: "magical_disruption", label: "Magical Disruption", description: "Introduce the threat, power, mission, or revelation that overturns the status quo."),
             .init(role: "dangerous_attraction", label: "Dangerous Attraction", description: "Create a compelling romantic pull complicated by allegiance, danger, status, or mistrust."),
             .init(role: "binding_choice", label: "Binding Choice", description: "Force a commitment that ties the protagonist to both the external conflict and romantic counterpart."),
-            .init(role: "quest_and_bond", label: "Quest and Bond", description: "Escalate trials while trust, desire, and mutual dependence deepen."),
-            .init(role: "midpoint_revelation", label: "Midpoint Revelation", description: "Reveal a truth about the world, mission, power, or relationship that changes the trajectory."),
+            .init(role: "quest_and_bond", label: "Fantasy Pressure and Bond", description: "Escalate fantasy-world pressures and consequential choices while trust, desire, and mutual dependence deepen."),
+            .init(role: "midpoint_revelation", label: "Midpoint Revelation", description: "Reveal a truth about the world, power, danger, or relationship that changes the trajectory."),
             .init(role: "divided_loyalties", label: "Divided Loyalties", description: "Make romantic desire and external duty meaningfully conflict."),
             .init(role: "catastrophic_break", label: "Catastrophic Break", description: "Shatter the current plan or relationship and expose the cost of choosing wrongly."),
             .init(role: "united_choice", label: "United Choice", description: "Have the leads choose what they will stand for together despite the cost."),
-            .init(role: "final_battle_and_choice", label: "Final Battle and Choice", description: "Resolve the primary external conflict through a climax inseparable from the central emotional choice."),
+            .init(role: "final_battle_and_choice", label: "Defining Stakes and Choice", description: "Bring the defining fantasy stakes and romantic choice together in one consequential climax; a literal battle is not required."),
             .init(role: "new_order_together", label: "New Order Together", description: "Establish the changed world and the earned state of the relationship.")
         ],
         relationshipFocus: .primary,
@@ -218,11 +218,11 @@ struct StoryArcTemplate: Identifiable, Hashable {
         beats: [
             .init(role: "threat_appears", label: "Threat Appears", description: "Introduce a concrete danger with consequences the protagonist cannot ignore."),
             .init(role: "clock_starts", label: "Clock Starts", description: "Create a meaningful deadline and force the protagonist into action."),
-            .init(role: "first_pursuit", label: "First Pursuit", description: "Escalate pursuit, investigation, or evasion while proving the threat is active."),
+            .init(role: "first_pursuit", label: "Threat Tightens", description: "Escalate active danger through pursuit, evasion, discovery, or consequential failed attempts, whichever fits the story."),
             .init(role: "narrowing_options", label: "Narrowing Options", description: "Close off easy solutions and make delay increasingly costly."),
             .init(role: "midpoint_reversal", label: "Midpoint Reversal", description: "Change the protagonist's understanding of the threat, target, or enemy."),
             .init(role: "major_loss", label: "Major Loss", description: "Inflict a serious failure or loss that makes the deadline feel nearly impossible."),
-            .init(role: "final_lead", label: "Final Lead", description: "Reveal the actionable path that makes one last attempt possible."),
+            .init(role: "final_lead", label: "Last Opening", description: "Reveal an earned opening, hard choice, or opportunity that makes one last attempt possible."),
             .init(role: "race_to_deadline", label: "Race to the Deadline", description: "Compress time and escalate obstacles as the protagonist commits everything to the final attempt."),
             .init(role: "showdown", label: "Showdown", description: "Resolve the central threat at or immediately before the deadline."),
             .init(role: "aftermath", label: "Aftermath", description: "Show the immediate consequences and the new state after the threat is resolved.")
@@ -310,11 +310,11 @@ struct StoryArcTemplate: Identifiable, Hashable {
         beats: [
             .init(role: "hook", label: "Hook", description: "Establish the protagonist, central lack, and starting conditions in direct contrast with the eventual ending."),
             .init(role: "plot_turn_one", label: "Plot Turn One", description: "Introduce the event that commits the protagonist to the central story problem."),
-            .init(role: "pinch_point_one", label: "Pinch Point One", description: "Apply direct pressure from the antagonistic force and demonstrate the cost of failure."),
+            .init(role: "pinch_point_one", label: "Pinch Point One", description: "Apply direct pressure from a person, circumstance, or opposing force and demonstrate the cost of failure."),
             .init(role: "midpoint", label: "Midpoint", description: "Shift the protagonist from reaction toward active pursuit through a major realization or reversal."),
             .init(role: "pinch_point_two", label: "Pinch Point Two", description: "Deliver the strongest pressure or loss before the endgame and strip away an important support."),
             .init(role: "plot_turn_two", label: "Plot Turn Two", description: "Reveal or earn the final information, capacity, or decision needed to face the ending."),
-            .init(role: "resolution", label: "Resolution", description: "Deliver the decisive confrontation and resolve the central story problem.")
+            .init(role: "resolution", label: "Resolution", description: "Deliver the decisive act or encounter and establish the central story's consequential outcome.")
         ]
     )
 
@@ -328,7 +328,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "denial_or_misread", label: "Denial / Misread", description: "Allow a plausible explanation or wrong interpretation to delay full understanding."),
             .init(role: "confirmation", label: "Confirmation", description: "Prove that the threat is real and more dangerous than initially believed."),
             .init(role: "isolation", label: "Isolation", description: "Cut off safety, help, escape, credibility, or familiar rules."),
-            .init(role: "rules_discovered", label: "Rules Discovered", description: "Reveal enough about the threat's nature or pattern to make resistance possible but costly."),
+            .init(role: "rules_discovered", label: "Threat Pattern", description: "Reveal or complicate the threat's behavior and the cost of confronting it, without requiring a solvable rule."),
             .init(role: "false_safety", label: "False Safety", description: "Offer a temporary escape or solution that fails to end the threat."),
             .init(role: "full_manifestation", label: "Full Manifestation", description: "Bring the horror into its most complete and unavoidable form."),
             .init(role: "survival_confrontation", label: "Survival Confrontation", description: "Force the protagonist into the decisive encounter with the threat."),
@@ -366,7 +366,7 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "distrust", label: "Distrust", description: "Expose reasons the leads cannot yet fully rely on one another."),
             .init(role: "intimacy_under_pressure", label: "Intimacy Under Pressure", description: "Deepen attraction and vulnerability while danger keeps increasing."),
             .init(role: "threat_escalates", label: "Threat Escalates", description: "Make the antagonist or danger more immediate, capable, and personal."),
-            .init(role: "midpoint_reveal", label: "Midpoint Reveal", description: "Reveal a truth that changes both the investigation and the relationship."),
+            .init(role: "midpoint_reveal", label: "Midpoint Reveal", description: "Reveal a truth that changes both the danger and the relationship."),
             .init(role: "betrayal_or_misread", label: "Betrayal / Misread", description: "Break trust or make one lead appear complicit with the threat."),
             .init(role: "trust_choice", label: "Trust Choice", description: "Make an active, risky decision to trust based on earned knowledge rather than convenience."),
             .init(role: "joint_showdown", label: "Joint Showdown", description: "Resolve the central danger through coordinated action and emotional commitment."),
@@ -513,10 +513,10 @@ struct StoryArcTemplate: Identifiable, Hashable {
             .init(role: "founding_choice", label: "Founding Choice", description: "Establish the consequential decision, relationship, wound, or ambition that shapes the family system."),
             .init(role: "first_inheritance", label: "First Inheritance", description: "Show how the founding generation's choices become conditions imposed on the next."),
             .init(role: "family_expands", label: "Family Expands", description: "Develop alliances, marriages, rivalries, resources, and competing visions across the family."),
-            .init(role: "buried_conflict", label: "Buried Conflict", description: "Deepen the secret, resentment, debt, or unresolved wrong carried across time."),
+            .init(role: "buried_conflict", label: "Inherited Pressure", description: "Deepen a resentment, inherited pressure, unresolved wrong, or recurring choice carried across time; a buried secret is optional."),
             .init(role: "generational_turn", label: "Generational Turn", description: "Shift power or perspective to a new generation that interprets the inheritance differently."),
             .init(role: "fracture", label: "Fracture", description: "Break the family system through a death, betrayal, succession fight, revelation, or separation."),
-            .init(role: "inherited_truth_revealed", label: "Inherited Truth Revealed", description: "Expose the hidden history that explains the repeating conflict."),
+            .init(role: "inherited_truth_revealed", label: "Inheritance Reframed", description: "Reveal or reinterpret the inherited pattern through decisions, memory, or discovery; no hidden document is required."),
             .init(role: "reckoning_across_generations", label: "Reckoning Across Generations", description: "Force living generations to confront the inherited pattern and one another."),
             .init(role: "reconciliation_or_repeat", label: "Reconciliation / Repeat", description: "Show whether the family transforms the pattern or consciously repeats it."),
             .init(role: "legacy", label: "Legacy", description: "Resolve the saga by showing what is ultimately passed forward.")

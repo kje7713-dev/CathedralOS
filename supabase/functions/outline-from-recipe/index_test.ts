@@ -1401,7 +1401,7 @@ Deno.test("allocation prompt selects causal outcome before sizing chapters witho
   assertStringIncludes(allocationPrompt.system, "The recipe governs premise, genre, intended experience");
   assertStringIncludes(allocationPrompt.system, "THEN work backward from that chosen payoff through the ordered arc beats");
   assertStringIncludes(allocationPrompt.system, "Only AFTER those story and arc decisions, budget and assign containerCounts");
-  assertStringIncludes(allocationPrompt.system, "An invented institution, operation, investigation, or technical solution is not implied");
+  assertStringIncludes(allocationPrompt.system, "No narrative form or mechanism is mandatory");
   const payload = JSON.parse(allocationPrompt.user);
   assertEquals(payload.planningContext.recipe, req.recipe);
   assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2"), undefined);
@@ -2867,7 +2867,7 @@ Deno.test("novel planning exposes explicit word budgets and projected-size expan
     allocationPrompt.indexOf("Choose an exceptional, arc-specific ending"), true,
     "the novelist must know the 115k-word objective before choosing the story");
   assertEquals(allocationPrompt.includes("minimum objective of 115,000 WORDS"), true);
-  assertEquals(allocationPrompt.includes("do not first invent a short plot"), true);
+  assertEquals(allocationPrompt.includes("First commit to the most compelling recipe-and-arc-faithful conflict and climax"), true);
   assertEquals(allocationPrompt.includes("complete book at approximately 121,000 finished-prose words"), true);
   assertEquals(allocationPrompt.includes("Budget in finished-prose WORDS"), true);
   assertEquals(allocationPrompt.includes("never API output tokens"), true);

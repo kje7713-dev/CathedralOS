@@ -142,6 +142,7 @@ jobs:
           deno test --no-check -A
           supabase/functions/outline-from-recipe/index_test.ts
           supabase/functions/outline-from-recipe/commercial_arc_templates_test.ts
+          supabase/functions/outline-from-recipe/dramatic_engine_prompt_test.ts
 
       - name: Test autonomous outline watchdog and operator authentication
         run: >-
