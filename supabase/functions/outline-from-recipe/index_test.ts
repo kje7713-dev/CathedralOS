@@ -447,7 +447,7 @@ Deno.test("outline prompts distinguish substantial dramatic developments from fr
   assertStringIncludes(allocationPrompt, "Select dramatic shape BEFORE doing container arithmetic");
   assertStringIncludes(allocationPrompt, "A chapter is not merely a 4,200-word slot.");
   assertStringIncludes(allocationPrompt, "Do not select chapters just because they make the 115,000–125,000-WORD arithmetic easy.");
-  assertStringIncludes(allocationPrompt, "do not force artificial variety or fixed percentages");
+  assertStringIncludes(allocationPrompt, "Do not force artificial variety or fixed percentages");
   assertStringIncludes(allocationPrompt, "minimum objective of 115,000 WORDS");
   assertStringIncludes(allocationPrompt, "hard maximum of 125,000 words");
   assertStringIncludes(allocationPrompt, "container");
@@ -1325,6 +1325,8 @@ Deno.test("selected book-level climax persists into outline without forcing the 
 
 Deno.test("climax causality is carried through existing planning, first pass, and semantic review", async () => {
   const request = { ...sparseRequest, requestedFormat: "novel",
+    recipe: { ...sparseRequest.recipe,
+      project: { ...sparseRequest.recipe.project, audienceNotes: "The reader should feel the personal cost of the protagonist's choice." } },
     arcTemplate: { ...sparseRequest.arcTemplate, name: "Coming-of-Age / Bildungsroman" } } as any;
   const architecture = {
     arcExperience: "A consequential choice changes how the protagonists see themselves.",
