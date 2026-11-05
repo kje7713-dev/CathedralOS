@@ -858,7 +858,10 @@ export function flattenSuggestionResponse(
         .map(([, value]) => value)
       : null;
     if (!sections) throw new Error(`response missing beat ${beat.id}`);
-    const plannedContainers = allocation?.get(beat.id)?.containerCounts
+    const plannedUnits = allocation?.get(beat.id)?.plannedSections;
+    const plannedContainers = plannedUnits?.length
+      ? plannedUnits.map((unit) => unit.container)
+      : allocation?.get(beat.id)?.containerCounts
       ? plannedNovelContainerSlots(allocation.get(beat.id)!.containerCounts!,
         requiredFunctionOrderByBeat?.get(beat.id)?.includes("climax") ?? false,
         Math.max(0, (requiredFunctionOrderByBeat?.get(beat.id)?.length ?? 0) -
@@ -879,6 +882,9 @@ export function flattenSuggestionResponse(
       suggestions.push({
         ...(section as Omit<Suggestion, "storyArcBeatID">),
         ...(plannedContainers ? { container: plannedContainers[index] } : {}),
+        ...(plannedUnits?.[index]?.targetWords ? { targetWords: plannedUnits[index].targetWords } : {}),
+        ...(plannedUnits?.[index] ? { coveredStoryArcBeatIDs:
+          plannedUnits[index].coveredBeatIndices.map((beatIndex) => beats[beatIndex].id) } : {}),
         storyArcBeatID: beat.id,
       });
     }
@@ -3254,6 +3260,11 @@ export function buildPrompt(
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
       const beat = req.arcTemplate.beats.find((b) => b.id === beatId);
+      if (isNovel && info.plannedSections) {
+        const units = info.plannedSections.map((unit) =>
+          `#${unit.sequence + 1} ${unit.title}: ${unit.container}, ~${(unit.targetWords ?? NOVEL_CONTAINER_WORD_TARGETS[unit.container]).toLocaleString()} words; ${unit.dramaticEvent}; result: ${unit.resultingChange}; covers: ${unit.coveredBeatIndices.map((index) => req.arcTemplate.beats[index].label).join(" + ")}`);
+        return `- ${beat?.label ?? beatId}: ${units.length} architecture-authored dramatic unit(s); ${units.length ? units.join(" | ") : "fulfilled within the neighboring shared section"}`;
+      }
       const sectionLabel = isNovel
         ? `complete first-pass allocation: ${info.minSections} section${info.minSections === 1 ? "" : "s"}`
         : `minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"}`;
@@ -3267,7 +3278,10 @@ export function buildPrompt(
       return `- ${beat?.label ?? beatId}: ${sectionLabel}${typePlan}${narrativeCommitment}`;
     })
     .join("\n");
-  const allocationDirective = isNovel
+  const allocationDirective = isNovel && Array.from(allocation.values()).some((entry) => entry.plannedSections)
+    ? `## Architecture-owned complete story plan
+The architect already chose the exact ordered dramatic units and their beat coverage BEFORE sizing. The numbered events below are the actual story, not empty word-budget slots. Develop EACH into a generation-ready Section Contract (entryState, dramaticEvent, resultingChange, terminalState), preserving the selected event and its irreversible result. Do not insert a section, repeat an event, substitute a new plot device, or relocate an already-completed event merely to fill a beat. One beat can contain many units; a single unit can satisfy adjacent beats without creating a duplicate scene. Use the primary beat for the section's server-owned storyArcBeatID, while honoring all covered beats in its events. Respect each section's natural container and individual targetWords; the target is prose-development room, not a demand for additional plot. Report one ordered array per primary beat, exactly the listed number of sections; beats covered only by a shared section return an empty array. When required dramatic-function slots are reserved, their unique completed event belongs in the LAST section of the owning beat. The server retains the architect's selected container and word target. Omit the container field from every novel section.`
+    : isNovel
     ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Do not manufacture extra sections solely to hit a numeric target: each allocated section must correspond to a different planned dramatic contribution with its own cause, effect, and inherited state. If a beat's rationale describes fewer events than its slots, develop distinct story BEFORE generating the outline, not an encore of a completed event. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections, except when a beat has outstanding required dramatic functions. For those beats return an object with "sections" (the ordinary sections in order) and "required" (one named section per required dramatic function, such as "climax" or "resolution"). Those required sections occupy the final ordered slots, in the order the functions are listed below. ONLY the reserved section may perform its one-time required dramatic event. This reserves the EVENT AND OUTCOME, not merely the dramaticFunction label: an ordinary section must not confess, reveal, defeat, choose, or resolve the exact decisive event that the reserved section is assigned to perform. Even an earlier setPiece or transformation in that SAME beat may only create distinct prerequisites, crises, reversals, costs, or consequences. If two slots would do the same dramatic work, redesign the NON-OWNING slot to create genuinely new story, regardless of which slot comes first. No duplicate events or outcomes anywhere in the returned outline, including paraphrases with different titles or labels. Write each section for its exact ordered container slot above. Omit "container" from every planned novel section: the server assigns it from the slot. Give each section enough distinct dramatic development to justify its planned scale; never pass off a brief event as a chapter. The allocator already assigned an explicit WORD budget to every section. Each budget is the intended size of the eventual written section, not the length of this outline JSON. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
     : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
