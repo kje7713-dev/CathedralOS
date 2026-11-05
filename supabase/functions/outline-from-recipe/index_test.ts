@@ -6456,6 +6456,21 @@ Deno.test("incomplete paid premise extraction recovers from exact author quotes 
   assertEquals(source.includes("if (!sufficiency.sufficient) throw new StoryMaterialSufficiencyError(sufficiency.reasons)"), false);
 });
 
+Deno.test("malformed paid enrichment can continue with an authored-only canonical fallback", async () => {
+  const summary = "Three complicated adults share abusive loyalties while a hidden nonhuman presence complicates their lives. The setting is a satirical contemporary society, and no major confrontation or ending has been specified.";
+  const recipe: any = {
+    ...sparseRequest.recipe,
+    project: { ...sparseRequest.recipe.project, summary },
+  };
+  const provenance = await recipeProvenance(recipe);
+  const fallback = repairStoryMaterialFromRecipe(recipe, provenance, "novel");
+  fallback.premiseComponents = preserveAuthoredPremiseComponents(undefined, summary);
+  assertEquals(validateStoryMaterialEnrichment(fallback, { recipe }), fallback);
+  assertEquals(fallback.premiseComponents.every((component) => summary.includes(component.sourceQuote)), true);
+  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
+  assertEquals(source.includes('providerMaterialFallback: "canonical_recipe"'), true);
+});
+
 Deno.test("premise extraction rejects invented source claims and omitted large promises", () => {
   const summary = "The friends become notorious. Their unintended influence shakes the entire country. Their unpredictable choices will one day determine whether humanity survives.";
   assertThrows(() => validatePremiseComponents([
