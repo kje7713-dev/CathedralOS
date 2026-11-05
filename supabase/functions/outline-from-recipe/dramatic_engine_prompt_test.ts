@@ -94,6 +94,13 @@ Deno.test("all 27 seeded arc templates are audited and only canonical text is up
   assertStringIncludes(swift, "without requiring a solvable rule");
   assertStringIncludes(swift, "no moral lesson is required");
   assertStringIncludes(swift, "without requiring harmony");
+  // Genre-relevant roles remain stable, while historical mechanism-heavy labels no longer steer the LLM.
+  assertStringIncludes(swift, 'role: "final_battle_and_choice", label: "Defining Stakes and Choice"');
+  assertStringIncludes(swift, 'role: "quest_and_bond", label: "Fantasy Pressure and Bond"');
+  assertStringIncludes(swift, 'role: "rules_discovered", label: "Threat Pattern"');
+  assertStringIncludes(swift, 'role: "first_pursuit", label: "Threat Tightens"');
+  assertStringIncludes(swift, 'role: "inherited_truth_revealed", label: "Inheritance Reframed"');
+  assertStringIncludes(migration, "r.original_label = beat->>'label'");
   assertStringIncludes(migration, "r.original_text = beat->>'description'");
   assertStringIncludes(migration, "never user-authored story_arc customizations");
   // Keep the genre's defining processes. The shared policy must not erase them.
