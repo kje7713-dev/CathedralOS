@@ -6562,7 +6562,16 @@ export async function runSuggestionJob(
     let enrichmentDiagnostics: Record<string, unknown> = { enrichmentModel: model.id, sourceRecipeHash: provenance.sourceRecipeHash, sourceRecipeVersion: provenance.sourceRecipeVersion, sourcePromptPackID: provenance.sourcePromptPackID };
     if (body.storyMaterialEnrichment) {
       try {
-        const candidate = validateStoryMaterialEnrichment(body.storyMaterialEnrichment, { recipe: body.recipe });
+        // A saved paid package should not be discarded for stale premise
+        // quote bookkeeping; make that repair deterministically on recovery.
+        const saved = {
+          ...body.storyMaterialEnrichment,
+          premiseComponents: preserveAuthoredPremiseComponents(
+            body.storyMaterialEnrichment.premiseComponents,
+            String(body.recipe.project?.summary ?? ""),
+          ),
+        };
+        const candidate = validateStoryMaterialEnrichment(saved, { recipe: body.recipe });
         const compatible = isCompatibleStoryMaterialEnrichment(candidate, provenance, requestedStoryMaterialFormat(body));
         const sufficiency = storyMaterialSufficiency(candidate, body.recipe, requestedStoryMaterialFormat(body));
         if (compatible) {
