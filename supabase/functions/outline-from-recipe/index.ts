@@ -5135,7 +5135,10 @@ export function semanticVerificationInput(
       eligibleMilestoneRoles: requirement.roles,
       sections: suggestions.flatMap((section, sectionIndex) => {
         const beat = template.beats.find((candidate) => candidate.id === section.storyArcBeatID);
-        return beat && eligible.has(beat.role) ? [{ sectionIndex, beatID: beat.id, role: beat.role, label: beat.label, dramaticEvent: section.dramaticEvent ?? "", resultingChange: section.resultingChange ?? "", terminalState: section.terminalState ?? "" }] : [];
+        const eligibleBeats = template.beats.filter((beat) =>
+          (section.coveredStoryArcBeatIDs ?? [section.storyArcBeatID]).includes(beat.id) && eligible.has(beat.role));
+        return eligibleBeats.map((beat) => ({ sectionIndex, beatID: beat.id, role: beat.role, label: beat.label,
+          dramaticEvent: section.dramaticEvent ?? "", resultingChange: section.resultingChange ?? "", terminalState: section.terminalState ?? "" }));
       }),
     }] : [])],
     beats: template.beats.map((beat) => ({
@@ -5147,9 +5150,11 @@ export function semanticVerificationInput(
         obligationID: obligation.id,
         instruction: obligation.instruction,
       })),
-      sections: suggestions.flatMap((section, sectionIndex) => section.storyArcBeatID === beat.id
-        ? [{ sectionIndex, dramaticEvent: section.dramaticEvent ?? "", resultingChange: section.resultingChange ?? "", terminalState: section.terminalState ?? "" }]
-        : []),
+      sections: suggestions.flatMap((section, sectionIndex) =>
+        (section.coveredStoryArcBeatIDs ?? [section.storyArcBeatID]).includes(beat.id)
+          ? [{ sectionIndex, dramaticEvent: section.dramaticEvent ?? "",
+            resultingChange: section.resultingChange ?? "", terminalState: section.terminalState ?? "" }]
+          : []),
     })).filter((beat) => (beat.obligations as unknown[]).length > 0),
   };
 }
@@ -5293,8 +5298,9 @@ export async function verifyStoryArcSemantics(
   if (requirement) {
     const rawObligation = rawArcWide.find((candidate: any) => String(candidate?.obligationID ?? "") === SELECTED_INTIMACY_LEVEL_OBLIGATION);
     const eligibleSections = suggestions.map((section, sectionIndex) => ({ section, sectionIndex })).filter(({ section }) => {
-      const beat = template.beats.find((candidate) => candidate.id === section.storyArcBeatID);
-      return beat && requirement.roles.includes(beat.role);
+      return template.beats.some((beat) =>
+        (section.coveredStoryArcBeatIDs ?? [section.storyArcBeatID]).includes(beat.id) &&
+        requirement.roles.includes(beat.role));
     });
     const sectionIndex = Number(rawObligation?.sectionIndex);
     const field = rawObligation?.field;
@@ -5337,7 +5343,8 @@ export async function verifyStoryArcSemantics(
     }
     seen.add(beatID);
     const beat = knownBeats.get(beatID)!;
-    const sections = suggestions.map((section, sectionIndex) => ({ section, sectionIndex })).filter(({ section }) => section.storyArcBeatID === beatID);
+    const sections = suggestions.map((section, sectionIndex) => ({ section, sectionIndex })).filter(({ section }) =>
+      (section.coveredStoryArcBeatIDs ?? [section.storyArcBeatID]).includes(beatID));
     const byObligation = new Map(verificationObligationsForBeat(beat, template.name).map((obligation) => [obligation.id, obligation]));
     if (!Array.isArray(rawBeat.obligations)) {
       const error = new Error(`story_arc_semantic_verification: missing obligations for ${beatID}`);
