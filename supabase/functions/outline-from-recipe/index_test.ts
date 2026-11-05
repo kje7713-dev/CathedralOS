@@ -1566,6 +1566,26 @@ Deno.test("short first-pass allocations preserve model-authored dramatic section
   assertEquals(buildPrompt(req,output as any).system.includes("Do not manufacture extra sections solely to hit a numeric target"),true);
 });
 
+Deno.test("word-budget adjustment never overwrites or appends to the dramatic plan", () => {
+  const beats = Array.from({ length: 10 }, (_, i) => ({ id: `beat-${i}` }));
+  const allocations = new Map(beats.map((beat, i) => [beat.id, {
+    minSections: 3,
+    containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 3 },
+    rationale: `Beat ${i}: a costly decision changes the next character's options. Then a separate reversal transforms the plan. Finally a new consequence changes the next beat.`,
+  }]));
+  const req = { ...sparseRequest, requestedFormat: "novel",
+    arcTemplate: { ...sparseRequest.arcTemplate, beats }, existingSections: [] } as any;
+  const fitted = fitAllocationToNovelBudget(allocations as any, req);
+  const beforeSections = [...allocations.values()].reduce((n, a) => n + a.minSections, 0);
+  const afterSections = [...fitted.values()].reduce((n, a) => n + a.minSections, 0);
+  assertEquals(beforeSections, 30);
+  assertEquals(afterSections, 29, "one oversized chapter is trimmed without introducing a new story unit");
+  for (const [beatID, original] of allocations) {
+    assertEquals(fitted.get(beatID)?.rationale, original.rationale,
+      "do not splice a budget-status note into the middle of the model's story events");
+  }
+});
+
 Deno.test("valid 118,100-word 29-section model allocation passes through unchanged", () => {
   const chaptersByBeat = [3, 1, 3, 3, 3, 3, 3, 2, 2, 2];
   const sequenceBeats = new Set([3, 5]);

@@ -171,3 +171,38 @@ Deno.test("invented supporting people reach first-pass outline as decision candi
   assertStringIncludes(prompt.user, "unexpectedly protects the person");
   assertStringIncludes(prompt.system, "independent decisions that change the conflict");
 });
+
+Deno.test("all 27 default arcs require 262 different creative causal beat advances", async () => {
+  const swift = await Deno.readTextFile("./CathedralOSApp/Models/StoryArcTemplate.swift");
+  const migration = await Deno.readTextFile("./supabase/migrations/20261105195900_arc_beat_creative_progression.sql");
+  const templates = [...swift.matchAll(/static let (\w+) = StoryArcTemplate\(/g)];
+  const beats = [...swift.matchAll(/\.init\(\s*role:\s*"([^"]+)",\s*label:\s*"([^"]+)",\s*description:\s*"([^"]+)"\)/g)];
+  const progressions = beats.map((beat) => beat[3].split(" Creative progression: ")[1]);
+  assertEquals(templates.length, 27);
+  assertEquals(beats.length, 262);
+  assertEquals(progressions.every((p) => typeof p === "string" && p.length >= 40), true);
+  assertEquals(new Set(progressions).size, 262, "every beat has a different dramatic demand");
+  assertEquals((migration.match(/::uuid/g) ?? []).length, 262);
+  assertStringIncludes(migration, "c.old_description = b.beat->>'description'");
+  assertStringIncludes(migration, "b.details = split_part(e.beat->>'description'");
+  assertEquals(migration.includes("UPDATE public.story_arcs"), false);
+  assertEquals(migration.includes("UPDATE public.outlines"), false);
+  assertStringIncludes(swift, "Make the sporting loss or injury actually change the competition path");
+  assertStringIncludes(swift, "Reserve the one defining, costly, potentially ferocious relationship decision");
+  assertStringIncludes(swift, "Give companions outrageous independent desires");
+  assertStringIncludes(swift, "Make every new culture, creature, or trial force a distinct irreversible change");
+});
+
+Deno.test("allocation demands a unique event and causal state for each section before sizing", () => {
+  for (const arc of arcCases) {
+    const req = requestFor(arc);
+    const allocation = buildAllocationPrompt(req).system;
+    const firstPass = buildPrompt(req, new Map()).system;
+    assertStringIncludes(allocation, "The entire ordered Story Arc is a causal progression");
+    assertStringIncludes(allocation, "For a beat allocated N sections, describe N different actual character actions");
+    assertStringIncludes(allocation, "a NEW external or interpersonal action genuinely changes");
+    assertStringIncludes(firstPass, "inherit the last completed dramatic state");
+    assertStringIncludes(firstPass, "The scene must change a real option, relationship, danger, power balance");
+    assertEquals(firstPass.includes("another instance of the same thematic problem"), true);
+  }
+});
