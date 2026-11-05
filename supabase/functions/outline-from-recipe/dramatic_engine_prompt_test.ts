@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { buildAllocationPrompt, buildEnrichmentPrompt, buildPrompt } from "./index.ts";
+import { arcReaderExperienceDirective, buildAllocationPrompt, buildEnrichmentPrompt, buildPrompt } from "./index.ts";
 import { RECIPE_CREATIVE_AUTHORITY_DIRECTIVE } from "./_prompt_context.ts";
 
 // A deliberately plot-open recipe: the author and selected arc, not incidental
@@ -128,4 +128,25 @@ Deno.test("all 27 seeded arc templates are audited and only canonical text is up
   assertStringIncludes(swift, "The detective/protagonist takes the case and starts gathering evidence.");
   assertStringIncludes(swift, "Build the operation, gather tools and intelligence, and expose likely failure points.");
   assertStringIncludes(swift, "Complete the insight that reveals what must happen next and why.");
+});
+
+Deno.test("fresh built-in Story Arc selections receive 27 distinct creative promises without rewriting existing arcs", async () => {
+  const swift = await Deno.readTextFile("./CathedralOSApp/Models/StoryArcTemplate.swift");
+  const migration = await Deno.readTextFile("./supabase/migrations/20261105174500_refresh_story_arc_creative_promises.sql");
+  const names = [...swift.matchAll(/static let (\w+) = StoryArcTemplate\(/g)];
+  assertEquals(names.length, 27);
+  const templateIDs = [...swift.matchAll(/id: UUID\(uuidString: "(A0000001-0000-0000-0000-0000000000\d{2})"\)/g)];
+  assertEquals(templateIDs.length, 27);
+  for (const match of templateIDs) {
+    assertStringIncludes(migration.toLowerCase(), match[1].toLowerCase());
+  }
+  assertStringIncludes(swift, "A transgressive romance of consuming desire");
+  assertStringIncludes(swift, "a memorable, earned choice with lasting consequences");
+  assertStringIncludes(migration, "Do not touch public.story_arcs or public.story_arc_beats");
+  assertEquals(/UPDATE\s+public\.story_arc_beats\s/i.test(migration), false);
+  assertEquals(/UPDATE\s+public\.story_arcs\s/i.test(migration), false);
+  const promise = arcReaderExperienceDirective({ name: "Dark Romance", beats: [] });
+  assertStringIncludes(promise, "Let lovers' choices cause shocking, irreversible changes");
+  assertStringIncludes(promise, "do not turn an extreme relationship into therapy exercises");
+  assertStringIncludes(promise, "romantic future may be troubled, ferocious, transgressive, or unconventional");
 });
