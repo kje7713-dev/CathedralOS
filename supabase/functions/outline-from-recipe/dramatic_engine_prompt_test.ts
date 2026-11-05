@@ -64,6 +64,9 @@ Deno.test("shared dramatic-engine prompts apply to every genre without adding st
     assertStringIncludes(outline, "without additional stages, sections, or repair", arc.name);
     // The author and arc can still choose a genuine investigation or operation.
     assertStringIncludes(allocation, "A procedurally driven genre remains completely valid", arc.name);
+    assertStringIncludes(allocation, "NEVER which kind of plot is chosen", arc.name);
+    assertStringIncludes(allocation, "planner-invented supporting character", arc.name);
+    assertStringIncludes(allocation, "deepen THAT story with genuinely different consequences", arc.name);
     assertStringIncludes(enrichment, "investigation, conspiracy, crime, legal dispute", arc.name);
     assertStringIncludes(outline, "selected architecture, accepted history, allocated slots", arc.name);
   }
