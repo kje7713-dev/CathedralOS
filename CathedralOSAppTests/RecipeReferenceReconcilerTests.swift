@@ -437,26 +437,7 @@ final class RecipeReferenceReconcilerTests: XCTestCase {
             XCTAssertTrue(missing.contains { $0.entityClass == .character && $0.id == foreignCharacter.id })
         }
     }
-}
 
-// MARK: - Test helpers
-
-private func makeInMemoryContext() throws -> ModelContext {
-    let schema = Schema([
-        StoryProject.self,
-        PromptPack.self,
-        StoryCharacter.self,
-        StorySpark.self,
-        Aftertaste.self,
-        StoryRelationship.self,
-        ThemeQuestion.self,
-        Motif.self,
-        StoryArc.self,
-        StoryArcBeat.self,
-    ])
-    let config = ModelConfiguration(isStoredInMemoryOnly: true)
-    let container = try ModelContainer(for: schema, configurations: [config])
-    return ModelContext(container)
     // MARK: - Default Story Arc beat migration
 
     func testSavedDefaultBeatsUpgradeButCustomizationsAndDeletionsSurvive() throws {
@@ -465,7 +446,7 @@ private func makeInMemoryContext() throws -> ModelContext {
         })
         let firstLoss = try XCTUnwrap(template.beats.first { $0.role == "first_loss" })
         let nextBeat = try XCTUnwrap(template.beats.first { $0.role == "deepening_conflict" })
-        let earlier = String(firstLoss.description.split(separator: " Creative progression: ")[0])
+        let earlier = firstLoss.description.components(separatedBy: " Creative progression: ").first!
         let arc = StoryArc()
         arc.templateID = template.id
         arc.project = project
@@ -498,5 +479,27 @@ private func makeInMemoryContext() throws -> ModelContext {
         XCTAssertEqual(beatRows.count, 3, "do not materialize deleted template beats")
         XCTAssertEqual(beatRows.map(\.id).count, Set(beatRows.map(\.id)).count)
     }
+
+
+}
+
+// MARK: - Test helpers
+
+private func makeInMemoryContext() throws -> ModelContext {
+    let schema = Schema([
+        StoryProject.self,
+        PromptPack.self,
+        StoryCharacter.self,
+        StorySpark.self,
+        Aftertaste.self,
+        StoryRelationship.self,
+        ThemeQuestion.self,
+        Motif.self,
+        StoryArc.self,
+        StoryArcBeat.self,
+    ])
+    let config = ModelConfiguration(isStoredInMemoryOnly: true)
+    let container = try ModelContainer(for: schema, configurations: [config])
+    return ModelContext(container)
 
 }
