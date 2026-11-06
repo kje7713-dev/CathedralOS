@@ -172,6 +172,10 @@ struct ExistingSectionBlob: Codable {
     /// nil for manual/free-form sections (no story arc beat linkage).
     let storyArcBeatID: String?
     let recipeRequirementIDs: [String]?
+    /// Accepted prose-development budget, used when later planning appends to an existing novel.
+    var targetWords: Int? = nil
+    var targetWordsMin: Int? = nil
+    var targetWordsMax: Int? = nil
 }
 
 struct OutlineSuggestionJob: Codable {
