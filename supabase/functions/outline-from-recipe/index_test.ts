@@ -724,7 +724,7 @@ Deno.test("first-pass and allocation prompts reserve actual climax action agains
   const architect = buildAllocationPrompt(req).system;
   const outline = buildPrompt(req, new Map()).system;
   assertStringIncludes(architect, "The climax and irreversible aftermath must be earned and distinctly different");
-  assertStringIncludes(architect, "a beat with a required dramatic function");
+  assertStringIncludes(architect, "A beat with a required dramatic function");
   assertStringIncludes(outline, "This reserves the EVENT AND OUTCOME, not merely the dramaticFunction label");
   assertStringIncludes(outline, "No duplicate events or outcomes anywhere in the returned outline");
 });
@@ -735,7 +735,7 @@ Deno.test("same authored recipe with different arcs reaches the payoff handoff",
     const outline = buildPrompt(req, new Map(), [], undefined, architectureFirstFixture);
     assertEquals(JSON.parse(plan.user).planningContext.recipe.project.summary, req.recipe.project.summary);
     assertEquals(JSON.parse(plan.user).planningContext.arc.name, name);
-    assertStringIncludes(plan.system, "works backward");
+    assertStringIncludes(plan.system, "Work BACKWARD");
     assertStringIncludes(outline.system, architectureFirstFixture.endingConsequence);
   }
 });
@@ -990,7 +990,7 @@ Deno.test("climax causality is carried through existing planning, first pass, an
   const plan = buildAllocationPrompt(req);
   const outline = buildPrompt(req, new Map(), [], undefined, architectureFirstFixture);
   const verification = semanticVerificationInput([], req.arcTemplate, req.recipe, [], architectureFirstFixture);
-  assertStringIncludes(plan.system, "WORK BACKWARD");
+  assertStringIncludes(plan.system, "Work BACKWARD");
   assertStringIncludes(plan.system, "Every chosen unit must change what happens next");
   assertStringIncludes(outline.system, "Causal payoff realized in the first-pass Section Contracts");
   assertEquals(verification.committedDecisiveClimax, architectureFirstFixture.decisiveClimax);
@@ -1377,7 +1377,7 @@ Deno.test("planner prompt groups one existing section onto its linked beat", () 
   const req = architectureFirstRequest([section]);
   const plan = buildAllocationPrompt(req);
   assertEquals(JSON.parse(plan.user).existingSections, [section]);
-  assertStringIncludes(plan.system, "existingSections");
+  assertStringIncludes(plan.user, "existingSections");
 });
 Deno.test("planner prompt groups two existing sections onto the same beat", () => {
   const old = [{ storyArcBeatID: "b0", title: "Earlier A" }, { storyArcBeatID: "b0", title: "Earlier B" }];
@@ -8330,6 +8330,7 @@ const architectureFirstFixture = {
 function architectureFirstRequest(existingSections: any[] = []) {
   return {
     ...sparseRequest,
+    recipe: JSON.parse(JSON.stringify(sparseRequest.recipe)),
     requestedFormat: "novel",
     existingSections,
     arcTemplate: {
