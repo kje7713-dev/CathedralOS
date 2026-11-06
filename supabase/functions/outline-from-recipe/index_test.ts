@@ -1018,23 +1018,22 @@ Deno.test("allocation prompt selects causal outcome before sizing chapters witho
   assertEquals(payload.planningContext.recipe.project.summary, req.recipe.project.summary);
   assertEquals(payload.planningContext.materialIndex.some((x: any) => x.id === "planner-1"), true);
 });
-Deno.test("allocation retry identifies omitted beats to the corrective planner", async () => {
+Deno.test("architecture gaps stay advisory and do not trigger a paid planning retry", async () => {
   const req = architectureFirstRequest();
   let calls = 0;
-  const systems: string[] = [];
-  const plan = await planSectionAllocation(req, "unused", async (system, _user, _max, _format, action) => {
-    systems.push(system);
+  const plan = await planSectionAllocation(req, "unused", async (_system, _user, _max, _format, action) => {
     calls++;
-    assertEquals(action, calls === 1 ? "outline-plan" : "outline-plan-retry");
-    return { content: JSON.stringify({ storyArchitecture: architectureFirstFixture, sections:
-      calls === 1 ? [architectureFirstUnit(0, "Only the Setup")]
-        : [architectureFirstUnit(0, "Setup"), architectureFirstUnit(1, "Change"), architectureFirstUnit(2, "End")] }),
-      creditCostCharged: 0, remainingCredits: 0 };
+    assertEquals(action, "outline-plan");
+    return { content: JSON.stringify({
+      storyArchitecture: architectureFirstFixture,
+      sections: [architectureFirstUnit(0, "Only the Setup")],
+    }), creditCostCharged: 0, remainingCredits: 0 };
   });
-  assertEquals(calls, 2);
+  assertEquals(calls, 1);
   assertEquals(plan.size, 3);
-  assertStringIncludes(systems[1], "architecture omitted Story Arc beat");
-  assertEquals(Array.from(plan.values()).reduce((sum, entry) => sum + entry.minSections, 0), 3);
+  assertEquals(plan.get("b1")?.minSections, 0);
+  assertEquals(plan.get("b2")?.minSections, 0);
+  assertEquals(Array.from(plan.values()).reduce((sum, entry) => sum + entry.minSections, 0), 1);
 });
 Deno.test("non-novel allocation keeps its legacy strict planner schema and prompt", async () => {
   let schema: any;
@@ -1660,7 +1659,7 @@ Deno.test("primary outline prompt has no arbitrary section-count instruction", (
     ["beat-2", { minSections: 1, rationale: "closure" }],
   ])).system;
   assertEquals(/\b\d+[-–]\d+\s+distinct sections\b/i.test(prompt), false);
-  assertEquals(prompt.includes("Allocate the available word budget across the Story Arc beats before choosing sections."), true);
+  assertEquals(prompt.includes("Allocate the available word budget across the Story Arc beats before choosing sections."), false);
   assertEquals(prompt.includes("Selected motifs are supporting material, not a quota"), true);
   assertEquals(prompt.includes("do not repeat a motif merely to prove that the outline remembers it"), true);
   assertEquals(prompt.includes("MAX_PLANNED_SECTIONS"), false);
