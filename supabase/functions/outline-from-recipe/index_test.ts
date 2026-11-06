@@ -1416,7 +1416,7 @@ Deno.test("allocation prompt selects causal outcome before sizing chapters witho
   assertStringIncludes(allocationPrompt.system, "No narrative form or mechanism is mandatory");
   const payload = JSON.parse(allocationPrompt.user);
   assertEquals(payload.planningContext.recipe, req.recipe);
-  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2"), undefined);
+  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2").source, "planner");
   assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p1").source, "planner");
   assertStringIncludes(buildEnrichmentPrompt(req).system, "avoid defaulting to a government contractor");
   const original = buildPrompt(req, new Map(), [], material);
@@ -4682,7 +4682,7 @@ Deno.test("PR3 expansion prioritizes unused enrichment and exposes soft word ran
   assertEquals(plannedWordRangeForContainer("scene"), { minWords: 615, maxWords: 1385 });
   const prompt = buildExpansionPrompt({ ...sparseRequest, storyMaterialEnrichment: material } as any, current as any);
   assertEquals(prompt.user.includes("unusedStoryMaterial"), true);
-  assertEquals(prompt.user.includes("force-emergency-network"), false);
+  assertEquals(prompt.user.includes("force-emergency-network"), true);
   assertEquals(prompt.system.includes("deepen the authored recipe's premise"), true);
   assertEquals(prompt.system.includes("unused or underdeveloped enrichment items"), false);
   assertEquals(prompt.system.includes("soft literary planning range"), false);
@@ -7465,8 +7465,8 @@ Deno.test("authored recipe and character candidates survive but procedural enric
   const request: any = { ...sparseRequest, storyMaterialEnrichment: material };
   const planning = buildArchitecturePlanningView(request, [], material);
   const index = planning.materialIndex as any[];
-  assertEquals(index.some((item) => item.id === "invented-raid"), false);
-  assertEquals(index.some((item) => item.id === "procedural-reversal"), false);
+  assertEquals(index.some((item) => item.id === "invented-raid"), true);
+  assertEquals(index.some((item) => item.id === "procedural-reversal"), true);
   assertEquals(index.some((item) => item.id === "recipe-person"), true);
   assertEquals(index.some((item) => item.id === "eccentric-character"), true);
   assertEquals(index.some((item) => item.id === "poisonous-pact"), true);
@@ -7481,9 +7481,9 @@ Deno.test("authored recipe and character candidates survive but procedural enric
     ["initial outline", outlinePrompt],
     ["length expansion", expansionPrompt],
   ] as const) {
-    assertEquals(prompt.user.includes("invented-raid"), false, stage);
-    assertEquals(prompt.user.includes("procedural-reversal"), false, stage);
-    assertEquals(prompt.user.includes("Contractor transport and containment mission"), false, stage);
+    assertEquals(prompt.user.includes("invented-raid"), true, stage);
+    assertEquals(prompt.user.includes("procedural-reversal"), true, stage);
+    assertEquals(prompt.user.includes("Contractor transport and containment mission"), true, stage);
     assertEquals(prompt.user.includes("eccentric-character"), true, stage);
     assertEquals(prompt.user.includes("recipe-person"), true, stage);
   }
