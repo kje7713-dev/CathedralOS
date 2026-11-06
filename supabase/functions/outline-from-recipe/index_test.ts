@@ -8488,3 +8488,20 @@ Deno.test("architecture first: accepted secondary beat coverage prevents duplica
   assertEquals(Array.from(plan.values()).every((beat) => beat.minSections === 0), true);
   assertEquals(projectedExpectedWords(accepted), 13900);
 });
+
+Deno.test("architecture first: acceptance SQL preserves architect targets and shared-beat coverage", async () => {
+  const [migration, acceptWorker, model, sync] = await Promise.all([
+    Deno.readTextFile("./supabase/migrations/20261106002500_preserve_architect_targets_and_shared_beat_coverage.sql"),
+    Deno.readTextFile("./supabase/functions/accept-outline-sections/index.ts"),
+    Deno.readTextFile("./CathedralOSApp/Models/ProjectImportExportPayload.swift"),
+    Deno.readTextFile("./CathedralOSApp/Services/ProjectCloudSyncService.swift"),
+  ]);
+  assertStringIncludes(migration, "covered_story_arc_beat_ids jsonb not null default '[]'::jsonb");
+  assertStringIncludes(migration, "v_sec->>'target_words'");
+  assertStringIncludes(migration, "target_words = excluded.target_words");
+  assertStringIncludes(migration, "covered_story_arc_beat_ids = excluded.covered_story_arc_beat_ids");
+  assertStringIncludes(acceptWorker, "target_words: s.targetWords");
+  assertStringIncludes(acceptWorker, "covered_story_arc_beat_ids: s.coveredStoryArcBeatIDs ?? []");
+  assertStringIncludes(model, "coveredStoryArcBeatIDs");
+  assertStringIncludes(sync, "section.coveredStoryArcBeatIDs = payload.coveredStoryArcBeatIDs");
+});
