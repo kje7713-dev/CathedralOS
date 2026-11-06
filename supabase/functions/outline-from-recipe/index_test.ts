@@ -8593,3 +8593,36 @@ Deno.test("architecture first: atomic acceptance preserves custom targets and sh
   assertStringIncludes(migration, "covered_story_arc_beat_ids = excluded.covered_story_arc_beat_ids");
   assertStringIncludes(migration, "'coveredStoryArcBeatIDs',coalesce(os.covered_story_arc_beat_ids");
 });
+
+
+Deno.test("architecture first: a fresh novel requires a real planned section, accepted continuations may be empty", async () => {
+  const first = architectureFirstRequest();
+  let freshMinimum = -1;
+  await planSectionAllocation(first, "unused", async (_system, _user, _limit, format) => {
+    freshMinimum = (format as any).json_schema.schema.properties.sections.minItems;
+    return {
+      content: JSON.stringify({
+        storyArchitecture: architectureFirstFixture,
+        sections: [architectureFirstUnit(0, "First Real Event", "chapter", [1]),
+          architectureFirstUnit(2, "Ending", "sceneSequence")],
+      }),
+      creditCostCharged: 0,
+      remainingCredits: 0,
+    };
+  });
+  assertEquals(freshMinimum, 1);
+  const resumed = architectureFirstRequest([
+    { storyArcBeatID: "b0" }, { storyArcBeatID: "b1" }, { storyArcBeatID: "b2" },
+  ]);
+  let continuationMinimum = -1;
+  const plan = await planSectionAllocation(resumed, "unused", async (_system, _user, _limit, format) => {
+    continuationMinimum = (format as any).json_schema.schema.properties.sections.minItems;
+    return {
+      content: JSON.stringify({ storyArchitecture: architectureFirstFixture, sections: [] }),
+      creditCostCharged: 0,
+      remainingCredits: 0,
+    };
+  });
+  assertEquals(continuationMinimum, 0);
+  assertEquals([...plan.values()].reduce((sum, beat) => sum + beat.minSections, 0), 0);
+});
