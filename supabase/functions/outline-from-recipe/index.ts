@@ -3239,10 +3239,17 @@ export function buildPrompt(
   obligations: RecipeObligation[] = [],
   storyMaterial?: StoryMaterialEnrichment,
   storyArchitecture?: StoryArchitecture,
+  causalContract?: CausalArchitectureContract,
 ): { system: string; user: string } {
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
+  const causalDevelopmentLines = causalContract
+    ? causalContract.beatDevelopments.map(({ beatIndex, development }) => {
+      const beat = req.arcTemplate.beats[beatIndex];
+      return `- ${beat?.label ?? `Beat ${beatIndex + 1}`}: ${development}`;
+    }).join("\n")
+    : "";
   // A recipe-grounded causal architecture now precedes allocation; its selected
-  // beat rationales are intentionally passed to the global outline generator.
+  // beat-level developments must remain binding input to the global outline generator.
   const reservedFunctions = outstandingRequiredFunctionsByBeat(req.arcTemplate.beats, req.arcTemplate.name, req.existingSections ?? []);
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
@@ -3286,6 +3293,10 @@ ${storyArchitecture?.arcExperience ? `The allocation committed to this concrete 
 
 ## Selected Story Arc drives events across the first pass
 Honor the planner's arc-shaped centralQuestion, characterCausality, decisiveClimax, and beat rationales as a single causal spine, not merely as an emotional interpretation of a reusable external plot. The distinctive dramatic requirement of each authored beat should determine what its characters DO, what changes irreversibly, and what new choice, constraint, or reversal follows into the next movement. Where two beats could be filled by the same generic pursuit, confrontation, rescue, revelation, or escape, invent a different character-caused development within the EXISTING allocation that realizes this arc's distinct progression. Retain explicitly authored recipe events and accepted history; never demand an invented arc-specific plot device, additional section, validator, model call, or repair stage.
+
+## Binding beat-by-beat causal developments
+${causalDevelopmentLines || "Legacy checkpoint: no beat-level causal developments were persisted; use the authored beat progression and selected architecture."}
+When beat-level causal developments are present, they are binding sequence commitments, not suggestions. Preserve their order and distinct ownership when writing sections. The development assigned to a beat must be completed by that beat's sections; do not move its outcome into an earlier or later beat, split one irreversible outcome into contradictory versions, or write an aftermath before the event that causes it. If a beat has multiple allocated sections, use earlier sections for distinct prerequisites, pressures, reversals, or costs and reserve the development's decisive outcome for the final section that owns it.
 
 ## Dramatize the chosen story — shared across all arcs
 Turn the saved architecture into distinct, lived events driven by choices, resistance, surprise, and irreversible consequences. Across the outline, major events must be caused or reshaped by emotionally consequential interactions: characters hurt, protect, deceive, depend on, abandon, confront, or choose one another in ways that change what can happen next. The plot and relationships should evolve through the SAME actions, rather than alternating external-problem chapters with unrelated emotional check-ins. Each section must materially transform the narrative situation rather than merely advance the steps of a familiar plot pattern. The actions and their outcomes must matter to these particular characters and deliver the experience promised by their recipe and selected arc.
@@ -6909,7 +6920,7 @@ export async function runSuggestionJob(
       recipeObligations,
       ...(storyArchitecture ? { storyArchitecture } : {}),
     };
-    const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial, storyArchitecture);
+    const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial, storyArchitecture, causalContract);
     const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations, body.arcTemplate.name, requestedStoryMaterialFormat(body), body.existingSections ?? []);
     const requiredFunctionOrderByBeat = outstandingRequiredFunctionsByBeat(
       body.arcTemplate.beats, body.arcTemplate.name, body.existingSections ?? [],
