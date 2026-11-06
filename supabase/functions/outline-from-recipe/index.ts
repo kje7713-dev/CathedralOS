@@ -747,7 +747,12 @@ export function buildSuggestionResponseSchema(
       // Reserve only outstanding required functions as typed, named sections.
       // All other sections share one compact array schema. The required
       // sections fill the last container slots in the canonical order.
-      const outstanding = requiredFunctionOrderByBeat.get(beat.id) ?? [];
+      // An under-covered architecture is usable; never manufacture an event
+      // or reject the story solely to satisfy a numeric function quota.
+      const requiredForBeat = requiredFunctionOrderByBeat.get(beat.id) ?? [];
+      const outstanding = allocation.get(beat.id)?.plannedSections
+        ? requiredForBeat.slice(0, minimum)
+        : requiredForBeat;
       if (outstanding.length > minimum) {
         throw new Error(`beat ${beat.id} has ${minimum} allocated sections but ${outstanding.length} outstanding required dramatic functions`);
       }
@@ -835,7 +840,9 @@ export function flattenSuggestionResponse(
     if (reservedShape && !reservedEntries) throw new Error(`beat ${beat.id} has invalid required dramatic slots`);
     // Only the schema's outstanding function order is authoritative; JSON
     // object key order can differ and would change allocated container sizes.
-    const requiredOrder = requiredFunctionOrderByBeat?.get(beat.id);
+    const requiredOrder = allocation?.get(beat.id)?.plannedSections && requiredFunctionOrderByBeat
+      ? (requiredFunctionOrderByBeat.get(beat.id) ?? []).slice(0, allocation.get(beat.id)!.plannedSections!.length)
+      : requiredFunctionOrderByBeat?.get(beat.id);
     if (reservedEntries && (!requiredOrder ||
       reservedEntries.length !== requiredOrder.length ||
       reservedEntries.some(([fn]) => !requiredOrder.some((planned) => planned === fn)))) {
@@ -882,6 +889,13 @@ export function flattenSuggestionResponse(
       suggestions.push({
         ...(section as Omit<Suggestion, "storyArcBeatID">),
         ...(plannedContainers ? { container: plannedContainers[index] } : {}),
+        // The writer develops an architect-owned dramatic unit. Its title,
+        // central event and consequence are not replaceable narrative slots.
+        ...(plannedUnits?.[index] ? {
+          title: plannedUnits[index].title,
+          dramaticEvent: plannedUnits[index].dramaticEvent,
+          resultingChange: plannedUnits[index].resultingChange,
+        } : {}),
         ...(plannedUnits?.[index]?.targetWords ? { targetWords: plannedUnits[index].targetWords } : {}),
         ...(plannedUnits?.[index] ? { coveredStoryArcBeatIDs:
           plannedUnits[index].coveredBeatIndices.map((beatIndex) => beats[beatIndex].id) } : {}),
@@ -3328,7 +3342,7 @@ Before returning the outline, evaluate the complete proposed sequence in canonic
 Every section must commit to one canonical event. Never use unresolved alternatives such as "X or Y", "someone", "a friend", "somewhere", or multiple possible versions of the event. Choose the specific person, place, object, and action.
 
 ## Novel length policy
-For a novel, aim for a complete first-pass plan near 121,000 finished-prose words, with a 115,000-word minimum and a 125,000-word hard cap. The cap applies to the complete outline projection, not only to later expansion. Allocate the available word budget across the Story Arc beats before choosing sections. Cover every authored obligation, essential character arc, major conflict, reversal, consequence, and ending commitment within that budget. Combine related events into fuller sections; do not create one section per enrichment item. Fit the complete story package into the budget. When material competes for space, combine related events into fuller sections, deepen shared sections, and adjust the level of detail; do not drop story material merely to meet the cap. Never treat the length policy as permission to omit a required story element. Use the chapter container for substantial units and the server's explicit finished-prose word budgets per section as planning estimates; keep the complete projected outline at or below 125,000 words.
+For a novel, develop an architect-selected story toward approximately 121,000 finished-prose words within the intended 115,000–125,000 range. Architecture already chose the real dramatic units, their order, beat coverage and natural containers BEFORE the server sized their prose-development targets. Do not reallocate the story into arbitrary beat quotas or invent chapters and events to fill a deficit. Fully dramatize the selected sections with meaningful action, resistance, relationships and consequence; preserve the authored story and ending. An honest short projection is an internal quality finding, never permission to invent duplicates or fail the user's run.
 
 Selected motifs are supporting material, not a quota. Use a motif in a section only when the section contract, causality, physical continuity, or a meaningful transformation requires it; do not repeat a motif merely to prove that the outline remembers it. Prefer concrete scene-specific images when no selected motif is needed.
 
@@ -4113,15 +4127,16 @@ export function parseNovelArchitecturePlan(
   // neighboring beats without creating a second section or rewriting history.
   for (const [index, beat] of beats.entries()) {
     const entry = allocations.get(beat.id)!;
-    if (!covered.has(index) && !existingCovered.has(index)) {
-      throw new Error(`architecture omitted Story Arc beat ${index}`);
-    }
+    // Missing creative coverage is an internal quality finding, not a
+    // terminal parser failure or an excuse to invent filler sections.
     if (entry.minSections === 0 && covered.has(index)) entry.coveredBySharedSection = true;
     const required = outstandingRequiredFunctionsByBeat(
       [beat], req.arcTemplate.name, req.existingSections ?? [],
     ).get(beat.id) ?? [];
     if (entry.minSections < required.length) {
-      throw new Error(`required dramatic outcome for beat ${index} needs its own section`);
+      // Report this through the existing semantic diagnostics; a real
+      // incomplete story is preferable to a fabricated extra climax.
+      entry.coverageMinimum = 0;
     }
   }
   onArchitecture?.(architecture);
@@ -6639,10 +6654,7 @@ export async function runSuggestionJob(
       // A projected-length shortfall is internal QA, not a reason to rewrite
       // the narrative or show a warning to the user after deduplication.
       if (requestedStoryMaterialFormat(body) === "novel" && finalScale.exceedsMaximum) {
-        throw new NovelScalePlanningError(
-          "failed_over_target",
-          `Novel outline exceeds the ${NOVEL_ACCEPTED_MAX_WORDS.toLocaleString()}-word accepted ceiling`,
-        );
+        diagnostics = { ...diagnostics, projectionOverTarget: true };
       }
       const remainingAllocationDeficits = sectionAllocationDeficits(completedSuggestions);
       const effectiveAllocation = allocation ?? new Map<string, Allocation>(
@@ -6689,10 +6701,7 @@ export async function runSuggestionJob(
       latestValidSuggestions = initialSuggestions;
       const scale = evaluateNovelScale(initialSuggestions, body.existingSections ?? []);
       if (requestedStoryMaterialFormat(body) === "novel" && scale.exceedsMaximum) {
-        throw new NovelScalePlanningError(
-          "failed_over_target",
-          `Novel outline exceeds the ${NOVEL_ACCEPTED_MAX_WORDS.toLocaleString()}-word accepted ceiling.`,
-        );
+        diagnostics = { ...diagnostics, projectionOverTarget: true };
       }
       planningState = { ...planningState, phase: "outline_complete", nextAction: "completed" };
       diagnostics = markCompletedStage({
