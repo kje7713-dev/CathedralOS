@@ -42,3 +42,7 @@ such as:
 Do not add real Supabase keys, modify committed secrets, run release
 workflows, submit builds, or change signing/certificate/provisioning files
 without explicit approval.
+
+## Long-running work continuity
+
+For multi-step repository tasks that span more than one conversational turn, keep the implementation running in a background worker while the main conversation remains available for updates. The worker must own the exact branch and repository, read this `AGENTS.md`, preserve the user's locked scope, and continue through edits, defect-specific tests, and validation rather than stopping after a progress note or clarification. The main session must not claim work is active unless a worker or concrete tool command is actually running; it should report the worker's evidence, blockers, and final state. Do not open a PR, push, merge, deploy, or perform other gated actions unless the user explicitly authorizes that action.
