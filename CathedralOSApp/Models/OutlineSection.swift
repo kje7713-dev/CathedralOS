@@ -41,7 +41,7 @@ class OutlineSection: Identifiable {
     /// Server-owned recipe obligations materially advanced by this section.
     var recipeRequirementIDs: [String]
     /// Additional Story Arc beats realized by the same dramatic section.
-    var coveredStoryArcBeatIDs: [String]
+    var coveredStoryArcBeatIDs: [String] = []
 
     @Relationship(inverse: \Outline.sections)
     var outline: Outline?
