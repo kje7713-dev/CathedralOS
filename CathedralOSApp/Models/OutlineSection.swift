@@ -40,6 +40,8 @@ class OutlineSection: Identifiable {
     var storyArcBeatID: UUID?
     /// Server-owned recipe obligations materially advanced by this section.
     var recipeRequirementIDs: [String]
+    /// Additional Story Arc beats realized by the same dramatic section.
+    var coveredStoryArcBeatIDs: [String]
 
     @Relationship(inverse: \Outline.sections)
     var outline: Outline?
@@ -67,6 +69,7 @@ class OutlineSection: Identifiable {
         self.status = "draft"
         self.storyArcBeatID = nil
         self.recipeRequirementIDs = []
+        self.coveredStoryArcBeatIDs = []
         self.children = []
     }
 }
