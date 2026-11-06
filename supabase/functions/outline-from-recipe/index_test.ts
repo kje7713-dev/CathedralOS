@@ -1235,11 +1235,18 @@ Deno.test("validated causal spine is passed to allocation with recipe authority 
   assertEquals(calls, 1);
   assertEquals(saved, undefined);
   assertEquals(planned.size, 2);
-  const { system, user } = buildPrompt(req, planned, [], undefined, architecture);
+  const causalContract = { architecture, beatDevelopments: [
+    { beatIndex: 0, development: "Mara's lie launches the family conflict." },
+    { beatIndex: 1, development: "Mara confronts the threat and pays the cost." },
+  ] };
+  const { system, user } = buildPrompt(req, planned, [], undefined, architecture, causalContract);
   assertStringIncludes(system, "## Selected causal architecture from the allocation call");
   assertStringIncludes(system, architecture.decisiveClimax);
   assertStringIncludes(system, architecture.endingConsequence);
-  assertStringIncludes(system, "Mara confronts the threat, pays the cost");
+  assertStringIncludes(system, "## Binding beat-by-beat causal developments");
+  assertStringIncludes(system, "Opening Image: Mara's lie launches the family conflict.");
+  assertStringIncludes(system, "Break into Two: Mara confronts the threat and pays the cost.");
+  assertStringIncludes(system, "reserve the development's decisive outcome for the final section that owns it");
   assertStringIncludes(system, "the decisive BOOK-level outcome must be DRAMATIZED as the climax section's dramaticEvent");
   const payload = JSON.parse(user);
   assertEquals(payload.allocation[0][1].minSections, planned.get("beat-1")?.minSections);
