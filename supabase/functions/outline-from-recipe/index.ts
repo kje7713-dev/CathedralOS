@@ -602,12 +602,13 @@ const SECTION_SCHEMA = {
     dramaticEvent: { type: "string", minLength: 1, maxLength: 2000 },
     resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
     terminalState: { type: "string", minLength: 1, maxLength: 1200 },
+    causalDevelopmentID: { type: "string", minLength: 1, maxLength: 80 },
     dramaticFunction: { type: "string", enum: DRAMATIC_FUNCTIONS },
     // Optional grounded evidence. The server verifies every quote against the
     // actual Section Contract field; this can never certify itself.
     arcObligationEvidence: { type: "object", additionalProperties: { type: "array", items: { type: "object", properties: { field: { type: "string", enum: ["dramaticEvent", "resultingChange", "terminalState"] }, quote: { type: "string", minLength: 1, maxLength: 1200 } }, required: ["field", "quote"], additionalProperties: false } } },
   },
-  required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "dramaticFunction"],
+  required: ["title", "summary", "container", "pov", "terminalBeat", "entryState", "dramaticEvent", "resultingChange", "terminalState", "causalDevelopmentID", "dramaticFunction"],
   additionalProperties: false,
 } as const;
 
@@ -1526,6 +1527,7 @@ interface Suggestion {
   dramaticEvent?: string;
   resultingChange?: string;
   terminalState?: string;
+  causalDevelopmentID?: string;
   dramaticFunction?: DramaticFunction;
   plannedWordRange?: { minWords: number; maxWords: number };
   storyArcBeatID: string;
@@ -3284,6 +3286,10 @@ export function buildPrompt(
 ${arcReaderExperienceDirective(req.arcTemplate)}
 ${storyArchitecture?.arcExperience ? `The allocation committed to this concrete reader experience: ${storyArchitecture.arcExperience}. Enact it through irreversible dramatic events and the actual climactic/final outcomes; it is not decorative metadata.` : "Legacy checkpoint: derive the arc's required experience from its authored beats and the recipe before writing."}
 
+## Selected causal spine
+The following ordered causal developments are binding planning context. Generate section contracts from these nodes; do not invent a replacement event or reuse a prior node's dramatic job. Each node's terminalState is the next node's starting reality. Assign exactly one section contract to each node and put that node's id in causalDevelopmentID. Do not reuse a node or leave one without a section.
+${storyArchitecture?.causalSpine ? JSON.stringify(storyArchitecture.causalSpine) : "(missing causal spine)"}
+
 ## Selected Story Arc drives events across the first pass
 Honor the planner's arc-shaped centralQuestion, characterCausality, decisiveClimax, and beat rationales as a single causal spine, not merely as an emotional interpretation of a reusable external plot. The distinctive dramatic requirement of each authored beat should determine what its characters DO, what changes irreversibly, and what new choice, constraint, or reversal follows into the next movement. Where two beats could be filled by the same generic pursuit, confrontation, rescue, revelation, or escape, invent a different character-caused development within the EXISTING allocation that realizes this arc's distinct progression. Retain explicitly authored recipe events and accepted history; never demand an invented arc-specific plot device, additional section, validator, model call, or repair stage.
 
@@ -3430,9 +3436,8 @@ Respond with structured JSON matching the schema. This is the only provider call
     obligations,
     storyMaterial,
   );
-  // Keep the original recipe and selected architecture authoritative. The
-  // broader enrichment pool remains saved but must not reintroduce the plot
-  // packages intentionally excluded from the architecture call.
+  // Keep the original recipe and selected architecture authoritative while
+  // exposing the complete provisional development pool to the causal planner.
   planningView.materialIndex = authorFirstMaterialIndex(storyMaterial).map((item) => {
     if (item.source !== "recipe") return item;
     const { label: _label, description: _description, ...sourceIdentity } = item;
@@ -3471,6 +3476,20 @@ Respond with structured JSON matching the schema. This is the only provider call
 // One existing planning call now chooses an authored-recipe-grounded causal
 // architecture BEFORE sizing the chapters. The architecture survives the
 // allocator→outliner handoff; enrichment remains optional creative material.
+export type CausalDevelopment = {
+  id: string;
+  priorNodeID: string | null;
+  beatIndex: number;
+  entryState: string;
+  characterChoice: string;
+  dramaticEvent: string;
+  resultingChange: string;
+  terminalState: string;
+  newPressure: string;
+  advances: string[];
+  projectedWords: number;
+};
+
 export type StoryArchitecture = {
   arcExperience: string;
   centralQuestion: string;
@@ -3478,7 +3497,27 @@ export type StoryArchitecture = {
   decisiveClimax: string;
   endingConsequence: string;
   deliberatelyOpenThreads: string;
+  causalSpine: CausalDevelopment[];
 };
+
+const CAUSAL_DEVELOPMENT_SCHEMA = {
+  type: "object",
+  properties: {
+    id: { type: "string", minLength: 1, maxLength: 80 },
+    priorNodeID: { type: ["string", "null"], maxLength: 80 },
+    beatIndex: { type: "integer", minimum: 0 },
+    entryState: { type: "string", minLength: 1, maxLength: 1200 },
+    characterChoice: { type: "string", minLength: 1, maxLength: 1200 },
+    dramaticEvent: { type: "string", minLength: 1, maxLength: 1600 },
+    resultingChange: { type: "string", minLength: 1, maxLength: 1200 },
+    terminalState: { type: "string", minLength: 1, maxLength: 1200 },
+    newPressure: { type: "string", minLength: 1, maxLength: 900 },
+    advances: { type: "array", minItems: 1, maxItems: 12, items: { type: "string", minLength: 1, maxLength: 120 } },
+    projectedWords: { type: "integer", minimum: 500, maximum: 12000 },
+  },
+  required: ["id", "priorNodeID", "beatIndex", "entryState", "characterChoice", "dramaticEvent", "resultingChange", "terminalState", "newPressure", "advances", "projectedWords"],
+  additionalProperties: false,
+} as const;
 
 const STORY_ARCHITECTURE_SCHEMA = {
   type: "object",
@@ -3489,8 +3528,9 @@ const STORY_ARCHITECTURE_SCHEMA = {
     decisiveClimax: { type: "string", minLength: 1, maxLength: 850 },
     endingConsequence: { type: "string", minLength: 1, maxLength: 650 },
     deliberatelyOpenThreads: { type: "string", minLength: 1, maxLength: 650 },
+    causalSpine: { type: "array", minItems: 1, maxItems: MAX_PLANNED_SECTIONS, items: CAUSAL_DEVELOPMENT_SCHEMA },
   },
-  required: ["arcExperience", "centralQuestion", "characterCausality", "decisiveClimax", "endingConsequence", "deliberatelyOpenThreads"],
+  required: ["arcExperience", "centralQuestion", "characterCausality", "decisiveClimax", "endingConsequence", "deliberatelyOpenThreads", "causalSpine"],
   additionalProperties: false,
 } as const;
 
@@ -3507,15 +3547,15 @@ const ALLOCATION_SCHEMA = {
         type: "object",
         properties: {
           beatIndex: { type: "integer", minimum: 0 },
-          minSections: { type: "integer", minimum: 0, maximum: 20 },
+          minSections: { type: "integer", minimum: 0, maximum: MAX_PLANNED_SECTIONS },
           containerCounts: {
             type: "object", additionalProperties: false,
             properties: {
-              scene: { type: "integer", minimum: 0, maximum: 20 },
-              developedScene: { type: "integer", minimum: 0, maximum: 20 },
-              setPiece: { type: "integer", minimum: 0, maximum: 20 },
-              sceneSequence: { type: "integer", minimum: 0, maximum: 20 },
-              chapter: { type: "integer", minimum: 0, maximum: 20 },
+              scene: { type: "integer", minimum: 0, maximum: MAX_PLANNED_SECTIONS },
+              developedScene: { type: "integer", minimum: 0, maximum: MAX_PLANNED_SECTIONS },
+              setPiece: { type: "integer", minimum: 0, maximum: MAX_PLANNED_SECTIONS },
+              sceneSequence: { type: "integer", minimum: 0, maximum: MAX_PLANNED_SECTIONS },
+              chapter: { type: "integer", minimum: 0, maximum: MAX_PLANNED_SECTIONS },
             },
             required: ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"],
           },
@@ -3579,6 +3619,38 @@ function projectedPlannedContainerWords(allocation: Map<string, Allocation>): nu
  * chapters are distributed in proportion to developed beat allocations, with
  * every addition named in the generated first-pass section contract.
  */
+function containerForCausalDevelopment(words: number): typeof NOVEL_LEAF_CONTAINERS[number] {
+  if (words >= 3500) return "chapter";
+  if (words >= 2800) return "sceneSequence";
+  if (words >= 2000) return "setPiece";
+  if (words >= 1300) return "developedScene";
+  return "scene";
+}
+
+export function deriveAllocationFromCausalSpine(
+  architecture: StoryArchitecture,
+  req: OutlineFromRecipeRequest,
+): Map<string, Allocation> {
+  const allocations = new Map<string, Allocation>(req.arcTemplate.beats.map((beat) => [beat.id, {
+    minSections: 0, coverageMinimum: 0, allocationMinimum: 0,
+    containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 },
+    rationale: "",
+  }]));
+  for (const node of architecture.causalSpine) {
+    const beat = req.arcTemplate.beats[node.beatIndex];
+    const plan = allocations.get(beat.id)!;
+    const container = containerForCausalDevelopment(node.projectedWords);
+    plan.minSections += 1;
+    plan.coverageMinimum = 1;
+    plan.allocationMinimum = plan.minSections;
+    plan.containerCounts![container] += 1;
+    plan.rationale = plan.rationale
+      ? `${plan.rationale} | ${node.id}: ${node.dramaticEvent} → ${node.resultingChange}`
+      : `${node.id}: ${node.dramaticEvent} → ${node.resultingChange}`;
+  }
+  return allocations;
+}
+
 export function fitAllocationToNovelBudget(
   allocation: Map<string, Allocation>,
   req: OutlineFromRecipeRequest,
@@ -3791,6 +3863,66 @@ export function mergeRepairedSuggestions(
   return validateSuggestions({ suggestions: merged }, beatIds, allocation).suggestions;
 }
 
+function validateCausalSpine(raw: unknown, beats: Array<{ id: string }>): CausalDevelopment[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new Error("storyArchitecture.causalSpine must contain ordered developments");
+  }
+  const seen = new Set<string>();
+  let prior: string | null = null;
+  return raw.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`causal spine node ${index + 1} is malformed`);
+    }
+    const node = item as Record<string, unknown>;
+    const id = typeof node.id === "string" ? node.id.trim() : "";
+    if (!id || seen.has(id)) throw new Error(`causal spine node ${index + 1} has a duplicate or empty id`);
+    const priorNodeID = node.priorNodeID === null || node.priorNodeID === undefined
+      ? null
+      : typeof node.priorNodeID === "string" ? node.priorNodeID.trim() : "__invalid__";
+    if (priorNodeID !== prior) {
+      throw new Error(`causal spine node ${id} does not inherit the prior node state`);
+    }
+    const beatIndex = node.beatIndex;
+    if (!Number.isInteger(beatIndex) || Number(beatIndex) < 0 || Number(beatIndex) >= beats.length) {
+      throw new Error(`causal spine node ${id} has an invalid beatIndex`);
+    }
+    const textFields = ["entryState", "characterChoice", "dramaticEvent", "resultingChange", "terminalState", "newPressure"] as const;
+    if (index > 0) {
+      const previous = raw[index - 1] as Record<string, unknown>;
+      const previousTerminal = typeof previous?.terminalState === "string" ? previous.terminalState.trim() : "";
+      if (!previousTerminal || String(node.entryState).trim() !== previousTerminal) {
+        throw new Error(`causal spine node ${id} does not carry forward the prior terminalState exactly`);
+      }
+    }
+    for (const field of textFields) {
+      if (typeof node[field] !== "string" || !node[field].trim()) {
+        throw new Error(`causal spine node ${id} is missing ${field}`);
+      }
+    }
+    if (!Array.isArray(node.advances) || node.advances.length === 0 ||
+        node.advances.some((value) => typeof value !== "string" || !value.trim())) {
+      throw new Error(`causal spine node ${id} must advance at least one thread or obligation`);
+    }
+    const projectedWords = node.projectedWords;
+    if (!Number.isInteger(projectedWords) || Number(projectedWords) < 500) {
+      throw new Error(`causal spine node ${id} has an invalid projectedWords value`);
+    }
+    seen.add(id);
+    prior = id;
+    return {
+      id, priorNodeID, beatIndex: Number(beatIndex),
+      entryState: String(node.entryState).trim(),
+      characterChoice: String(node.characterChoice).trim(),
+      dramaticEvent: String(node.dramaticEvent).trim(),
+      resultingChange: String(node.resultingChange).trim(),
+      terminalState: String(node.terminalState).trim(),
+      newPressure: String(node.newPressure).trim(),
+      advances: (node.advances as string[]).map((value) => value.trim()),
+      projectedWords: Number(projectedWords),
+    };
+  });
+}
+
 export function parseAndValidateAllocation(
   raw: string,
   beats: Array<{ id: string }>,
@@ -3840,7 +3972,7 @@ export function parseAndValidateAllocation(
     if (seen.has(beatID)) {
       throw new Error(`allocation contains duplicate beatIndex: ${String(beatIndex)}`);
     }
-    if (!Number.isInteger(minSections) || Number(minSections) < 0 || Number(minSections) > 20) {
+    if (!Number.isInteger(minSections) || Number(minSections) < 0 || Number(minSections) > MAX_PLANNED_SECTIONS) {
       throw new Error(`allocation has invalid minSections for beat ${beatID}`);
     }
     if (typeof rationale !== "string" || rationale.trim() === "") {
@@ -3856,7 +3988,7 @@ export function parseAndValidateAllocation(
         Object.hasOwn(rawCounts, container) &&
         Number.isInteger((rawCounts as Record<string, unknown>)[container]) &&
         Number((rawCounts as Record<string, unknown>)[container]) >= 0 &&
-        Number((rawCounts as Record<string, unknown>)[container]) <= 20)) {
+        Number((rawCounts as Record<string, unknown>)[container]) <= MAX_PLANNED_SECTIONS)) {
       const counts = Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((container) =>
         [container, Number((rawCounts as Record<string, number>)[container])])) as NovelContainerCounts;
       if (NOVEL_LEAF_CONTAINERS.reduce((sum, container) => sum + counts[container], 0) === Number(minSections)) {
@@ -3885,7 +4017,10 @@ export function parseAndValidateAllocation(
   // Live strict-schema responses include storyArchitecture; reject malformed
   // content rather than silently promoting a half-formed plan.
   const rawArchitecture = (parsed as Record<string, unknown>).storyArchitecture;
-  if (rawArchitecture !== undefined) {
+  if (rawArchitecture === undefined) {
+    throw new Error("allocation planner response missing storyArchitecture");
+  }
+  {
     const keys = STORY_ARCHITECTURE_SCHEMA.required;
     if (!rawArchitecture || typeof rawArchitecture !== "object" || Array.isArray(rawArchitecture) ||
         Object.keys(rawArchitecture).length !== keys.length) {
@@ -3894,6 +4029,10 @@ export function parseAndValidateAllocation(
     const values = rawArchitecture as Record<string, unknown>;
     const architecture = {} as StoryArchitecture;
     for (const key of keys) {
+      if (key === "causalSpine") {
+        architecture.causalSpine = validateCausalSpine(values[key], beats);
+        continue;
+      }
       const value = values[key];
       const maxLength = STORY_ARCHITECTURE_SCHEMA.properties[key].maxLength;
       if (typeof value !== "string" || !value.trim() || value.length > maxLength) {
@@ -3920,6 +4059,9 @@ export function buildAllocationPrompt(
 
 ${isNovel ? `## Binding whole-book creative objective — BEFORE inventing the plot
 Design a FULL-LENGTH NOVEL whose finished prose has a minimum objective of 115,000 WORDS, with a hard maximum of 125,000 words. Develop the story architecture, defining conflict, character journeys, distinct dramatic developments, reversals, climax, and irreversible aftermath with ENOUGH ORIGINAL STORY SUBSTANCE to sustain at least 115,000 words. The word target determines the necessary depth and breadth of DISTINCT dramatic material, never the kind of story the model should choose. Do not select a central conflict because it is familiar, easy to expand, or convenient to structure. First commit to the most compelling recipe-and-arc-faithful conflict and climax; then deepen that chosen story through genuinely different consequential developments rather than changing its creative identity to meet a word budget. After making those author-and-arc-driven story decisions, assign word budgets across the sections, targeting approximately ${NOVEL_FIRST_PASS_WORD_GOAL.toLocaleString()} words as a safety buffer. Words are the story unit; API output tokens are not.` : ""}
+
+## Causal spine before allocation
+Return an ordered causalSpine before treating section counts as meaningful. The spine is the story's primary planning artifact. Each node must inherit the prior node's terminalState through priorNodeID and copy that prior terminalState verbatim into its entryState, name the character choice that causes the development, commit to one concrete dramaticEvent, state the resultingChange and terminalState, identify the newPressure handed forward, name at least one advances thread or obligation, and assign projectedWords for the natural prose capacity of that development. The first node uses priorNodeID=null; every later node references the immediately preceding node. Do not use section counts, container labels, or word targets to compensate for missing causal developments. The causal spine must project at least 115,000 finished-prose words for a novel before allocations are finalized; keep adding distinct developments until it does.
 
 ## Binding experience of the selected Story Arc (same model call)
 ${arcReaderExperienceDirective(req.arcTemplate)}
@@ -4070,22 +4212,29 @@ export async function planSectionAllocation(
   };
 
   let correctionReason = "";
+  let previousArchitecture: StoryArchitecture | undefined;
   const call = async (correction: boolean): Promise<string> => {
     const callSystem = correction
-      ? `${system}\n\nThe previous allocation was invalid. The exact validation error was: ${correctionReason || "the response did not satisfy the complete allocation contract"}. Return a complete corrected allocation for every beatIndex from 0 through ${req.arcTemplate.beats.length - 1}; never omit, duplicate, or invent a beat. Re-check the count against the supplied ordered beat list before returning JSON.`
+      ? `${system}\n\nThe previous allocation was invalid or underdeveloped. The exact planning instruction is: ${correctionReason || "the response did not satisfy the complete allocation contract"}. Preserve valid causal nodes, add genuinely new character-caused developments until the required novel length is reached, then return the complete corrected allocation for every beatIndex from 0 through ${req.arcTemplate.beats.length - 1}; never omit, duplicate, or invent a beat. Re-check the count against the supplied ordered beat list before returning JSON.`
       : system;
+    const callUser = correction && previousArchitecture
+      ? `${user}\n\n## Existing causal spine to expand\n${JSON.stringify(previousArchitecture.causalSpine)}`
+      : user;
     const rawResult = billableCall
       ? await billableCall(
         callSystem,
-        user,
-        3600,
+        callUser,
+        12000,
         responseFormat,
         correction ? "outline-plan-retry" : "outline-plan",
-        (content, finishReason) => parseAndValidateAllocation(content, req.arcTemplate.beats, finishReason),
+        (content, finishReason) => parseAndValidateAllocation(
+          content, req.arcTemplate.beats, finishReason,
+          (value) => { previousArchitecture = value; },
+        ),
       )
       : {
-        content: await callOpenAI(callSystem, user, apiKey, {
-          maxTokens: 3600,
+        content: await callOpenAI(callSystem, callUser, apiKey, {
+          maxTokens: 12000,
           useJsonSchema: true,
           jsonSchemaName: "outline_section_allocations",
           jsonSchema: allocationSchema,
@@ -4096,17 +4245,41 @@ export async function planSectionAllocation(
     return rawResult.content;
   };
 
+  let correction = options.retryOnly === true;
   let firstError: Error | undefined;
-  const corrections = options.retryOnly ? [true] : [false, true];
-  for (const correction of corrections) {
+  while (true) {
     try {
       let architecture: StoryArchitecture | undefined;
       const parsed = parseAndValidateAllocation(
         await call(correction), req.arcTemplate.beats, undefined,
         (value) => { architecture = value; },
       );
-      const fitted = fitAllocationToNovelBudget(parsed, req);
-      if (architecture) options.onArchitecture?.(architecture);
+      if (requestedStoryMaterialFormat(req) === "novel") {
+        const projectedWords = architecture?.causalSpine.reduce(
+          (total, node) => total + node.projectedWords, 0,
+        ) ?? 0;
+        if (projectedWords < NOVEL_PREFERRED_MIN_WORDS) {
+          correctionReason = `causal spine projects ${projectedWords.toLocaleString()} words; continue developing distinct causal nodes until it reaches at least ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()} words`;
+          previousArchitecture = architecture;
+          correction = true;
+          continue;
+        }
+      }
+      if (!architecture) throw new Error("causal architecture was not returned");
+      const fitted = requestedStoryMaterialFormat(req) === "novel"
+        ? deriveAllocationFromCausalSpine(architecture, req)
+        : fitAllocationToNovelBudget(parsed, req);
+      if (requestedStoryMaterialFormat(req) === "novel") {
+        const projectedContainerWords = projectedPlannedContainerWords(fitted) +
+          projectedExpectedWords(req.existingSections ?? []);
+        if (projectedContainerWords < NOVEL_PREFERRED_MIN_WORDS) {
+          correctionReason = `causal developments map to ${projectedContainerWords.toLocaleString()} projected words; continue developing distinct nodes until container capacity reaches at least ${NOVEL_PREFERRED_MIN_WORDS.toLocaleString()} words`;
+          previousArchitecture = architecture;
+          correction = true;
+          continue;
+        }
+      }
+      options.onArchitecture?.(architecture);
       return fitted;
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
@@ -4117,13 +4290,10 @@ export async function planSectionAllocation(
       firstError = error;
       correctionReason = error.message;
       if (!correction && options.deferRetry) throw new AllocationRetryRequired(error.message);
+      if (correction) throw new Error(`allocation planner failed validation after retry: ${firstError.message}`);
+      correction = true;
     }
   }
-  throw new Error(
-    `allocation planner failed validation after retry: ${
-      firstError?.message ?? "unknown error"
-    }`,
-  );
 }
 
 export async function checkRateLimit(
@@ -4349,6 +4519,30 @@ export function normalizeTerminalBeat(
   return (fallback ?? terminalBeat).trim().slice(0, 1000);
 }
 
+export function validateCausalDevelopmentLinks(
+  suggestions: Array<Pick<Suggestion, "causalDevelopmentID" | "storyArcBeatID">>,
+  architecture: StoryArchitecture,
+  beats: Array<{ id: string }>,
+): void {
+  const nodes = new Map(architecture.causalSpine.map((node) => [node.id, node]));
+  const used = new Set<string>();
+  for (const suggestion of suggestions) {
+    const id = suggestion.causalDevelopmentID?.trim();
+    if (!id) throw new Error("section is missing causalDevelopmentID");
+    if (used.has(id)) throw new Error(`causal development ${id} is assigned to more than one section`);
+    const node = nodes.get(id);
+    if (!node) throw new Error(`section references unknown causal development ${id}`);
+    if (beats[node.beatIndex]?.id !== suggestion.storyArcBeatID) {
+      throw new Error(`section for causal development ${id} is assigned to the wrong Story Arc beat`);
+    }
+    used.add(id);
+  }
+  if (used.size !== nodes.size) {
+    const missing = architecture.causalSpine.filter((node) => !used.has(node.id)).map((node) => node.id);
+    throw new Error(`causal developments are missing section contracts: ${missing.join(", ")}`);
+  }
+}
+
 export function validateSuggestions(
   parsed: any,
   beatIds: Set<string>,
@@ -4434,6 +4628,7 @@ export function validateSuggestions(
       ...(typeof s.dramaticEvent === "string" ? { dramaticEvent: s.dramaticEvent.slice(0, 2000) } : {}),
       ...(typeof s.resultingChange === "string" ? { resultingChange: s.resultingChange.slice(0, 1200) } : {}),
       ...(typeof s.terminalState === "string" ? { terminalState: s.terminalState.slice(0, 1200) } : {}),
+      ...(typeof s.causalDevelopmentID === "string" ? { causalDevelopmentID: s.causalDevelopmentID.slice(0, 80) } : {}),
       ...(DRAMATIC_FUNCTIONS.includes(s.dramaticFunction) ? { dramaticFunction: s.dramaticFunction as DramaticFunction } : {}),
       ...(groundedEvidence.value ? { arcObligationEvidence: groundedEvidence.value } : {}),
       plannedWordRange: plannedWordRangeForContainer(s.container),
@@ -6877,7 +7072,9 @@ export async function runSuggestionJob(
           await updateRun({ suggestions: latestProviderCandidate, diagnostics });
           diagnostics = { ...diagnostics, stage: "outline_validating" };
           const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
+          if (!storyArchitecture) throw new Error("causal architecture was not persisted before outline generation");
           const deduped = removeDuplicateOutlineSections(validated.suggestions, requiredFunctionOrderByBeat);
+          validateCausalDevelopmentLinks(deduped.suggestions, storyArchitecture, body.arcTemplate.beats);
           validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
           const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true);
           if (merged.length > MAX_PLANNED_SECTIONS) {
@@ -6893,7 +7090,9 @@ export async function runSuggestionJob(
         requiredFunctionOrderByBeat,
       );
       const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
+      if (!storyArchitecture) throw new Error("causal architecture was not persisted before outline generation");
       const deduped = removeDuplicateOutlineSections(validated.suggestions, requiredFunctionOrderByBeat);
+      validateCausalDevelopmentLinks(deduped.suggestions, storyArchitecture, body.arcTemplate.beats);
       validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true), warnings: validated.warnings };
       // Structural replay is removed before any durable checkpoint or semantic
