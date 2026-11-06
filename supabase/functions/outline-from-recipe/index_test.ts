@@ -8505,3 +8505,89 @@ Deno.test("architecture first: acceptance SQL preserves architect targets and sh
   assertStringIncludes(model, "coveredStoryArcBeatIDs");
   assertStringIncludes(sync, "section.coveredStoryArcBeatIDs = payload.coveredStoryArcBeatIDs");
 });
+
+Deno.test("architecture first: missing creative coverage never becomes a terminal planning gate", () => {
+  const request = architectureFirstRequest();
+  const units = [
+    architectureFirstUnit(0, "The Setup", "scene"),
+    architectureFirstUnit(2, "The Consequence", "chapter"),
+  ];
+  const plan = parseNovelArchitecturePlan(JSON.stringify({
+    storyArchitecture: architectureFirstFixture,
+    sections: units,
+  }), request);
+  assertEquals(plan.get("b1")?.minSections, 0);
+  assertEquals(plan.get("b1")?.plannedSections?.length, 0);
+  assertEquals(Array.from(plan.values()).reduce((sum, beat) => sum + beat.minSections, 0), 2);
+  const schema = buildSuggestionResponseSchema(
+    request.arcTemplate.beats, plan, [], request.arcTemplate.name, "novel",
+  );
+  assertEquals((schema.properties.beats as any).properties.b1.maxItems, 0);
+});
+
+Deno.test("architecture first: an accepted shared event remains covered after continuation", () => {
+  const request = architectureFirstRequest([{
+    storyArcBeatID: "b0",
+    coveredStoryArcBeatIDs: ["b0", "b1"],
+    title: "The Already Accepted Collision",
+    container: "chapter",
+    targetWords: 6500,
+  }]);
+  const plan = parseNovelArchitecturePlan(JSON.stringify({
+    storyArchitecture: architectureFirstFixture,
+    sections: [architectureFirstUnit(2, "The New Aftermath")],
+  }), request);
+  assertEquals(plan.get("b0")?.minSections, 0);
+  assertEquals(plan.get("b1")?.minSections, 0);
+  assertEquals(plan.get("b2")?.minSections, 1);
+  assertEquals(plan.get("b2")?.plannedSections?.length, 1);
+});
+
+Deno.test("architecture first: first-pass prose cannot replace the architect's event or outcome", () => {
+  const request = architectureFirstRequest();
+  const plan = parseNovelArchitecturePlan(JSON.stringify({
+    storyArchitecture: architectureFirstFixture,
+    sections: [
+      architectureFirstUnit(0, "Authoritative Incident", "chapter", [1]),
+      architectureFirstUnit(2, "Authoritative Ending", "sceneSequence"),
+    ],
+  }), request);
+  const draft = {
+    beats: {
+      b0: [{
+        title: "Different Plot", summary: "Develop this chapter's emotional stakes.",
+        pov: "thirdPersonLimited", terminalBeat: "The threat changes.",
+        dramaticEvent: "A completely unrelated event.",
+        resultingChange: "An unrelated consequence.",
+      }],
+      b1: [],
+      b2: [{
+        title: "Different Ending", summary: "Develop the ending.",
+        pov: "thirdPersonLimited", terminalBeat: "The ending takes hold.",
+        dramaticEvent: "An unrelated finale.",
+        resultingChange: "An unrelated result.",
+      }],
+    },
+  };
+  const sections = flattenSuggestionResponse(draft, request.arcTemplate.beats, plan).suggestions;
+  assertEquals(sections.map((section) => section.title), ["Authoritative Incident", "Authoritative Ending"]);
+  assertEquals(sections[0].dramaticEvent, plan.get("b0")?.plannedSections?.[0].dramaticEvent);
+  assertEquals(sections[1].resultingChange, plan.get("b2")?.plannedSections?.[0].resultingChange);
+  assertEquals(sections[0].coveredStoryArcBeatIDs, ["b0", "b1"]);
+});
+
+Deno.test("architecture first: atomic acceptance preserves custom targets and shared-beat metadata", async () => {
+  const [accept, migration, builder] = await Promise.all([
+    Deno.readTextFile("./supabase/functions/accept-outline-sections/index.ts"),
+    Deno.readTextFile("./supabase/migrations/20261106002500_preserve_architect_targets_and_shared_beat_coverage.sql"),
+    Deno.readTextFile("./CathedralOSApp/Services/AcceptAllRequestBuilder.swift"),
+  ]);
+  assertStringIncludes(builder, "coveredStoryArcBeatIDs: suggestion.coveredStoryArcBeatIDs");
+  assertStringIncludes(accept, "target_words: s.targetWords");
+  assertStringIncludes(accept, "target_words_min: s.targetWordsMin");
+  assertStringIncludes(accept, "target_words_max: s.targetWordsMax");
+  assertStringIncludes(accept, "covered_story_arc_beat_ids: s.coveredStoryArcBeatIDs ?? []");
+  assertStringIncludes(migration, "v_sec->>'target_words'");
+  assertStringIncludes(migration, "covered_story_arc_beat_ids = excluded.covered_story_arc_beat_ids");
+  assertStringIncludes(migration, "'coveredStoryArcBeatIDs',coalesce(os.covered_story_arc_beat_ids");
+});
