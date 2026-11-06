@@ -4124,26 +4124,11 @@ export function parseNovelArchitecturePlan(
     plan.rationale = plan.plannedSections!.map((unit) =>
       `${unit.title}: ${unit.dramaticEvent} → ${unit.resultingChange}`).join(" | ");
   }
-  // When architecture leaves a non-climactic neighboring beat without a
-  // standalone unit, let the nearest existing dramatic unit carry that beat's
-  // progression rather than manufacturing another section or ending the run.
-  // Its central event remains architect-authored; the first-pass writer can
-  // develop the adjacent beat's dramatic effect within that same unit.
-  for (const [index, beat] of beats.entries()) {
-    if (covered.has(index) || existingCovered.has(index)) continue;
-    const required = outstandingRequiredFunctionsByBeat(
-      [beat], req.arcTemplate.name, req.existingSections ?? [],
-    ).get(beat.id) ?? [];
-    if (required.length) continue; // Never disguise a missing one-time climax.
-    const previous = index > 0 ? allocations.get(beats[index - 1].id)?.plannedSections?.at(-1) : undefined;
-    const next = index + 1 < beats.length ? allocations.get(beats[index + 1].id)?.plannedSections?.[0] : undefined;
-    const carrier = previous ?? next;
-    if (carrier) {
-      carrier.coveredBeatIndices = [...new Set([...carrier.coveredBeatIndices, index])].sort((a, b) => a - b);
-      covered.add(index);
-    }
-  }
-
+  // Only the architect can declare that one dramatic event fulfills
+  // another beat. Never quietly claim a missing beat is covered by its
+  // neighbor: that conceals incomplete creative work and corrupts the
+  // shared-beat metadata. Preserve the plan and report omissions as
+  // advisory quality findings instead of inserting filler or failing.
   // Cover each authored movement, allowing one significant scene to realize
   // neighboring beats without creating a second section or rewriting history.
   for (const [index, beat] of beats.entries()) {
