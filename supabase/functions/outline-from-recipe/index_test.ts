@@ -8517,8 +8517,9 @@ Deno.test("architecture first: missing creative coverage never becomes a termina
   }), request);
   assertEquals(plan.get("b1")?.minSections, 0);
   assertEquals(plan.get("b1")?.plannedSections?.length, 0);
-  assertEquals(plan.get("b0")?.plannedSections?.[0].coveredBeatIndices, [0, 1]);
-  assertEquals(plan.get("b1")?.coveredBySharedSection, true);
+  // Only explicit architect-authored shared coverage may claim a beat.
+  assertEquals(plan.get("b0")?.plannedSections?.[0].coveredBeatIndices, [0]);
+  assertEquals(plan.get("b1")?.coveredBySharedSection, undefined);
   assertEquals(Array.from(plan.values()).reduce((sum, beat) => sum + beat.minSections, 0), 2);
   const schema = buildSuggestionResponseSchema(
     request.arcTemplate.beats, plan, [], request.arcTemplate.name, "novel",
