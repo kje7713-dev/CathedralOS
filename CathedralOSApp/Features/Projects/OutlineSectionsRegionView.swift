@@ -2327,8 +2327,8 @@ struct ActiveRunBanner: View {
             .contentShape(Rectangle())
             .onTapGesture { onNavigate?() }
             Spacer()
-            if isPaused, let onResume {
-                Button("Resume") {
+            if status.isResumable, let onResume {
+                Button("Resume Run") {
                     Task { await onResume() }
                 }
                 .buttonStyle(.borderedProminent)
