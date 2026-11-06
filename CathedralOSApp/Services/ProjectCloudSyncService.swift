@@ -2010,6 +2010,7 @@ final class ProjectCloudSyncService: ProjectCloudSyncServiceProtocol {
                 section.storyArcBeatID = nil
             }
             section.recipeRequirementIDs = payload.recipeRequirementIDs
+            section.coveredStoryArcBeatIDs = payload.coveredStoryArcBeatIDs
             section.outline = outline
             if !outline.sections.contains(where: { $0.id == section.id }) {
                 outline.sections.append(section)
