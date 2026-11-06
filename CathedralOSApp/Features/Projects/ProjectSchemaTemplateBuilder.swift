@@ -875,8 +875,7 @@ enum ProjectSchemaTemplateBuilder {
                         status: section.status,
                         parentID: section.parent?.id.uuidString,
                         storyArcBeatID: section.storyArcBeatID?.uuidString,
-                        recipeRequirementIDs: section.recipeRequirementIDs,
-                        coveredStoryArcBeatIDs: section.coveredStoryArcBeatIDs
+                        recipeRequirementIDs: section.recipeRequirementIDs
                     )
                 }
 

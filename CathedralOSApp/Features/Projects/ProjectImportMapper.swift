@@ -264,7 +264,6 @@ enum ProjectImportMapper {
                         section.storyArcBeatID = storyArcBeatID
                     }
                     section.recipeRequirementIDs = sp.recipeRequirementIDs
-                    section.coveredStoryArcBeatIDs = sp.coveredStoryArcBeatIDs
                     section.outline = outline
                     return section
                 }

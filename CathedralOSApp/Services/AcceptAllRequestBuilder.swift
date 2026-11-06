@@ -45,10 +45,6 @@ struct AcceptAllRequestBuilder {
                 "resultingChange:\(s.resultingChange ?? "")",
                 "terminalState:\(s.terminalState ?? "")",
                 "storyArcBeatID:\(s.storyArcBeatID)",
-                "targetWords:\(s.targetWords.map(String.init) ?? "")",
-                "targetWordsMin:\(s.targetWordsMin.map(String.init) ?? "")",
-                "targetWordsMax:\(s.targetWordsMax.map(String.init) ?? "")",
-                "coveredStoryArcBeatIDs:\((s.coveredStoryArcBeatIDs ?? []).joined(separator: ","))",
                 "recipeRequirementIDs:\(((s.recipeRequirementIDs ?? []).sorted().joined(separator: ",")))",
             ].joined(separator: "|")
         }.joined(separator: "\n")
@@ -106,11 +102,10 @@ struct AcceptAllRequestBuilder {
                 dramaticEvent: suggestion.dramaticEvent,
                 resultingChange: suggestion.resultingChange,
                 terminalState: suggestion.terminalState,
-                targetWords: suggestion.targetWords,
-                targetWordsMin: suggestion.targetWordsMin,
-                targetWordsMax: suggestion.targetWordsMax,
+                targetWords: nil,
+                targetWordsMin: nil,
+                targetWordsMax: nil,
                 storyArcBeatID: suggestion.storyArcBeatID,
-                coveredStoryArcBeatIDs: suggestion.coveredStoryArcBeatIDs,
                 recipeRequirementIDs: suggestion.recipeRequirementIDs
             )
         }

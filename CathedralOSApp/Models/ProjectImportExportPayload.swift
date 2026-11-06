@@ -322,10 +322,9 @@ struct ProjectImportExportPayload: Codable {
         let parentID: String?
         let storyArcBeatID: String?
         let recipeRequirementIDs: [String]
-        let coveredStoryArcBeatIDs: [String]
 
         enum CodingKeys: String, CodingKey {
-            case id, position, title, summary, container, pov, terminalBeat, entryState, dramaticEvent, resultingChange, terminalState, targetWords, targetWordsMin, targetWordsMax, status, parentID, storyArcBeatID, recipeRequirementIDs, coveredStoryArcBeatIDs
+            case id, position, title, summary, container, pov, terminalBeat, entryState, dramaticEvent, resultingChange, terminalState, targetWords, targetWordsMin, targetWordsMax, status, parentID, storyArcBeatID, recipeRequirementIDs
         }
 
         init(from decoder: Decoder) throws {
@@ -348,10 +347,9 @@ struct ProjectImportExportPayload: Codable {
             parentID = try c.decodeIfPresent(String.self, forKey: .parentID)
             storyArcBeatID = try c.decodeIfPresent(String.self, forKey: .storyArcBeatID)
             recipeRequirementIDs = try c.decodeIfPresent([String].self, forKey: .recipeRequirementIDs) ?? []
-            coveredStoryArcBeatIDs = try c.decodeIfPresent([String].self, forKey: .coveredStoryArcBeatIDs) ?? []
         }
 
-        init(id: String?, position: Int, title: String, summary: String, container: String?, pov: String?, terminalBeat: String?, entryState: String? = nil, dramaticEvent: String? = nil, resultingChange: String? = nil, terminalState: String? = nil, targetWords: Int? = nil, targetWordsMin: Int? = nil, targetWordsMax: Int? = nil, status: String, parentID: String?, storyArcBeatID: String?, recipeRequirementIDs: [String] = [], coveredStoryArcBeatIDs: [String] = []) {
+        init(id: String?, position: Int, title: String, summary: String, container: String?, pov: String?, terminalBeat: String?, entryState: String? = nil, dramaticEvent: String? = nil, resultingChange: String? = nil, terminalState: String? = nil, targetWords: Int? = nil, targetWordsMin: Int? = nil, targetWordsMax: Int? = nil, status: String, parentID: String?, storyArcBeatID: String?, recipeRequirementIDs: [String] = []) {
             self.id = id
             self.position = position
             self.title = title
@@ -370,7 +368,6 @@ struct ProjectImportExportPayload: Codable {
             self.parentID = parentID
             self.storyArcBeatID = storyArcBeatID
             self.recipeRequirementIDs = recipeRequirementIDs
-            self.coveredStoryArcBeatIDs = coveredStoryArcBeatIDs
         }
     }
     struct PromptPackPayload: Codable {

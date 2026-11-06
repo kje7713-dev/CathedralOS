@@ -326,7 +326,6 @@ struct AcceptOutlineSection: Codable {
     let targetWordsMin: Int?
     let targetWordsMax: Int?
     let storyArcBeatID: String?
-    let coveredStoryArcBeatIDs: [String]?
     let recipeRequirementIDs: [String]?
 }
 

@@ -15,13 +15,6 @@ struct OutlineSuggestion: Codable, Identifiable, Equatable {
     let resultingChange: String?
     let terminalState: String?
     let storyArcBeatID: String
-    /// Optional architect-selected prose length, preserved into Accept All.
-    /// Defaults let legacy suggestions retain the container-based budget.
-    var targetWords: Int? = nil
-    var targetWordsMin: Int? = nil
-    var targetWordsMax: Int? = nil
-    /// Additional neighboring beats realized by the same physical section.
-    var coveredStoryArcBeatIDs: [String]? = nil
     /// Server-derived recipe obligations materially advanced by this section.
     /// Optional for compatibility with older suggestion responses.
     let recipeRequirementIDs: [String]?
@@ -172,12 +165,6 @@ struct ExistingSectionBlob: Codable {
     /// nil for manual/free-form sections (no story arc beat linkage).
     let storyArcBeatID: String?
     let recipeRequirementIDs: [String]?
-    /// Accepted prose-development budget, used when later planning appends to an existing novel.
-    var targetWords: Int? = nil
-    var targetWordsMin: Int? = nil
-    var targetWordsMax: Int? = nil
-    /// Other beats fulfilled by this same already accepted dramatic section.
-    var coveredStoryArcBeatIDs: [String]? = nil
 }
 
 struct OutlineSuggestionJob: Codable {

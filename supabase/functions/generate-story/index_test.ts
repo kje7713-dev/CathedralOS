@@ -6080,20 +6080,3 @@ Deno.test("planned development targets are rendered as bounded generation guidan
   assertStringIncludes(prompt, "615–1,385 words");
   assertStringIncludes(prompt, "container hard cap and Section Contract remain authoritative");
 });
-
-Deno.test("architect-sized prose targets override legacy token-range guidance without changing container shape", () => {
-  const result = buildPrompt({
-    ...MINIMAL_PROMPT_ARGS,
-    container: "chapter",
-    plannedTargetWords: 9500,
-    plannedTargetWordsMin: 8550,
-    plannedTargetWordsMax: 10450,
-  });
-  const prompt = `${result.craft}\n${result.context}`;
-  assertStringIncludes(prompt, "Write one complete chapter (approximately 9,500 words expected)");
-  assertStringIncludes(prompt, "Preferred range: 8,550–10,450 words");
-  assertStringIncludes(prompt, "What it contains:");
-  assertStringIncludes(prompt, "A publishing or pacing division containing one or more scenes");
-  assertEquals(prompt.includes("3,000–8,000+ tokens expected"), false);
-  assertStringIncludes(prompt, "The target is a development target, not a command to hit an exact word count");
-});

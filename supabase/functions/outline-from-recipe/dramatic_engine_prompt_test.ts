@@ -52,25 +52,44 @@ function requestFor(arc: typeof arcCases[number]) {
 Deno.test("shared dramatic-engine prompts apply to every genre without adding stages or schema", () => {
   assertStringIncludes(RECIPE_CREATIVE_AUTHORITY_DIRECTIVE, "NOT an independent requirement to invent that machinery");
   assertStringIncludes(RECIPE_CREATIVE_AUTHORITY_DIRECTIVE, "Emotional and interpersonal causality is the dramatic foundation");
-  assertStringIncludes(RECIPE_CREATIVE_AUTHORITY_DIRECTIVE, "Do not preselect ANY moral trajectory");
+  assertStringIncludes(RECIPE_CREATIVE_AUTHORITY_DIRECTIVE, "without imposing romance, redemption, reconciliation");
   for (const arc of arcCases) {
     const req = requestFor(arc);
     const enrichment = buildEnrichmentPrompt(req).system;
-    const architecture = buildAllocationPrompt(req).system;
+    const allocation = buildAllocationPrompt(req).system;
     const outline = buildPrompt(req, new Map()).system;
     assertStringIncludes(enrichment, "Creative independence of generated material", arc.name);
-    assertStringIncludes(enrichment, "Make emotional and interpersonal dynamics", arc.name);
-    assertStringIncludes(architecture, "Architecture first: identify anchors", arc.name);
-    assertStringIncludes(architecture, "The number of entries is determined by narrative necessity", arc.name);
-    assertStringIncludes(architecture, "A separate deterministic server step", arc.name);
-    assertStringIncludes(architecture, "Optional enrichment is not canon", arc.name);
-    assertStringIncludes(architecture, arcReaderExperienceDirective(req.arcTemplate), arc.name);
+    assertStringIncludes(enrichment, "Make emotional and interpersonal dynamics the source of the proposed drama", arc.name);
+    assertStringIncludes(allocation, "Select the strongest author-and-arc-driven dramatic engine", arc.name);
+    assertStringIncludes(allocation, "dramatic engine is the evolving emotional and interpersonal conflict", arc.name);
+    assertStringIncludes(allocation, "emotionally charged interpersonal decisions", arc.name);
     assertStringIncludes(outline, "Dramatize the chosen story", arc.name);
     assertStringIncludes(outline, "The plot and relationships should evolve through the SAME actions", arc.name);
+    assertStringIncludes(allocation, "Within THIS EXISTING planning response", arc.name);
+    assertStringIncludes(allocation, "not a new validity gate or failure path", arc.name);
+    assertStringIncludes(outline, "without additional stages, sections, or repair", arc.name);
+    // Every genre may retain its defining narrative form without promoting enrichment into canon.
+    assertStringIncludes(allocation, "Any mode of storytelling, including procedural or investigative storytelling", arc.name);
+    assertStringIncludes(allocation, "never the kind of story the model should choose", arc.name);
+    assertStringIncludes(allocation, "Its existence does not determine the story's central conflict", arc.name);
+    assertStringIncludes(allocation, "deepen that chosen story through genuinely different consequential developments", arc.name);
+    assertStringIncludes(enrichment, "No element gains narrative authority merely because an earlier model invented it", arc.name);
+    assertStringIncludes(outline, "selected architecture, accepted history, allocated slots", arc.name);
+    // Plot-open and genre-specific recipes share the same creative range rules.
+    assertStringIncludes(enrichment, "Independent dramatic agency and surprising possibilities", arc.name);
+    assertStringIncludes(enrichment, "independent appetites, contradictions, loyalties, blind spots", arc.name);
+    assertStringIncludes(enrichment, "provisional possibilities", arc.name);
+    assertStringIncludes(allocation, "Book-scale transformations before section allocation", arc.name);
+    assertStringIncludes(allocation, "next dramatic problem is meaningfully different from the last", arc.name);
+    assertStringIncludes(allocation, "Map these transformations into the EXISTING ordered arc beats", arc.name);
+    assertStringIncludes(allocation, "Do not create mandatory twist counts, schema fields, model calls, validation gates, or repair stages", arc.name);
     assertStringIncludes(outline, "Fresh dramatic work across the complete outline", arc.name);
-    assertStringIncludes(outline, "climax must deliver an exceptional", arc.name);
+    assertStringIncludes(outline, "Recurring emotional themes are welcome", arc.name);
+    assertStringIncludes(outline, "climax must deliver an exceptional, emotionally powerful and causally earned change", arc.name);
+    assertStringIncludes(outline, "not a request for extra sections, another pass, or new rules", arc.name);
   }
 });
+
 Deno.test("all 27 seeded arc templates are audited and only canonical text is updated", async () => {
   const swift = await Deno.readTextFile("./CathedralOSApp/Models/StoryArcTemplate.swift");
   const migration = await Deno.readTextFile("./supabase/migrations/20261105130434_debias_all_default_story_arc_beats.sql");
@@ -177,41 +196,51 @@ Deno.test("all 27 default arcs require 262 different creative causal beat advanc
 Deno.test("allocation demands a unique event and causal state for each section before sizing", () => {
   for (const arc of arcCases) {
     const req = requestFor(arc);
-    const architect = buildAllocationPrompt(req).system;
-    const outline = buildPrompt(req, new Map()).system;
-    assertStringIncludes(architect, "Each entry is a DISTINCT dramatic unit");
-    assertStringIncludes(architect, "Every chosen unit must change what happens next");
-    assertStringIncludes(architect, "People cannot leave twice without returning");
-    assertStringIncludes(architect, "Do not calculate words, tokens, minSections");
-    assertStringIncludes(outline, "inherit the last completed dramatic state");
-    assertStringIncludes(outline, "The scene must change a real option, relationship, danger, power balance");
-    assertEquals(outline.includes("another instance of the same thematic problem"), true);
+    const allocation = buildAllocationPrompt(req).system;
+    const firstPass = buildPrompt(req, new Map()).system;
+    assertStringIncludes(allocation, "The entire ordered Story Arc is a causal progression");
+    assertStringIncludes(allocation, "For a beat allocated N sections, describe N different actual character actions");
+    assertStringIncludes(allocation, "a NEW external or interpersonal action genuinely changes");
+    assertStringIncludes(firstPass, "inherit the last completed dramatic state");
+    assertStringIncludes(firstPass, "The scene must change a real option, relationship, danger, power balance");
+    assertEquals(firstPass.includes("another instance of the same thematic problem"), true);
   }
 });
+
 Deno.test("recipe-driven character identity and moral direction survive every existing planning stage", () => {
-  const directions = [
-    "An addict makes a hard-earned change and leaves their destructive habit.",
-    "A calculating trickster grows more reckless without moral improvement.",
-    "A volatile lover's moral trajectory is deliberately left open.",
+  // These three mutually different story instructions must all be permitted;
+  // no common redemption or degeneration outcome may be forced by the prompts.
+  const authoredDirections = [
+    "A dangerous addict makes a hard-earned change and gives up their destructive habit.",
+    "A calculating trickster grows more reckless and remains morally compromised.",
+    "A volatile lover has no assigned moral future; their decisions determine it.",
   ];
-  for (const direction of directions) {
+  for (const direction of authoredDirections) {
     for (const arc of arcCases) {
       const req = requestFor(arc);
-      req.recipe = { ...recipe, project: { ...recipe.project, summary: direction },
-        selectedCharacters: [{ id: "a", name: "Character A", goals: ["Pursue dangerous pleasure"], flaws: ["Impulsive"] }] };
-      const stages = [
-        buildEnrichmentPrompt(req), buildAllocationPrompt(req), buildPrompt(req, new Map()),
-      ];
-      for (const stage of stages) {
+      req.recipe = {
+        ...recipe,
+        project: { ...recipe.project, summary: direction, audienceNotes: "Preserve authorial tone and character complexity." },
+        selectedCharacters: [
+          { id: "a", name: "Character A", goals: ["Pursue dangerous pleasure"], flaws: ["Impulsive"], contradictions: ["Protective and cruel"] },
+          { id: "b", name: "Character B", goals: ["Preserve a risky bond"], flaws: ["Deceptive"] },
+        ],
+      } as any;
+      const enrichment = buildEnrichmentPrompt(req);
+      const architecture = buildAllocationPrompt(req);
+      const outline = buildPrompt(req, new Map());
+      for (const stage of [enrichment, architecture, outline]) {
         assertStringIncludes(stage.system, "Do not preselect ANY moral trajectory");
         assertStringIncludes(stage.system, "the recipe's populated character traits");
         assertStringIncludes(stage.user, direction);
         assertStringIncludes(stage.user, "Pursue dangerous pleasure");
       }
-      assertStringIncludes(stages[1].system, "never impose a moral destination");
-      assertStringIncludes(stages[1].system, "remain active creative causes through late events");
-      assertStringIncludes(stages[2].system, "including its later sections");
-      assertStringIncludes(stages[2].system, "they are repetitive writing");
+      assertStringIncludes(architecture.system, "Across early, middle, and late beat rationales");
+      assertStringIncludes(architecture.system, "a virtue lesson or a plunge into vice");
+      assertStringIncludes(architecture.system, "An object, document, delivery, permit, institution");
+      assertStringIncludes(architecture.system, "check whether the planned centralQuestion");
+      assertStringIncludes(outline.system, "including its later sections");
+      assertStringIncludes(outline.system, "they are repetitive writing");
     }
   }
 });
