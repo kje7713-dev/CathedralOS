@@ -1918,7 +1918,7 @@ export function buildPrompt(req: {
     expectedRange: string,
     stoppingRule?: string,
   ): string =>
-    `Write one complete ${containerName.toLowerCase()} (${expectedRange} tokens expected).
+    `Write one complete ${containerName.toLowerCase()} (${expectedRange} expected).
 
 What it contains:
 ${whatItContains}
@@ -1950,6 +1950,12 @@ Structural limits:
   // commit). The model weighs structural limits much more heavily when they
   // appear in the system message vs the user message.
   const cfg = containerConfig[req.container];
+  // An accepted outline's architect-sized WORD target takes precedence over
+  // the older generic TOKEN range. Keep the container's actual dramatic shape
+  // and natural stopping point unchanged; do not fill the length with new plot.
+  const lengthExpectation = plannedTargetWords
+    ? `approximately ${plannedTargetWords.toLocaleString()} words`
+    : `${cfg.expectedRange} tokens`;
   const craftLines: string[] = [
     "You are a creative writing assistant helping authors craft compelling story content.",
     "",
@@ -1958,7 +1964,7 @@ Structural limits:
       cfg.name,
       cfg.whatItContains,
       cfg.naturalStoppingPoint,
-      cfg.expectedRange,
+      lengthExpectation,
       cfg.stoppingRule,
     ),
     ...(plannedLengthGuidance ? ["", plannedLengthGuidance] : []),
@@ -2013,8 +2019,8 @@ Structural limits:
       `- Container: ${cfg.name}`,
       `- What it contains: ${cfg.whatItContains}`,
       `- Natural stopping point: ${cfg.naturalStoppingPoint}`,
-      `- Expected range: ${cfg.expectedRange}`,
-      `- Hard cap: ${cfg.hardCap} tokens`,
+      `- Expected range: ${lengthExpectation}`,
+      `- Hard cap: ${plannedTargetWords ? CONTAINER_HARD_CAPS[req.container] : cfg.hardCap} tokens`,
       "",
     );
   }

@@ -469,7 +469,11 @@ struct OutlineSuggestionService {
                 resultingChange: section.resultingChange,
                 terminalState: section.terminalState,
                 storyArcBeatID: section.storyArcBeatID?.uuidString,
-                recipeRequirementIDs: section.recipeRequirementIDs
+                recipeRequirementIDs: section.recipeRequirementIDs,
+                targetWords: section.targetWords,
+                targetWordsMin: section.targetWordsMin,
+                targetWordsMax: section.targetWordsMax,
+                coveredStoryArcBeatIDs: section.coveredStoryArcBeatIDs
             )
         }
     }

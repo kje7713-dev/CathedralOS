@@ -72,6 +72,7 @@ type Section = {
   targetWords?: number | null;
   targetWordsMin?: number | null;
   targetWordsMax?: number | null;
+  coveredStoryArcBeatIDs?: string[] | null;
   recipeRequirementIDs?: string[] | null;
 };
 type CanonicalRecipe = Record<string, unknown>;
@@ -321,6 +322,7 @@ export function sectionRow(
     target_words_min: section.targetWordsMin ?? (CONTAINER_WORD_RANGES[section.container ?? ""] ?? [615, 1385])[0],
     target_words_max: section.targetWordsMax ?? (CONTAINER_WORD_RANGES[section.container ?? ""] ?? [615, 1385])[1],
     recipe_requirement_ids: section.recipeRequirementIDs ?? [],
+    covered_story_arc_beat_ids: section.coveredStoryArcBeatIDs ?? [],
     status: "draft",
   };
 }
@@ -408,14 +410,17 @@ export async function normalizeStoryArcBeatIDs(
   db: ReturnType<typeof admin>,
   sections: Section[],
 ) {
-  const requestedIDs = [
-    ...new Set(
-      sections
-        .map((section) => section.storyArcBeatID)
-        .filter((id): id is string => Boolean(id))
-        .map(canonicalUUID),
-    ),
+  const primaryIDs = [
+    ...new Set(sections.map((section) => section.storyArcBeatID)
+      .filter((id): id is string => Boolean(id)).map(canonicalUUID)),
   ];
+  const requestedIDs = [...new Set([
+    ...primaryIDs,
+    // Optional cross-beat metadata never creates a new acceptance failure.
+    ...sections.flatMap((section) => section.coveredStoryArcBeatIDs ?? [])
+      .filter((id): id is string => typeof id === "string" && isUUID(id))
+      .map(canonicalUUID),
+  ])];
   if (!requestedIDs.length) return sections;
 
   const { data, error } = await db.from("story_arc_beats").select("id").in(
@@ -428,7 +433,7 @@ export async function normalizeStoryArcBeatIDs(
   const validIDs = new Set(
     (data ?? []).map((row) => canonicalUUID(String(row.id))),
   );
-  const missing = requestedIDs.filter((id) => !validIDs.has(id));
+  const missing = primaryIDs.filter((id) => !validIDs.has(id));
   if (missing.length > 0) {
     // Never silently erase the macro-to-section contract. The caller must
     // sync the owning arc first; accepting with NULL would make generation
@@ -437,7 +442,13 @@ export async function normalizeStoryArcBeatIDs(
       `Story arc beat linkage is unavailable: ${missing.join(", ")}`,
     );
   }
-  return sections;
+  return sections.map((section) => ({
+    ...section,
+    coveredStoryArcBeatIDs: [...new Set((section.coveredStoryArcBeatIDs ?? [])
+      .filter((id): id is string => typeof id === "string" && isUUID(id))
+      .map(canonicalUUID)
+      .filter((id) => validIDs.has(id)))],
+  }));
 }
 
 export function mergeSectionsByCanonicalID(
@@ -479,7 +490,7 @@ async function mergeSectionsIntoSnapshot(
   }
   const { data: rows, error: rowsError } = await db.from("outline_sections")
     .select(
-      "id,position,title,summary,container,pov,terminal_beat,entry_state,dramatic_event,resulting_change,terminal_state,status,parent_id,story_arc_beat_id,target_words,target_words_min,target_words_max,recipe_requirement_ids",
+      "id,position,title,summary,container,pov,terminal_beat,entry_state,dramatic_event,resulting_change,terminal_state,status,parent_id,story_arc_beat_id,target_words,target_words_min,target_words_max,covered_story_arc_beat_ids,recipe_requirement_ids",
     )
     .in("id", request.sections.map((section) => section.id));
   if (rowsError) {
@@ -523,6 +534,7 @@ async function mergeSectionsIntoSnapshot(
     targetWords: row.target_words,
     targetWordsMin: row.target_words_min,
     targetWordsMax: row.target_words_max,
+    coveredStoryArcBeatIDs: Array.isArray(row.covered_story_arc_beat_ids) ? row.covered_story_arc_beat_ids : [],
     recipeRequirementIDs: Array.isArray(row.recipe_requirement_ids)
       ? row.recipe_requirement_ids
       : [],
@@ -594,6 +606,12 @@ async function runJob(runID: string, authHeader: string, userID: string) {
       resulting_change: s.resultingChange,
       terminal_state: s.terminalState,
       story_arc_beat_id: s.storyArcBeatID,
+      // The atomic RPC must receive the architect-sized targets instead of
+      // replacing them with the container's legacy default.
+      target_words: s.targetWords,
+      target_words_min: s.targetWordsMin,
+      target_words_max: s.targetWordsMax,
+      covered_story_arc_beat_ids: s.coveredStoryArcBeatIDs ?? [],
       recipe_requirement_ids: s.recipeRequirementIDs ?? [],
     }));
     const { data: commitResult, error: commitError } = await db.rpc(
