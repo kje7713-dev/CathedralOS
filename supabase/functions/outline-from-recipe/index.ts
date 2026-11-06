@@ -4083,7 +4083,8 @@ export function parseNovelArchitecturePlan(
   // a continuation must never invent replacements merely to cover them again.
   const existingCovered = new Set((req.existingSections ?? [])
     .flatMap((section) => [section.storyArcBeatID, ...(section.coveredStoryArcBeatIDs ?? [])])
-    .map((beatID) => beats.findIndex((beat) => beat.id === beatID))
+    .map((beatID) => beats.findIndex((beat) =>
+      typeof beatID === "string" && beat.id.toLowerCase() === beatID.toLowerCase()))
     .filter((index) => index >= 0));
   let lastPrimary = -1;
   const usedTitles = new Set<string>();
