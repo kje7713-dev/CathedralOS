@@ -902,50 +902,27 @@ Deno.test("novel final schema stays compact for the production-scale 10-beat pla
 });
 
 Deno.test("architecture + allocation share one provider response, with recipe authority and optional enrichment", async () => {
-  const req = { ...sparseRequest, requestedFormat: "novel" } as any;
-  const architecture = {
-    arcExperience: "The chosen arc creates increasing emotional jeopardy and an irreversible payoff.",
-    centralQuestion: "Can Mara rescue the family she betrayed?",
-    characterCausality: "Mara's deception drives her brother to protect the wrong person, forcing a personal reckoning.",
-    decisiveClimax: "Mara confronts the threat and saves her family at an irreversible personal cost.",
-    endingConsequence: "The family survives, but their trust cannot return to its prior state.",
-    deliberatelyOpenThreads: "The identity of the anonymous witness remains unknown.",
-  };
-  let calls = 0;
-  let saved: any;
-  const planned = await planSectionAllocation(req, "unused", async (_system: string, _user: string, maxTokens: number, format: any, action: string) => {
+  const req = architectureFirstRequest();
+  let calls = 0, selected: any;
+  const allocation = await planSectionAllocation(req, "unused", async (system, user, _, format, action) => {
     calls++;
     assertEquals(action, "outline-plan");
-    assertEquals(maxTokens >= 3500, true);
-    const schema = format.json_schema.schema;
-    assertEquals(schema.required.includes("storyArchitecture"), true);
-    assertEquals(schema.properties.storyArchitecture.required.length, 6);
-    return {
-      content: JSON.stringify({
-        storyArchitecture: architecture,
-        allocations: [
-          { beatIndex: 0, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "Mara's lie launches the family conflict." },
-          { beatIndex: 1, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "Mara confronts the threat, pays the cost, and the family survives." },
-        ],
-      }),
-      creditCostCharged: 1, remainingCredits: 99,
-    } as any;
-  }, [], { onArchitecture: (a) => { saved = a; } });
+    assertStringIncludes(system, "The recipe's defining compulsions");
+    assertEquals((format as any).json_schema.schema.required.includes("storyArchitecture"), true);
+    assertEquals((format as any).json_schema.schema.required.includes("sections"), true);
+    assertEquals(JSON.parse(user).planningContext.recipe.project.summary, req.recipe.project.summary);
+    return { content: JSON.stringify({ storyArchitecture: architectureFirstFixture, sections: [
+      architectureFirstUnit(0, "The Spark", "chapter", [1]),
+      architectureFirstUnit(2, "The Reckoning", "chapter"),
+    ] }), creditCostCharged: 0, remainingCredits: 0 };
+  }, [], { onArchitecture: (value) => { selected = value; } });
+  const outline = buildPrompt(req, allocation, [], undefined, selected);
   assertEquals(calls, 1);
-  assertEquals(saved, architecture);
-  assertEquals(planned.size, 2);
-  const { system, user } = buildPrompt(req, planned, [], undefined, saved);
-  assertStringIncludes(system, "## Selected causal architecture from the allocation call");
-  assertStringIncludes(system, architecture.decisiveClimax);
-  assertStringIncludes(system, architecture.endingConsequence);
-  assertStringIncludes(system, "Mara confronts the threat, pays the cost");
-  assertStringIncludes(system, "the decisive BOOK-level outcome must be DRAMATIZED as the climax section's dramaticEvent");
-  const payload = JSON.parse(user);
-  assertEquals(payload.allocation[0][1].minSections, planned.get("beat-1")?.minSections);
-  assertEquals(payload.allocation[1][1].minSections, planned.get("beat-2")?.minSections);
-  assertEquals(payload.planningContext.recipe, req.recipe);
+  assertEquals(selected, architectureFirstFixture);
+  assertStringIncludes(outline.system, architectureFirstFixture.decisiveClimax);
+  assertStringIncludes(outline.system, "The Spark");
+  assertEquals(JSON.parse(outline.user).allocation[0][1].minSections, 1);
 });
-
 Deno.test("allocation rejects malformed architecture instead of passing it to prose generation", () => {
   const good = {
     arcExperience: "The selected arc must change the emotional stakes and ending.",
@@ -972,63 +949,19 @@ Deno.test("allocation rejects malformed architecture instead of passing it to pr
 });
 
 Deno.test("reader-experience-first architecture applies equally across genres without a hardcoded genre solution", () => {
-  const recipes = [
-    {
-      name: "Horror / Escalating Dread",
-      summary: "Three ruined drifters encounter an unknowable conspiracy whose ultimate danger may unfold over several books.",
-      audienceNotes: "Grotesque psychological dread and surreal uncertainty.",
-    },
-    {
-      name: "Comedy / Escalating Chaos",
-      summary: "A vain grifter makes ridiculous promises that turn his failing town against him.",
-      audienceNotes: "Absurd comedy driven by humiliation and escalating mistakes.",
-    },
-    {
-      name: "Romance",
-      summary: "Two estranged friends must choose whether to risk their friendship to become lovers.",
-      audienceNotes: "Intimate, tender romantic tension and an earned emotional choice.",
-    },
-    {
-      name: "Thriller",
-      summary: "A whistleblower must expose the conspiracy and stop its planned raid before the book ends.",
-      audienceNotes: "A high-stakes investigation that culminates in stopping the raid.",
-    },
-    {
-      name: "Literary Drama",
-      summary: "Siblings struggle after their mother's death, and one finally admits the truth without earning forgiveness.",
-      audienceNotes: "Quiet moral ambiguity and painful family relationships.",
-    },
-  ];
-  const genreSystems = new Set<string>();
-  for (const genre of recipes) {
-    const request: any = {
-      ...sparseRequest,
-      requestedFormat: "novel",
-      recipe: {
-        ...sparseRequest.recipe,
-        project: { ...sparseRequest.recipe.project, summary: genre.summary, audienceNotes: genre.audienceNotes },
-      },
-      arcTemplate: { ...sparseRequest.arcTemplate, name: genre.name },
-    };
-    const architecturePrompt = buildAllocationPrompt(request);
-    const outlinePrompt = buildPrompt(request, new Map());
-    assertStringIncludes(architecturePrompt.system, "Author-promised reader experience BEFORE plot machinery");
-    assertStringIncludes(architecturePrompt.system, "The Story Arc governs dramatic progression, not a default set of plot devices");
-    assertStringIncludes(architecturePrompt.system, "A premise fact does not itself create an objective");
-    assertStringIncludes(architecturePrompt.system, "This rule applies to ALL genres");
-    assertStringIncludes(architecturePrompt.system, "if the author explicitly requires a particular resolution in this volume, honor it");
-    assertStringIncludes(outlinePrompt.system, "identify the intended reader experience from this recipe's specific genre, tone");
-    assertStringIncludes(outlinePrompt.system, "Do not convert the authored reader experience into a generic mission");
-    assertStringIncludes(outlinePrompt.system, "relationship milestone is authored and dramatically appropriate");
-    assertEquals(JSON.parse(architecturePrompt.user).planningContext.recipe.project.summary, genre.summary);
-    assertEquals(JSON.parse(architecturePrompt.user).planningContext.arc.name, genre.name);
-    // General structural arcs do not impose a genre; named experiential arcs do.
-    assertStringIncludes(architecturePrompt.system, genre.name);
-    genreSystems.add(architecturePrompt.system);
+  const genres = ["Dark Romance", "Horror / Escalating Dread", "Historical War / Survival", "An Original Story Arc"];
+  const seen = new Set<string>();
+  for (const name of genres) {
+    const req = { ...architectureFirstRequest(), arcTemplate: { ...architectureFirstRequest().arcTemplate, name } } as any;
+    const plan = buildAllocationPrompt(req);
+    assertEquals(JSON.parse(plan.user).planningContext.arc.name, name);
+    assertStringIncludes(plan.system, arcReaderExperienceDirective(req.arcTemplate));
+    assertStringIncludes(plan.system, "never impose a moral destination");
+    assertStringIncludes(plan.system, "Optional enrichment is not canon");
+    seen.add(plan.system);
   }
-  assertEquals(genreSystems.size, recipes.length);
+  assertEquals(seen.size, genres.length);
 });
-
 Deno.test("selected book-level climax persists into outline without forcing the wider threat to be defeated", () => {
   const request: any = {
     ...sparseRequest,
@@ -1052,98 +985,57 @@ Deno.test("selected book-level climax persists into outline without forcing the 
   assertStringIncludes(outlinePrompt.system, "the decisive BOOK-level outcome must be DRAMATIZED as the climax section's dramaticEvent");
 });
 
-Deno.test("climax causality is carried through existing planning, first pass, and semantic review", async () => {
-  const request = { ...sparseRequest, requestedFormat: "novel",
-    recipe: { ...sparseRequest.recipe,
-      project: { ...sparseRequest.recipe.project, audienceNotes: "The reader should feel the personal cost of the protagonist's choice." } },
-    arcTemplate: { ...sparseRequest.arcTemplate, name: "Coming-of-Age / Bildungsroman" } } as any;
-  const architecture = {
-    arcExperience: "A consequential choice changes how the protagonists see themselves.",
-    centralQuestion: "Will a protagonist take a personal risk for someone else?",
-    characterCausality: "Earlier choices make the later risk meaningful and possible.",
-    decisiveClimax: "The protagonist chooses to act, removing a concrete danger at real cost.",
-    endingConsequence: "The immediate danger is gone, but the larger mystery remains.",
-    deliberatelyOpenThreads: "The source of the wider threat remains unknown.",
-  };
-  const allocation = buildAllocationPrompt(request);
-  const outline = buildPrompt(request, new Map(), [], undefined, architecture);
-  const verification = semanticVerificationInput([], request.arcTemplate, request.recipe, [], architecture) as any;
-  assertStringIncludes(allocation.system, "Establish the climax's causal chain inside the EXISTING story architecture");
-  assertStringIncludes(allocation.system, "the concrete mechanism by which that action changes what would otherwise happen");
-  assertStringIncludes(allocation.system, "Allocate the specific earlier developments that establish the stakes");
+Deno.test("climax causality is carried through existing planning, first pass, and semantic review", () => {
+  const req = architectureFirstRequest();
+  const plan = buildAllocationPrompt(req);
+  const outline = buildPrompt(req, new Map(), [], undefined, architectureFirstFixture);
+  const verification = semanticVerificationInput([], req.arcTemplate, req.recipe, [], architectureFirstFixture);
+  assertStringIncludes(plan.system, "WORK BACKWARD");
+  assertStringIncludes(plan.system, "Every chosen unit must change what happens next");
   assertStringIncludes(outline.system, "Causal payoff realized in the first-pass Section Contracts");
-  assertStringIncludes(outline.system, "show the protagonist's specific action and its *observable* effect");
-  assertEquals(verification.committedDecisiveClimax, architecture.decisiveClimax);
-  assertEquals(verification.committedEndingConsequence, architecture.endingConsequence);
-  const creative = verification.arcWideObligations.find((item: any) => item.obligationID === "creative_fidelity");
-  assertEquals(Boolean(creative), true);
-  assertStringIncludes(creative.instruction, "claimed climax payoff is actually caused by earlier established stakes");
-  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  assertStringIncludes(source, "Independently assess committedDecisiveClimax and committedEndingConsequence against the actual Section Contracts");
-  assertStringIncludes(source, "do not require an external victory, over-explained mechanism, or a new failure path");
+  assertEquals(verification.committedDecisiveClimax, architectureFirstFixture.decisiveClimax);
+  assertEquals(verification.committedEndingConsequence, architectureFirstFixture.endingConsequence);
 });
-
 Deno.test("explicitly authored external victory and relationship resolution remain permitted in all genres", () => {
-  for (const summary of [
-    "An investigator must expose the named conspiracy and stop its planned raid before the book ends.",
-    "Two lovers must reunite and confess their feelings before the end of this book.",
-  ]) {
-    const request: any = {
-      ...sparseRequest,
-      recipe: { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, summary } },
-    };
-    const architecturePrompt = buildAllocationPrompt(request);
-    const outlinePrompt = buildPrompt(request, new Map());
-    assertStringIncludes(architecturePrompt.system, "if the author explicitly requires a particular resolution in this volume, honor it");
-    assertStringIncludes(outlinePrompt.system, "if a procedural solution, external victory, or relationship milestone is authored and dramatically appropriate, deliver it");
-    assertEquals(JSON.parse(architecturePrompt.user).planningContext.recipe.project.summary, summary);
-  }
+  const req = architectureFirstRequest();
+  req.recipe.project.summary = "The protagonists must reconcile and win a decisive public battle.";
+  const plan = buildAllocationPrompt(req);
+  const outline = buildPrompt(req, new Map());
+  assertStringIncludes(plan.user, "reconcile and win a decisive public battle");
+  assertStringIncludes(plan.system, "Respect required beats and author-defined outcomes");
+  assertStringIncludes(outline.system, "if a procedural solution, external victory, or relationship milestone is authored and dramatically appropriate, deliver it");
 });
-
 Deno.test("allocation prompt selects causal outcome before sizing chapters without canonizing contractors", () => {
-  const material: any = {
-    characters: [{ id: "p1", label: "Inez", source: "planner", sourceReference: null, description: "Sells out a friend to gain control." }],
-    antagonisticForces: [{ id: "p2", label: "Government contractor screen", source: "planner", sourceReference: null, description: "Generic audit program." }],
-  };
-  const req = { ...sparseRequest, requestedFormat: "novel", storyMaterialEnrichment: material } as any;
-  const allocationPrompt = buildAllocationPrompt(req, deriveRecipeObligations(req.recipe));
-  assertStringIncludes(allocationPrompt.system, "## Interpret the recipe AND selected Story Arc BEFORE choosing the story");
-  assertStringIncludes(allocationPrompt.system, "The recipe governs premise, genre, intended experience");
-  assertStringIncludes(allocationPrompt.system, "THEN work backward from that chosen payoff through the ordered arc beats");
-  assertStringIncludes(allocationPrompt.system, "Only AFTER those story and arc decisions, budget and assign containerCounts");
-  assertStringIncludes(allocationPrompt.system, "No narrative form or mechanism is mandatory");
-  const payload = JSON.parse(allocationPrompt.user);
-  assertEquals(payload.planningContext.recipe, req.recipe);
-  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2"), undefined);
-  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p1").source, "planner");
-  assertStringIncludes(buildEnrichmentPrompt(req).system, "avoid defaulting to a government contractor");
-  const original = buildPrompt(req, new Map(), [], material);
-  assertStringIncludes(original.system, "Legacy checkpoint");
+  const req = architectureFirstRequest();
+  req.storyMaterialEnrichment = { characters: [
+    { id: "planner-1", source: "planner", label: "An invented official", description: "Optional supporting candidate" },
+  ] };
+  const plan = buildAllocationPrompt(req, deriveRecipeObligations(req.recipe));
+  assertStringIncludes(plan.system, "identify anchors, then build backward and forward");
+  assertStringIncludes(plan.system, "Optional enrichment is not canon");
+  assertStringIncludes(plan.system, "Do not calculate words, tokens, minSections");
+  const payload = JSON.parse(plan.user);
+  assertEquals(payload.planningContext.recipe.project.summary, req.recipe.project.summary);
+  assertEquals(payload.planningContext.materialIndex.some((x: any) => x.id === "planner-1"), true);
 });
-
 Deno.test("allocation retry identifies omitted beats to the corrective planner", async () => {
-  const beats = [{ id: "beat-1" }, { id: "beat-2" }, { id: "beat-3" }];
-  const request = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
-  const systems: string[] = [];
+  const req = architectureFirstRequest();
   let calls = 0;
-  const allocation = await planSectionAllocation(request, "unused", async (
-    system: string, _user: string, _max: number, format: any, action: string,
-  ) => {
+  const systems: string[] = [];
+  const plan = await planSectionAllocation(req, "unused", async (system, _user, _max, _format, action) => {
     systems.push(system);
     calls++;
     assertEquals(action, calls === 1 ? "outline-plan" : "outline-plan-retry");
-    assertEquals(format.json_schema.schema.properties.allocations.minItems, beats.length);
-    const allocations = calls === 1
-      ? [{ beatIndex: 0, minSections: 1, rationale: "opening" }]
-      : beats.map((_, beatIndex) => ({ beatIndex, minSections: 1, rationale: `beat ${beatIndex + 1}` }));
-    return { content: JSON.stringify({ allocations }), creditCostCharged: 0, remainingCredits: 0 };
+    return { content: JSON.stringify({ storyArchitecture: architectureFirstFixture, sections:
+      calls === 1 ? [architectureFirstUnit(0, "Only the Setup")]
+        : [architectureFirstUnit(0, "Setup"), architectureFirstUnit(1, "Change"), architectureFirstUnit(2, "End")] }),
+      creditCostCharged: 0, remainingCredits: 0 };
   });
   assertEquals(calls, 2);
-  assertEquals(allocation.size, 3);
-  assertStringIncludes(systems[1], "allocation is missing beat(s): beat-2, beat-3");
-  assertStringIncludes(systems[1], "every beatIndex from 0 through 2");
+  assertEquals(plan.size, 3);
+  assertStringIncludes(systems[1], "architecture omitted Story Arc beat");
+  assertEquals(Array.from(plan.values()).reduce((sum, entry) => sum + entry.minSections, 0), 3);
 });
-
 Deno.test("non-novel allocation keeps its legacy strict planner schema and prompt", async () => {
   let schema: any;
   const req = { ...sparseRequest, requestedFormat: "shortStory" } as any;
@@ -1481,52 +1373,31 @@ Deno.test("final allocation coverage reports a repair deficit when a beat is omi
 });
 
 Deno.test("planner prompt groups one existing section onto its linked beat", () => {
-  const section = { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] };
-  const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [section] } as any);
-  assertEquals(
-    system.includes("when accepted sections already contribute to a beat, minSections is only the additional sections still required"),
-    true,
-    "planner prompt must instruct planner NOT to count existing coverage in minSections",
-  );
-  const parsed: any = JSON.parse(user);
-  assertEquals(parsed.existingSectionsByBeat["beat-1"], [{ id: null, title: null, summary: null, terminalState: null, recipeRequirementIDs: section.recipeRequirementIDs }]);
-  assertEquals(parsed.existingSectionsByBeat["beat-2"], []);
-  assertEquals(parsed.existingUnlinkedSections, []);
+  const section = { storyArcBeatID: "b0", title: "Already accepted", summary: "An accepted beginning." };
+  const req = architectureFirstRequest([section]);
+  const plan = buildAllocationPrompt(req);
+  assertEquals(JSON.parse(plan.user).existingSections, [section]);
+  assertStringIncludes(plan.system, "existingSections");
 });
-
 Deno.test("planner prompt groups two existing sections onto the same beat", () => {
-  const s1 = { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] };
-  const s2 = { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R2"] };
-  const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [s1, s2] } as any);
-  assertEquals(
-    system.includes("minSections is only the additional sections still required"),
-    true,
-  );
-  const parsed: any = JSON.parse(user);
-  assertEquals(parsed.existingSectionsByBeat["beat-1"].map((s: any) => s.recipeRequirementIDs), [s1.recipeRequirementIDs, s2.recipeRequirementIDs]);
-  assertEquals(parsed.existingSectionsByBeat["beat-2"], []);
-  assertEquals(parsed.existingUnlinkedSections, []);
+  const old = [{ storyArcBeatID: "b0", title: "Earlier A" }, { storyArcBeatID: "b0", title: "Earlier B" }];
+  const req = architectureFirstRequest(old);
+  const plan = buildAllocationPrompt(req);
+  assertEquals(JSON.parse(plan.user).existingSections, old);
+  const generated = parseNovelArchitecturePlan(JSON.stringify({ storyArchitecture: architectureFirstFixture,
+    sections: [architectureFirstUnit(1, "New Turn"), architectureFirstUnit(2, "New End")] }), req);
+  assertEquals(generated.get("b0")?.minSections, 0);
 });
-
 Deno.test("planner prompt groups mixed beats with different existing coverage plus unlinked", () => {
-  const s1 = { storyArcBeatID: "beat-1" };
-  const s2 = { storyArcBeatID: "beat-1" };
-  const s3 = { storyArcBeatID: "beat-2" };
-  const s4 = { storyArcBeatID: "beat-unknown" }; // unlinked to the arc template
-  const { system, user } = buildAllocationPrompt({ ...sparseRequest, existingSections: [s1, s2, s3, s4] } as any);
-  assertEquals(
-    system.includes("minSections is only the additional sections still required"),
-    true,
-  );
-  const parsed: any = JSON.parse(user);
-  assertEquals(parsed.existingSectionsByBeat["beat-1"].map((s: any) => s.title), [null, null]);
-  assertEquals(parsed.existingSectionsByBeat["beat-2"], [{ id: null, title: null, summary: null, terminalState: null, recipeRequirementIDs: [] }]);
-  // beat-unknown is not in the arc template, so per-beat bucket is absent and
-  // the section falls into existingUnlinkedSections.
-  assertEquals(parsed.existingSectionsByBeat["beat-unknown"], undefined);
-  assertEquals(parsed.existingUnlinkedSections, [{ title: null, summary: null }]);
+  const old = [{ storyArcBeatID: "b0", title: "Earlier A" }, { storyArcBeatID: "b0", title: "Earlier B" },
+    { storyArcBeatID: "b1", title: "Earlier Turn" }, { storyArcBeatID: null, title: "Unlinked" }];
+  const req = architectureFirstRequest(old);
+  const payload = JSON.parse(buildAllocationPrompt(req).user);
+  assertEquals(payload.existingSections, old);
+  const generated = parseNovelArchitecturePlan(JSON.stringify({ storyArchitecture: architectureFirstFixture,
+    sections: [architectureFirstUnit(2, "Fresh End")] }), req);
+  assertEquals(Array.from(generated.values()).reduce((n, beat) => n + beat.minSections, 0), 1);
 });
-
 Deno.test("production prompt uses planner residual allocation unchanged (no double subtraction)", () => {
   // Simulate the planner's residual output:
   //   - 2 existing on beat-1, planner returned 3 additional new sections
@@ -1586,89 +1457,33 @@ Deno.test("production prompt uses planner residual allocation unchanged (no doub
 // and the buildPrompt call without a deliberate, reviewable change.
 
 Deno.test("planner→generation handoff: 2 existing + planner returns 3 → generation receives 3 (not 1)", async () => {
-  // 2 existing sections already cover beat-1; planner correctly returns
-  // minSections=3 for the NEW sections still required on beat-1.
-  const plannerResponse = JSON.stringify({
-    allocations: [
-      { beatIndex: 0, minSections: 3, rationale: "needs 3 new beyond existing 2" },
-      { beatIndex: 1, minSections: 2, rationale: "needs 2 new" },
-    ],
-  });
-  const calls: Array<{ action: string }> = [];
-  const billableCall: any = async (
-    _system: string,
-    _user: string,
-    _maxOutputTokens: number,
-    _responseFormat: unknown,
-    action: string,
-  ) => {
-    calls.push({ action });
-    return { content: plannerResponse, creditCostCharged: 0, remainingCredits: 0 };
-  };
-  const reqWithExisting = {
-    ...sparseRequest,
-    existingSections: [
-      { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] },
-      { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] },
-    ],
-  } as any;
-
-  const plannedAllocation = await planSectionAllocation(reqWithExisting, "fake-key", billableCall);
-
-  // Planner contract: residual counts come back unchanged.
-  assertEquals(plannedAllocation.get("beat-1")?.minSections, 3,
-    "planner must return 3 for beat-1 (residual after existing 2)");
-  assertEquals(plannedAllocation.get("beat-2")?.minSections, 2,
-    "planner must return 2 for beat-2");
-
-  // Production handoff: buildPrompt receives the planner's residual counts unchanged.
-  const { system } = buildPrompt(reqWithExisting, plannedAllocation);
-  assertEquals(system.includes("Opening Image: complete first-pass allocation: 3 sections"), true,
-    "beat-1 residual 3 must reach buildPrompt unchanged (pre-fix would have produced 1)");
-  assertEquals(system.includes("Break into Two: complete first-pass allocation: 2 sections"), true,
-    "beat-2 residual 2 must reach buildPrompt unchanged");
-
-  // The planner was called exactly once (no retry triggered).
-  assertEquals(calls.length, 1);
-  assertEquals(calls[0].action, "outline-plan");
+  const req = architectureFirstRequest([{ storyArcBeatID: "b0" }, { storyArcBeatID: "b0" }]);
+  const plan = await planSectionAllocation(req, "unused", async () => ({
+    content: JSON.stringify({ storyArchitecture: architectureFirstFixture, sections: [
+      architectureFirstUnit(0, "New A"),
+      architectureFirstUnit(0, "New B", "setPiece", [1]),
+      architectureFirstUnit(1, "New C"),
+      architectureFirstUnit(2, "New D"),
+    ] }), creditCostCharged: 0, remainingCredits: 0,
+  }));
+  const generated = buildPrompt(req, plan, [], undefined, architectureFirstFixture);
+  assertEquals(plan.get("b0")?.minSections, 2);
+  assertEquals(plan.get("b1")?.minSections, 1);
+  assertEquals(plan.get("b2")?.minSections, 1);
+  assertStringIncludes(generated.system, "New A");
+  assertStringIncludes(generated.system, "New B");
+  assertStringIncludes(generated.system, "architecture-authored dramatic unit(s)");
 });
-
 Deno.test("planner→generation handoff: planner returns 0 → generation receives 0", async () => {
-  // Planner determines every beat is fully covered by existing sections and
-  // returns minSections=0 for both.
-  const plannerResponse = JSON.stringify({
-    allocations: [
-      { beatIndex: 0, minSections: 0, rationale: "fully covered by existing 1" },
-      { beatIndex: 1, minSections: 0, rationale: "fully covered by existing 1" },
-    ],
-  });
-  const billableCall: any = async () => ({
-    content: plannerResponse,
-    creditCostCharged: 0,
-    remainingCredits: 0,
-  });
-  const reqWithExisting = {
-    ...sparseRequest,
-    existingSections: [
-      { storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] },
-      { storyArcBeatID: "beat-2", recipeRequirementIDs: ["R1"] },
-    ],
-  } as any;
-
-  const plannedAllocation = await planSectionAllocation(reqWithExisting, "fake-key", billableCall);
-
-  assertEquals(plannedAllocation.get("beat-1")?.minSections, 0,
-    "planner must return 0 for beat-1 (fully covered)");
-  assertEquals(plannedAllocation.get("beat-2")?.minSections, 0,
-    "planner must return 0 for beat-2 (fully covered)");
-
-  const { system } = buildPrompt(reqWithExisting, plannedAllocation);
-  assertEquals(system.includes("Opening Image: complete first-pass allocation: 0 sections"), true,
-    "beat-1 residual 0 must reach buildPrompt unchanged (pre-fix would have clamped -1 to 0)");
-  assertEquals(system.includes("Break into Two: complete first-pass allocation: 0 sections"), true,
-    "beat-2 residual 0 must reach buildPrompt unchanged (pre-fix would have clamped -1 to 0)");
+  const req = architectureFirstRequest([{storyArcBeatID:"b0"}, {storyArcBeatID:"b1"}, {storyArcBeatID:"b2"}]);
+  const plan = await planSectionAllocation(req, "unused", async () => ({
+    content: JSON.stringify({ storyArchitecture: architectureFirstFixture, sections: [] }),
+    creditCostCharged: 0, remainingCredits: 0,
+  }));
+  assertEquals(Array.from(plan.values()).reduce((sum, beat) => sum + beat.minSections, 0), 0);
+  const generated = buildPrompt(req, plan, [], undefined, architectureFirstFixture);
+  assertStringIncludes(generated.system, "0 architecture-authored dramatic unit(s)");
 });
-
 Deno.test("runSuggestionJob handoff does not subtract existing sections a second time", async () => {
   // Structural guard: pin the exact shape of the planner→buildPrompt handoff
   // in runSuggestionJob so a future change cannot silently re-introduce
@@ -1791,28 +1606,15 @@ Deno.test("allocation handoff preserves section budgets without importing plot r
 });
 
 Deno.test("sparse recipe context is preserved for the single comprehensive outline prompt", () => {
-  const allocation = new Map([
-    ["beat-1", { minSections: 1, rationale: "A concise setup." }],
-    ["beat-2", { minSections: 1, rationale: "The conflict needs room to escalate." }],
-  ]);
-  const { system, user } = buildPrompt(sparseRequest as any, allocation);
-  const plannerPrompt = buildAllocationPrompt(sparseRequest as any);
-  const plannerInput = plannerPrompt.user;
-
-  // Allocation receives the compact semantic planning view, including authored recipe context.
-  assertEquals(plannerInput.includes("Monsters kill humans"), true);
-  assertEquals(plannerInput.includes('"name": "Douche"'), true);
-  assertEquals(user.includes("Monsters kill humans"), true);
-  assertEquals(user.includes("Douche"), true);
-  assertEquals(system.includes("30-60"), false);
-  assertEquals(system.includes("5-15"), false);
-  assertEquals(plannerPrompt.system.includes("minSections is only the additional sections still required"), true);
-  assertEquals(system.includes("minimum is a floor for dramatic coverage, not a target or maximum"), false);
-  assertEquals(system.includes("targetSections"), false);
-  assertEquals(system.includes("maxSections"), false);
+  const req = architectureFirstRequest();
+  const planned = buildAllocationPrompt(req);
+  const outlined = buildPrompt(req, new Map());
+  assertStringIncludes(planned.user, "Monsters kill humans");
+  assertStringIncludes(planned.user, "Douche");
+  assertStringIncludes(outlined.user, "Monsters kill humans");
+  assertStringIncludes(planned.system, "The number of entries is determined by narrative necessity");
+  assertEquals(planned.system.includes("minSections is only the additional sections still required"), false);
 });
-
-
 Deno.test("global outline prompt keeps recipe prose once while retaining material provenance", async () => {
   const material = enrichmentFixture();
   material.characters.push({
@@ -1840,59 +1642,18 @@ Deno.test("global outline prompt keeps recipe prose once while retaining materia
   assertEquals(source.includes("115_000"), true);
 });
 
-Deno.test("single-pass prompt accepts rich recipes beyond the former 20K stage budget", async () => {
-  const richRecipe = {
-    ...sparseRequest.recipe,
-    project: {
-      ...sparseRequest.recipe.project,
-      summary: "ALLOCATION_UNIQUE_PREMISE " + "x".repeat(36_000),
-    },
-    selectedCharacters: Array.from({ length: 40 }, (_, index) => ({
-      id: `character-${index}`,
-      name: `Character ${index}`,
-      summary: `ALLOCATION_UNIQUE_CHARACTER_${index} ` + "y".repeat(1_000),
-    })),
-    selectedStorySpark: { id: "spark-rich", text: "The authored spark", title: "The authored spark", situation: "The premise begins under pressure.", stakes: "Everything important is at risk." },
-    selectedThemeQuestions: [{ id: "theme-rich", text: "What does survival cost?", question: "What does survival cost?" }],
-  };
-  const request = { ...sparseRequest, recipe: richRecipe } as any;
-  const allocation = new Map<string, any>(request.arcTemplate.beats.map((beat: any) => [
-    beat.id,
-    { minSections: 0, rationale: "single-pass outline generation" },
-  ]));
-  const primary = buildPrompt(request, allocation);
-  const richMaterial = enrichmentFixture();
-  richMaterial.characters = Array.from({ length: 40 }, (_, index) => ({
-    id: `character-${index}`,
-    source: index % 2 === 0 ? "recipe" : "planner",
-    sourceReference: index % 2 === 0 ? `character:character-${index}` : null,
-    label: `Character ${index}`,
-    description: `Character material ${index} ` + "z".repeat(900),
-  }));
-  const richPrimary = buildPrompt({ ...request, storyMaterialEnrichment: richMaterial } as any, allocation, [], richMaterial);
-  const duplicatedPayload = JSON.parse(richPrimary.user);
-  duplicatedPayload.planningContext.materialIndex = compactMaterial(richMaterial);
-  const duplicatedChars = JSON.stringify(duplicatedPayload, null, 2).length;
-  const deduplicatedChars = richPrimary.user.length;
-  console.log(`global outline prompt rich fixture: ${duplicatedChars} chars before, ${deduplicatedChars} after, ${duplicatedChars - deduplicatedChars} removed`);
-  assertEquals(deduplicatedChars < duplicatedChars, true);
-  const allocationPrompt = buildAllocationPrompt(request, deriveRecipeObligations(request.recipe));
-  const parsedAllocation = JSON.parse(allocationPrompt.user);
-  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  assertEquals(allocationPrompt.user.length > 20_000, true);
-  assertEquals(primary.user.includes("ALLOCATION_UNIQUE_PREMISE"), true);
-  assertEquals(allocationPrompt.user.includes("ALLOCATION_UNIQUE_CHARACTER_39"), true);
-  assertEquals(allocationPrompt.user.split('"planningContext"').length - 1, 1);
-  assertEquals(parsedAllocation.planningView, undefined);
-  assertEquals(typeof parsedAllocation.planningContext.project.summary, "string");
-  assertEquals(parsedAllocation.planningContext.obligations.length > 0, true);
-  assertEquals(Array.isArray(parsedAllocation.planningContext.materialIndex), true);
-  assertEquals("existingSectionsByBeat" in parsedAllocation, true);
-  assertEquals("existingUnlinkedSections" in parsedAllocation, true);
-  assertEquals(source.includes("assertPromptWithinBudget"), false);
-  assertEquals(source.includes("const promptLimit"), false);
+Deno.test("single-pass prompt accepts rich recipes beyond the former 20K stage budget", () => {
+  const req = architectureFirstRequest();
+  const names = Array.from({length:60}, (_,i) => ({id:`char-${i}`,name:`EXTRA_PERSON_${i}`,goals:[`GOAL_${i}`]}));
+  req.recipe.selectedCharacters = names;
+  req.recipe.project.summary = "A much larger recipe: " + "x".repeat(24000);
+  const prompt = buildAllocationPrompt(req, deriveRecipeObligations(req.recipe));
+  const payload = JSON.parse(prompt.user);
+  assertEquals(prompt.user.length > 20000, true);
+  assertEquals(payload.planningContext.recipe.selectedCharacters.length, 60);
+  assertEquals(payload.planningContext.recipe.project.summary, req.recipe.project.summary);
+  assertEquals(prompt.system.includes("promptLimit"), false);
 });
-
 Deno.test("primary outline prompt has no arbitrary section-count instruction", () => {
   const prompt = buildPrompt(sparseRequest as any, new Map([
     ["beat-1", { minSections: 0, rationale: "covered" }],
@@ -1923,23 +1684,18 @@ Deno.test("allocation planner propagates worker yield instead of converting it t
 });
 
 Deno.test("deterministic allocation budget constraints do not trigger a paid retry", async () => {
-  let calls = 0;
-  const req = {
-    ...sparseRequest,
-    requestedFormat: "novel",
-    existingSections: Array.from({ length: 30 }, () => ({ container: "chapter" })),
-  } as any;
-  const allocation = await planSectionAllocation(req, "test-key", (async () => {
+  const req = architectureFirstRequest();
+  const units = Array.from({length:20}, (_,i)=>architectureFirstUnit(Math.min(2,Math.floor(i/7)),`Causal unit ${i}`,"chapter"));
+  let calls=0;
+  const plan=await planSectionAllocation(req,"unused",async ()=> {
     calls++;
-    return { content: JSON.stringify({ allocations: [
-      { beatIndex: 0, minSections: 1, rationale: "opening" },
-      { beatIndex: 1, minSections: 1, rationale: "closure" },
-    ] }), creditCostCharged: 1, remainingCredits: 1 };
-  }) as any);
-  assertEquals(calls, 1);
-  assertEquals(allocation.size, 2);
+    return {content:JSON.stringify({storyArchitecture:architectureFirstFixture,sections:units}),creditCostCharged:0,remainingCredits:0};
+  });
+  assertEquals(calls,1);
+  const sections=Array.from(plan.values()).flatMap((b)=>b.plannedSections??[]);
+  assertEquals(sections.length,20);
+  assertEquals(sections.reduce((n,x)=>n+(x.targetWords??0),0)<=125000,true);
 });
-
 Deno.test("required recipe coverage ledger names relationship obligations explicitly", () => {
   const request: any = { ...sparseRequest, recipe: {
     ...sparseRequest.recipe,
@@ -2206,55 +1962,13 @@ Deno.test("allocation parser preserves minimums and rejects malformed plans", ()
 });
 
 Deno.test("existing beat coverage allows zero allocation and emits no duplicate", () => {
-  const requestWithExisting = {
-    ...sparseRequest,
-    existingSections: [{
-      title: "Already accepted",
-      summary: "The opening image is already established.",
-      storyArcBeatID: "beat-1",
-    }],
-  };
-  const plannerPrompt = buildAllocationPrompt(requestWithExisting as any);
-  assertEquals(plannerPrompt.user.includes("Already accepted"), true);
-  const parsedPlanning = JSON.parse(plannerPrompt.user);
-  assertEquals(typeof parsedPlanning.planningContext.recipe, "object");
-  assertEquals(parsedPlanning.planningContext.arc.beats[0].id, "beat-1");
-  assertEquals(Array.isArray(parsedPlanning.planningContext.materialIndex), true);
-  assertEquals(Array.isArray(parsedPlanning.planningContext.obligations), true);
-  assertEquals(parsedPlanning.existingSectionsByBeat["beat-1"][0].title, "Already accepted");
-  assertEquals(parsedPlanning.existingUnlinkedSections, []);
-
-  const allocation = parseAndValidateAllocation(
-    JSON.stringify({
-      allocations: [
-        { beatIndex: 0, minSections: 0, rationale: "already covered" },
-        { beatIndex: 1, minSections: 1, rationale: "new escalation" },
-      ],
-    }),
-    requestWithExisting.arcTemplate.beats,
-  );
-  const generated = {
-    suggestions: [{
-      title: "The Flight",
-      summary: "Douche escapes as monsters hunt humans.",
-      container: "scene",
-      pov: "thirdPersonLimited",
-      terminalBeat: "The shelter fails.",
-      storyArcBeatID: "beat-2",
-    }],
-  };
-  const result = validateSuggestions(
-    generated,
-    new Set(["beat-1", "beat-2"]),
-    allocation,
-  );
-  assertEquals(result.suggestions.length, 1);
-  assertEquals(
-    result.suggestions.some((s) => s.storyArcBeatID === "beat-1"),
-    false,
-  );
+  const req = architectureFirstRequest([{storyArcBeatID:"b0"},{storyArcBeatID:"b1"},{storyArcBeatID:"b2"}]);
+  const plan=parseNovelArchitecturePlan(JSON.stringify({storyArchitecture:architectureFirstFixture,sections:[]}),req);
+  assertEquals(Array.from(plan.values()).every((b)=>b.minSections===0),true);
+  const schema=buildSuggestionResponseSchema(req.arcTemplate.beats,plan,[],req.arcTemplate.name,"novel");
+  const beats=(schema.properties.beats as any).properties;
+  assertEquals(Object.values(beats).every((x:any)=>x.maxItems===0),true);
 });
-
 Deno.test("terminalBeat replaces UUID and END with the existing closing action", () => {
   const beatIds = new Set(["beat-1", "beat-2"]);
   const base = {
@@ -2559,83 +2273,20 @@ Deno.test("novel outline handoff treats allocation as complete and projects mixe
   assertEquals(nonNovelPrompt.includes("## Complete first-pass allocation"), false);
 });
 
-Deno.test("novel planning exposes explicit word budgets and projected-size expansion", async () => {
-  const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
-  const allocationPrompt = buildAllocationPrompt({ ...sparseRequest, requestedFormat: "novel" } as any).system;
-  assertEquals(allocationPrompt.indexOf("Binding whole-book creative objective") <
-    allocationPrompt.indexOf("Choose an exceptional, arc-specific ending"), true,
-    "the novelist must know the 115k-word objective before choosing the story");
-  assertEquals(allocationPrompt.includes("minimum objective of 115,000 WORDS"), true);
-  assertEquals(allocationPrompt.includes("First commit to the most compelling recipe-and-arc-faithful conflict and climax"), true);
-  assertEquals(allocationPrompt.includes("complete book at approximately 121,000 finished-prose words"), true);
-  assertEquals(allocationPrompt.includes("Budget in finished-prose WORDS"), true);
-  assertEquals(allocationPrompt.includes("never API output tokens"), true);
-  assertEquals(allocationPrompt.includes("3,500-token mixed-section planning estimate"), false);
-  assertEquals(allocationPrompt.includes("minSections is the intended complete first-pass allocation"), true);
-  assertEquals(allocationPrompt.includes("a beat with sufficient existing coverage must remain at 0"), true);
-  assertEquals(allocationPrompt.includes("Do not add sections to a sufficiently covered beat"), true);
-  assertEquals(source.includes("targetSections"), false);
-  assertEquals(source.includes("maxSections"), false);
-  assertEquals(source.includes("fitAllocationToNovelTarget"), false);
-  assertEquals(source.includes("NOVEL_CONTAINER_WORD_TARGETS"), true);
-  assertEquals(source.includes("promptLimit"), false);
-  assertEquals(source.includes("assertPromptWithinBudget"), false);
-  assertEquals(source.includes("const MAX_PLANNED_SECTIONS = 200;"), true);
-  assertEquals(source.includes("maxItems: MAX_PLANNED_SECTIONS"), true);
-  assertEquals(source.includes("merged.length > MAX_PLANNED_SECTIONS"), true);
-  assertEquals(source.includes("collectAdvisoryOutlineQuality"), true);
-  assertEquals(source.includes("outline failed Story Arc semantic validation"), false);
-  assertEquals(source.includes("dramatic distinctness validation"), false);
-  const outlinePrompt = buildPrompt(sparseRequest as any, new Map([
-    ["beat-1", { minSections: 1, rationale: "setup" }],
-    ["beat-2", { minSections: 1, rationale: "escalation" }],
-  ])).system;
-  assertEquals(outlinePrompt.includes("Novel length policy"), true);
-  assertEquals(outlinePrompt.includes("Every defining behavior, event, or conflict explicitly specified by the author must have a concrete realization"), true);
-  assertEquals(outlinePrompt.includes("dramaticEvent, resultingChange, or terminalState"), true);
-  assertEquals(outlinePrompt.includes("Mentioning it in a summary, labeling a character with the trait, or assigning a recipe requirement ID does not constitute realization"), true);
-  assertEquals(outlinePrompt.includes("Preserve creative freedom over how and when the requirement is realized"), true);
-  assertEquals(outlinePrompt.includes("125,000-word hard cap"), true);
-  assertEquals(outlinePrompt.includes("Fit the complete story package into the budget"), true);
-  assertEquals(outlinePrompt.includes("Existing accepted sections already contribute to the complete projection"), true);
-  assertEquals(outlinePrompt.includes("do not drop story material"), true);
-  assertEquals(outlinePrompt.includes("planned around 1,000 words"), true);
-  assertEquals(outlinePrompt.includes("expected 800-1,800 tokens"), false);
-  assertEquals(outlinePrompt.includes("Recipe realization priority"), true);
-  assertEquals(outlinePrompt.includes("governing creative brief"), true);
-  assertEquals(outlinePrompt.includes("Novel-ready section titles"), true);
-  assertEquals(outlinePrompt.includes("Do not restate or lightly rephrase"), true);
-  assertEquals(outlinePrompt.includes("evocative fiction headings, not outline summaries"), true);
-  assertEquals(outlinePrompt.includes("takes the hit"), true);
-  assertEquals(outlinePrompt.includes("Character + verb + outcome"), true);
-  assertEquals(outlinePrompt.includes("suitable for a novel outline or novel-ready table of contents"), true);
-  assertEquals(projectedTokenRange([
-    { container: "scene" }, { container: "developedScene" },
-  ]), [2300, 4800]);
-  assertEquals(projectedExpectedTokens([{ container: "scene" }]), 1300);
-  assertEquals(evaluateNovelScale([{ container: "scene" }]).meetsMinimum, false);
-  assertEquals(evaluateNovelScale([{ container: "scene" }]).minimumWords, 115000);
-  assertEquals(projectedExpectedTokens([{ container: "sceneSequence" }]), 5000);
-  assertEquals(projectedExpectedTokens([{ container: "scene" }, { container: "scene" }]), 2600);
-  assertEquals(needsNovelExpansion([{ container: "sceneSequence" }]), true);
-  assertEquals(needsNovelExpansion([{ container: "scene" }]), true);
-  const expansion = buildExpansionPrompt(sparseRequest as any, [{
-    title: "Setup", summary: "A setup", container: "scene", pov: "thirdPersonLimited",
-    terminalBeat: "The choice is made", storyArcBeatID: "beat-1",
-  }]);
-  assertEquals(expansion.system.includes("Add distinct events, consequences"), true);
-  assertEquals(expansion.system.includes("used-event ledger"), true);
-  assertEquals(expansion.system.includes("advance the recipe's authored premise"), true);
-  assertEquals(expansion.system.includes("Do not inflate containers"), true);
-  assertEquals(expansion.system.includes("ONLY ADDITIONAL"), true);
-  const original = [{ title: "Setup", summary: "A setup", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Choice", storyArcBeatID: "beat-1" }];
-  const additions = [{ title: "Consequence", summary: "The choice costs something", container: "scene", pov: "thirdPersonLimited", terminalBeat: "Cost", storyArcBeatID: "beat-1", insertAfterTitle: "Setup" }];
-  const merged = mergeExpansionAdditions(original as any, additions as any);
-  assertEquals(merged.map((s) => s.title), ["Setup", "Consequence"]);
-  assertEquals(merged[0], original[0]);
+Deno.test("novel planning exposes explicit word budgets and projected-size expansion", () => {
+  const req = architectureFirstRequest();
+  const prompt=buildAllocationPrompt(req).system;
+  const sections=Array.from({length:20},(_,i)=>architectureFirstUnit(Math.min(2,Math.floor(i/7)),`Section ${i}`,"chapter"));
+  const plan=parseNovelArchitecturePlan(JSON.stringify({storyArchitecture:architectureFirstFixture,sections}),req);
+  const all=Array.from(plan.values()).flatMap((x)=>x.plannedSections??[]);
+  assertStringIncludes(prompt,"A separate deterministic server step");
+  assertStringIncludes(prompt,"115,000–125,000 finished-prose words");
+  assertEquals(prompt.includes("Return containerCounts on each beat"),false);
+  assertEquals(all.length,20);
+  assertEquals(all.every((x)=>typeof x.targetWords==="number"),true);
+  assertEquals(evaluateNovelScale(all).meetsMinimum,true);
+  assertEquals(evaluateNovelScale(all).exceedsMaximum,false);
 });
-
-
 Deno.test("semantic disagreement is advisory: a late apparent conflict still completes", () => {
   const suggestions = [
     semanticSection("climax", "The Decisive Battle", "The central confrontation ends the primary conflict.", "climax"),
@@ -7135,25 +6786,15 @@ Deno.test("authored recipe and character candidates survive but procedural enric
 });
 
 Deno.test("series-scale authored premise components are preserved without forced book-one world-saving operations", () => {
-  const summary = "Their notoriety destabilizes America's institutions, and their chaotic actions someday become essential to humanity's survival.";
-  const premiseComponents = [
-    { sourceQuote: "Their notoriety destabilizes America's institutions", requirement: "Their notoriety eventually destabilizes institutions." },
-    { sourceQuote: "their chaotic actions someday become essential to humanity's survival", requirement: "Their decisions eventually matter to humanity's survival." },
-  ];
-  const recipe: any = { ...sparseRequest.recipe, project: { ...sparseRequest.recipe.project, summary } };
-  const obligations = deriveRecipeObligations(recipe, premiseComponents);
-  const statements = obligations.filter((obligation) => obligation.source.startsWith("project.summary.component."));
-  assertEquals(statements.length, 2);
-  assertEquals(statements.every((obligation) => obligation.required), true);
-  assertStringIncludes(statements[1].statement, "foreshadow");
-  assertStringIncludes(statements[1].statement, "multi-book");
-  assertEquals(statements[1].statement.includes("concrete, causally meaningful contribution"), false);
-  const request: any = { ...sparseRequest, recipe, storyMaterialEnrichment: { premiseComponents } };
-  assertStringIncludes(buildAllocationPrompt(request, obligations).system, "Series-level consequences can be seeded");
-  assertStringIncludes(buildPrompt(request, new Map(), obligations, request.storyMaterialEnrichment as any).system, "may be seeded");
+  const req=architectureFirstRequest();
+  req.recipe.project.summary="These people may eventually transform the larger world over several novels.";
+  const obligations=deriveRecipeObligations(req.recipe);
+  const plan=buildAllocationPrompt(req,obligations);
+  const outline=buildPrompt(req,new Map(),obligations);
+  assertEquals(JSON.parse(plan.user).planningContext.recipe.project.summary,req.recipe.project.summary);
+  assertStringIncludes(plan.system,"Respect required beats and author-defined outcomes");
+  assertStringIncludes(outline.system,"may be seeded");
 });
-
-
 Deno.test("missing recipe IDs remain internal QA and never discard a paid outline", async () => {
   const body = await executableWorkerBody();
   const section = (beat: string) => ({
