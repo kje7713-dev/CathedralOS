@@ -410,14 +410,17 @@ export async function normalizeStoryArcBeatIDs(
   db: ReturnType<typeof admin>,
   sections: Section[],
 ) {
-  const requestedIDs = [
-    ...new Set(
-      sections
-        .map((section) => section.storyArcBeatID)
-        .filter((id): id is string => Boolean(id))
-        .map(canonicalUUID),
-    ),
+  const primaryIDs = [
+    ...new Set(sections.map((section) => section.storyArcBeatID)
+      .filter((id): id is string => Boolean(id)).map(canonicalUUID)),
   ];
+  const requestedIDs = [...new Set([
+    ...primaryIDs,
+    // Optional cross-beat metadata never creates a new acceptance failure.
+    ...sections.flatMap((section) => section.coveredStoryArcBeatIDs ?? [])
+      .filter((id): id is string => typeof id === "string" && isUUID(id))
+      .map(canonicalUUID),
+  ])];
   if (!requestedIDs.length) return sections;
 
   const { data, error } = await db.from("story_arc_beats").select("id").in(
@@ -430,7 +433,7 @@ export async function normalizeStoryArcBeatIDs(
   const validIDs = new Set(
     (data ?? []).map((row) => canonicalUUID(String(row.id))),
   );
-  const missing = requestedIDs.filter((id) => !validIDs.has(id));
+  const missing = primaryIDs.filter((id) => !validIDs.has(id));
   if (missing.length > 0) {
     // Never silently erase the macro-to-section contract. The caller must
     // sync the owning arc first; accepting with NULL would make generation
@@ -439,7 +442,13 @@ export async function normalizeStoryArcBeatIDs(
       `Story arc beat linkage is unavailable: ${missing.join(", ")}`,
     );
   }
-  return sections;
+  return sections.map((section) => ({
+    ...section,
+    coveredStoryArcBeatIDs: [...new Set((section.coveredStoryArcBeatIDs ?? [])
+      .filter((id): id is string => typeof id === "string" && isUUID(id))
+      .map(canonicalUUID)
+      .filter((id) => validIDs.has(id)))],
+  }));
 }
 
 export function mergeSectionsByCanonicalID(
