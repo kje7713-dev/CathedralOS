@@ -1084,6 +1084,10 @@ interface ExistingSectionBlob {
   pov?: string;
   terminalBeat?: string;
   storyArcBeatID?: string; // null for manual/free-form sections
+  coveredStoryArcBeatIDs?: string[]; // additional arc beats fulfilled by the same real section
+  targetWords?: number | null; // accepted prose budget for continuation fitting
+  targetWordsMin?: number | null;
+  targetWordsMax?: number | null;
   recipeRequirementIDs?: string[]; // server-assigned obligations already covered
 }
 
@@ -4064,7 +4068,8 @@ export function parseNovelArchitecturePlan(
   // Accepted sections are already authored work and satisfy their own beats;
   // a continuation must never invent replacements merely to cover them again.
   const existingCovered = new Set((req.existingSections ?? [])
-    .map((section) => beats.findIndex((beat) => beat.id === section.storyArcBeatID))
+    .flatMap((section) => [section.storyArcBeatID, ...(section.coveredStoryArcBeatIDs ?? [])])
+    .map((beatID) => beats.findIndex((beat) => beat.id === beatID))
     .filter((index) => index >= 0));
   let lastPrimary = -1;
   const usedTitles = new Set<string>();
