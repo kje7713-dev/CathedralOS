@@ -86,6 +86,7 @@ import {
   projectedExpectedTokens,
   projectedTokenRange,
   parseAndValidateAllocation,
+  parseNovelArchitecturePlan,
   flattenSuggestionResponse,
   validateRequest,
   logicalSuggestionIdentity,
@@ -8965,4 +8966,161 @@ Deno.test("semantic verifier canonicalizes an exact quote mislabeled to another 
   }) as any);
   assertEquals(result.unsatisfied, []);
   assertEquals(result.beats[0].obligations[0].field, "resultingChange");
+});
+
+const architectureFirstFixture = {
+  arcExperience: "A consequential, author-driven dramatic journey.",
+  centralQuestion: "Can these particular people survive the choices they keep making?",
+  characterCausality: "Their incompatible desires repeatedly change their circumstances.",
+  decisiveClimax: "A decisive, irreversible action changes the situation.",
+  endingConsequence: "The survivors inherit a world transformed by the decisive act.",
+  deliberatelyOpenThreads: "The wider world and several relationships remain uncertain.",
+};
+
+function architectureFirstRequest(existingSections: any[] = []) {
+  return {
+    ...sparseRequest,
+    requestedFormat: "novel",
+    existingSections,
+    arcTemplate: {
+      id: "unfamiliar-arc",
+      name: "An Original Story Arc",
+      beats: [
+        { id: "b0", role: "opening", label: "Beginning", description: "" },
+        { id: "b1", role: "shift", label: "Turning", description: "" },
+        { id: "b2", role: "aftermath", label: "Aftermath", description: "" },
+      ],
+    },
+  } as any;
+}
+
+function architectureFirstUnit(beatIndex: number, title: string, container = "chapter", coveredBeatIndices: number[] = []): any {
+  return {
+    beatIndex, coveredBeatIndices, title,
+    dramaticEvent: `${title} happens because of a character's distinctive decision.`,
+    resultingChange: `${title} irreversibly changes what the characters can do next.`,
+    container,
+  };
+}
+
+Deno.test("architecture first: one beat can own many sections and a shared beat needs no extra section", () => {
+  const request = architectureFirstRequest();
+  const units = [
+    architectureFirstUnit(0, "Beginning A"),
+    architectureFirstUnit(0, "Beginning B", "setPiece", [1]),
+    architectureFirstUnit(0, "Beginning C"),
+    architectureFirstUnit(2, "Aftermath A"),
+  ];
+  const plan = parseNovelArchitecturePlan(JSON.stringify({
+    storyArchitecture: architectureFirstFixture, sections: units,
+  }), request);
+  assertEquals(plan.get("b0")?.minSections, 3);
+  assertEquals(plan.get("b1")?.minSections, 0);
+  assertEquals(plan.get("b1")?.coveredBySharedSection, true);
+  assertEquals(plan.get("b2")?.minSections, 1);
+  assertEquals(Array.from(plan.values()).reduce((n, beat) => n + beat.minSections, 0), 4);
+  assertEquals(plan.get("b0")?.plannedSections?.[1].coveredBeatIndices, [0, 1]);
+  assertEquals(plan.get("b0")?.plannedSections?.map((unit) => unit.title),
+    ["Beginning A", "Beginning B", "Beginning C"]);
+});
+
+Deno.test("architecture first: sizing can meet 121k without inventing sections or relabeling containers", () => {
+  const request = architectureFirstRequest();
+  const units = Array.from({ length: 15 }, (_, i) =>
+    architectureFirstUnit(Math.min(2, Math.floor(i / 5)), `Event ${i}`, i % 4 === 0 ? "sceneSequence" : "chapter"));
+  const plan = parseNovelArchitecturePlan(JSON.stringify({
+    storyArchitecture: architectureFirstFixture, sections: units,
+  }), request);
+  const actual = Array.from(plan.values()).flatMap((beat) => beat.plannedSections ?? []).sort((a, b) => a.sequence - b.sequence);
+  assertEquals(actual.length, 15);
+  assertEquals(actual.map((unit) => unit.title), units.map((unit) => unit.title));
+  assertEquals(actual.map((unit) => unit.container), units.map((unit) => unit.container));
+  const projected = actual.reduce((sum, unit) => sum + (unit.targetWords ?? 0), 0);
+  assertEquals(projected >= 115000, true);
+  assertEquals(projected <= 125000, true);
+  assertEquals(projectedExpectedWords(actual), projected);
+});
+
+Deno.test("architecture first: a short real story remains short rather than padding the arc", () => {
+  const request = architectureFirstRequest();
+  const units = [
+    architectureFirstUnit(0, "First Incident", "scene"),
+    architectureFirstUnit(1, "Reversal", "setPiece"),
+    architectureFirstUnit(2, "Resolution", "chapter"),
+  ];
+  const plan = parseNovelArchitecturePlan(JSON.stringify({ storyArchitecture: architectureFirstFixture, sections: units }), request);
+  const actual = Array.from(plan.values()).flatMap((beat) => beat.plannedSections ?? []);
+  assertEquals(actual.length, 3);
+  assertEquals(actual.map((unit) => unit.container), ["scene", "setPiece", "chapter"]);
+  assertEquals(actual.reduce((sum, unit) => sum + (unit.targetWords ?? 0), 0) < 115000, true);
+});
+
+Deno.test("architecture first: accepted beats permit a zero-new-section continuation", () => {
+  const request = architectureFirstRequest([
+    { storyArcBeatID: "b0" },
+    { storyArcBeatID: "b1" },
+    { storyArcBeatID: "b2" },
+  ]);
+  const plan = parseNovelArchitecturePlan(JSON.stringify({
+    storyArchitecture: architectureFirstFixture, sections: [],
+  }), request);
+  assertEquals(Array.from(plan.values()).reduce((sum, beat) => sum + beat.minSections, 0), 0);
+});
+
+Deno.test("architecture first: unordered dramatic events cannot be hidden by container sizing", () => {
+  const request = architectureFirstRequest();
+  const units = [
+    architectureFirstUnit(1, "Time Jump Ahead"),
+    architectureFirstUnit(0, "Backwards Again"),
+    architectureFirstUnit(2, "The Ending"),
+  ];
+  assertThrows(() => parseNovelArchitecturePlan(JSON.stringify({
+    storyArchitecture: architectureFirstFixture, sections: units,
+  }), request), Error, "ordered Story Arc");
+});
+
+Deno.test("architecture first: first pass inherits the architect's size and secondary beat without extra sections", () => {
+  const request = architectureFirstRequest();
+  const plan = parseNovelArchitecturePlan(JSON.stringify({
+    storyArchitecture: architectureFirstFixture,
+    sections: [
+      architectureFirstUnit(0, "The One Collision", "chapter", [1]),
+      architectureFirstUnit(2, "The Aftermath", "sceneSequence"),
+    ],
+  }), request);
+  const schema = buildSuggestionResponseSchema(request.arcTemplate.beats, plan, [], request.arcTemplate.name, "novel");
+  assertEquals((schema.properties.beats as any).properties.b1.maxItems, 0);
+  const raw = { beats: {
+    b0: [{ title: "The One Collision", summary: "Consequential collision.",
+      pov: "thirdPersonLimited", terminalBeat: "A door slams.",
+      entryState: "Doors are open.", dramaticEvent: "The collision occurs.",
+      resultingChange: "The group separates.", terminalState: "Separated.",
+      dramaticFunction: "setup" }],
+    b1: [],
+    b2: [{ title: "The Aftermath", summary: "Reckoning.",
+      pov: "thirdPersonLimited", terminalBeat: "They leave.",
+      entryState: "The group is apart.", dramaticEvent: "They separate their routes.",
+      resultingChange: "Their lives diverge.", terminalState: "They are apart.",
+      dramaticFunction: "aftermath" }],
+  } };
+  const flattened = flattenSuggestionResponse(raw, request.arcTemplate.beats, plan);
+  assertEquals(flattened.suggestions.length, 2);
+  assertEquals(flattened.suggestions[0].coveredStoryArcBeatIDs, ["b0", "b1"]);
+  assertEquals(flattened.suggestions[0].targetWords, plan.get("b0")?.plannedSections?.[0].targetWords);
+  assertEquals(flattened.suggestions[0].container, "chapter");
+});
+
+Deno.test("architecture first: explicit word targets survive project acceptance and prose dispatch wiring", async () => {
+  const [model, accept, sectionApi, generationRequest] = await Promise.all([
+    Deno.readTextFile("./CathedralOSApp/Models/OutlineSuggestion.swift"),
+    Deno.readTextFile("./CathedralOSApp/Services/AcceptAllRequestBuilder.swift"),
+    Deno.readTextFile("./supabase/functions/accept-outline-sections/index.ts"),
+    Deno.readTextFile("./supabase/functions/run-outline/_generation_request.ts"),
+  ]);
+  assertStringIncludes(model, "var targetWords: Int?");
+  assertStringIncludes(accept, "targetWords: suggestion.targetWords");
+  assertStringIncludes(accept, "targetWordsMin: suggestion.targetWordsMin");
+  assertStringIncludes(accept, "targetWordsMax: suggestion.targetWordsMax");
+  assertStringIncludes(sectionApi, "target_words: section.targetWords");
+  assertStringIncludes(generationRequest, "plannedTargetWords: args.section.target_words");
 });
