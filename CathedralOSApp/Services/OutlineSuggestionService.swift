@@ -472,7 +472,8 @@ struct OutlineSuggestionService {
                 recipeRequirementIDs: section.recipeRequirementIDs,
                 targetWords: section.targetWords,
                 targetWordsMin: section.targetWordsMin,
-                targetWordsMax: section.targetWordsMax
+                targetWordsMax: section.targetWordsMax,
+                coveredStoryArcBeatIDs: section.coveredStoryArcBeatIDs
             )
         }
     }
