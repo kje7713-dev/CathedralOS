@@ -4313,7 +4313,21 @@ Output JSON only. No commentary, no prose.`;
 
 /** Non-novel allocations retain their existing three-field strict contract. */
 function allocationSchemaForFormat(req: OutlineFromRecipeRequest) {
-  if (requestedStoryMaterialFormat(req) === "novel") return NOVEL_ARCHITECTURE_PLAN_SCHEMA;
+  if (requestedStoryMaterialFormat(req) === "novel") {
+    // A fresh novel needs an actual first-pass story. A completed outline can
+    // legitimately have zero new sections when all beats are already accepted.
+    // Make the shape explicit to the existing provider call, not a new stage.
+    return {
+      ...NOVEL_ARCHITECTURE_PLAN_SCHEMA,
+      properties: {
+        ...NOVEL_ARCHITECTURE_PLAN_SCHEMA.properties,
+        sections: {
+          ...NOVEL_ARCHITECTURE_PLAN_SCHEMA.properties.sections,
+          minItems: (req.existingSections ?? []).length > 0 ? 0 : 1,
+        },
+      },
+    };
+  }
   const allocations = requestedStoryMaterialFormat(req) === "novel"
     ? ALLOCATION_SCHEMA.properties.allocations
     : (() => {
