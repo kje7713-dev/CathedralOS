@@ -124,22 +124,18 @@ export function buildCompactPlanningView(req: any, obligations: any[] = [], mate
 
 /**
  * Canonical author facts are always available through planningContext.recipe.
- * Optional enrichment is a bank of ideas, not a second story brief. Only
- * independent people/relationships and thematic context may influence the
- * causal architecture or later outline; otherwise a prebuilt procedural plot
- * leaks back into generation after the architecture has already been chosen.
- *
- * Keep the FULL enrichment persisted for provenance/QA, not as mandatory
- * model input. This selection policy applies to the initial plan, outline,
- * and optional length expansion. Never use a source=planner category as canon.
+ * Enrichment is a provisional development pool, not canon. The planner may
+ * select, combine, transform, or discard any source=planner item, but it must
+ * receive the complete pool before designing the causal story. Provenance stays
+ * attached so later prompts can distinguish authored commitments from optional
+ * inventions.
  */
 export function authorFirstMaterialIndex(material: any): Array<Record<string, unknown>> {
-  const characterLedCategories = new Set([
-    "characters", "relationships", "thematicPressures",
-  ]);
-  return (compactMaterial(material) as Array<Record<string, unknown>>).filter((item) =>
-    item.source === "recipe" || characterLedCategories.has(String(item.category))
-  );
+  // Planning receives the complete development pool. Planner material remains
+  // explicitly provisional through its source/category metadata; filtering it
+  // here starved architecture of locations, reversals, discoveries, and
+  // escalation material before the causal story was designed.
+  return compactMaterial(material) as Array<Record<string, unknown>>;
 }
 
 export function buildArchitecturePlanningView(
