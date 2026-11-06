@@ -110,6 +110,7 @@ struct AcceptAllRequestBuilder {
                 targetWordsMin: suggestion.targetWordsMin,
                 targetWordsMax: suggestion.targetWordsMax,
                 storyArcBeatID: suggestion.storyArcBeatID,
+                coveredStoryArcBeatIDs: suggestion.coveredStoryArcBeatIDs,
                 recipeRequirementIDs: suggestion.recipeRequirementIDs
             )
         }
