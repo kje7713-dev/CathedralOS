@@ -176,6 +176,8 @@ struct ExistingSectionBlob: Codable {
     var targetWords: Int? = nil
     var targetWordsMin: Int? = nil
     var targetWordsMax: Int? = nil
+    /// Other beats fulfilled by this same already accepted dramatic section.
+    var coveredStoryArcBeatIDs: [String]? = nil
 }
 
 struct OutlineSuggestionJob: Codable {
