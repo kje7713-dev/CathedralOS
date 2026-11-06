@@ -8475,3 +8475,16 @@ Deno.test("architecture first: explicit word targets survive project acceptance 
   assertStringIncludes(sectionApi, "target_words: section.targetWords");
   assertStringIncludes(generationRequest, "plannedTargetWords: args.section.target_words");
 });
+
+Deno.test("architecture first: accepted secondary beat coverage prevents duplicate continuation sections", () => {
+  const accepted = [
+    { storyArcBeatID: "b0", coveredStoryArcBeatIDs: ["b0", "b1"], targetWords: 8700 },
+    { storyArcBeatID: "b2", coveredStoryArcBeatIDs: ["b2"], targetWords: 5200 },
+  ];
+  const req = architectureFirstRequest(accepted);
+  const plan = parseNovelArchitecturePlan(JSON.stringify({
+    storyArchitecture: architectureFirstFixture, sections: [],
+  }), req);
+  assertEquals(Array.from(plan.values()).every((beat) => beat.minSections === 0), true);
+  assertEquals(projectedExpectedWords(accepted), 13900);
+});
