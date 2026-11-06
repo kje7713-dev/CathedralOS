@@ -115,6 +115,14 @@ extension RunOutlineStatus {
         status == "paused_insufficient_credits"
     }
 
+    /// Failed Run All checkpoints can be resumed without creating a new run.
+    /// The backend preserves completed section outputs and reopens only the
+    /// incomplete queue entries.
+    var isResumable: Bool {
+        isPausedForInsufficientCredits ||
+            (status == "failed" && (sections_failed ?? 0) > 0)
+    }
+
     /// Persisted run errors are server-controlled text and must never be
     /// rendered directly in the customer UI. Provider responses can contain
     /// quota, API-key, organization, email, and raw upstream diagnostics.

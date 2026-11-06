@@ -1318,9 +1318,85 @@ async function handleResume(
   runId: string,
 ): Promise<Response> {
   const { data: run } = await adminClient.from("chapter_runs")
-    .select("id, outline_id, status").eq("id", runId)
+    .select("id, outline_id, status, sections")
+    .eq("id", runId)
     .eq("user_id", userId).maybeSingle();
   if (!run) return errorResponse("not_found", "run not found", 404);
+  if (run.status === "failed") {
+    const sections = Array.isArray(run.sections)
+      ? run.sections as Array<Record<string, unknown>>
+      : [];
+    const unfinished = sections.some((section) => section.status !== "completed");
+    if (!unfinished) {
+      return corsResponse(JSON.stringify({ run_id: runId, status: run.status }), {
+        status: 200,
+      });
+    }
+    // A failed Run All is a resumable checkpoint. Preserve every completed
+    // output and reopen only failed/incomplete queue entries; do not create a
+    // replacement chapter_runs row or charge completed sections again.
+    const resumedSections = sections.map((section) =>
+      section.status === "failed"
+        ? {
+          ...section,
+          status: "pending",
+          error: null,
+          started_at: null,
+          completed_at: null,
+          output_id: null,
+          cost: 0,
+        }
+        : section
+    );
+    const { data: resumed, error: resumeError } = await adminClient
+      .from("chapter_runs")
+      .update({
+        status: "running",
+        sections: resumedSections,
+        error: null,
+        worker_lease_until: null,
+        next_retry_at: null,
+        completed_at: null,
+      })
+      .eq("id", runId)
+      .eq("user_id", userId)
+      .eq("status", "failed")
+      .select("id, status")
+      .maybeSingle();
+    if (resumeError) return errorResponse("db_error", resumeError.message, 500);
+    if (!resumed) {
+      const { data: current } = await adminClient.from("chapter_runs")
+        .select("status").eq("id", runId).maybeSingle();
+      return corsResponse(
+        JSON.stringify({
+          run_id: runId,
+          status: current?.status ?? run.status,
+        }),
+        { status: 200 },
+      );
+    }
+    // Resume from the persisted queue. The next billable stage performs the
+    // authoritative credit check; completed outputs are never regenerated.
+    // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
+    EdgeRuntime.waitUntil(
+      runOutline(runId, adminClient).catch(async (err) => {
+        if (isRetryableOutlineLookupError(err)) {
+          await scheduleTransientOutlineLookupRetry(adminClient, runId, err);
+        } else if (isInsufficientCreditsError(err)) {
+          await pauseRunInsufficientCredits(adminClient, runId, null, err);
+        } else {
+          await markRunFailed(
+            adminClient,
+            runId,
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }),
+    );
+    return corsResponse(JSON.stringify({ run_id: runId, status: "running" }), {
+      status: 202,
+    });
+  }
   if (run.status === "paused_insufficient_credits") {
     const { data: resumed, error: resumeError } = await adminClient
       .from("chapter_runs")

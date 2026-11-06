@@ -412,6 +412,35 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   );
 });
 
+Deno.test("failed Run All checkpoints resume the same run and preserve completed outputs", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/run-outline/index.ts",
+  );
+  const start = source.indexOf("async function handleResume(");
+  const resume = source.slice(
+    start,
+    source.indexOf("async function releaseRunLease(", start),
+  );
+  assertStringIncludes(resume, 'if (run.status === "failed")');
+  assertStringIncludes(resume, 'section.status === "failed"');
+  assertStringIncludes(resume, 'status: "pending"');
+  assertStringIncludes(resume, 'sections: resumedSections');
+  assertStringIncludes(resume, "runOutline(runId, adminClient)");
+  assertEquals(resume.includes(".insert({"), false);
+});
+
+Deno.test("failed Run All UI exposes an explicit Resume Run action", async () => {
+  const [service, detail, banner] = await Promise.all([
+    Deno.readTextFile("./CathedralOSApp/Services/RunOutlineService.swift"),
+    Deno.readTextFile("./CathedralOSApp/Features/Projects/ProjectDetailView.swift"),
+    Deno.readTextFile("./CathedralOSApp/Features/Projects/OutlineSectionsRegionView.swift"),
+  ]);
+  assertStringIncludes(service, 'status == "failed" && (sections_failed ?? 0) > 0');
+  assertStringIncludes(detail, 'Text("Resume Run")');
+  assertStringIncludes(detail, "completed sections will not be regenerated");
+  assertStringIncludes(banner, 'Button("Resume Run")');
+});
+
 Deno.test("durable continuation auth is server-trusted and owner-derived", async () => {
   const source = await Deno.readTextFile(
     "./supabase/functions/run-outline/index.ts",
@@ -734,7 +763,7 @@ Deno.test("Run All iOS presentation treats paused as resumable and shows actual 
   assertEquals(sheet.includes("return est.allowed"), false);
   assertStringIncludes(banner, "Generation paused");
   assertStringIncludes(banner, "More credits needed");
-  assertStringIncludes(banner, 'Button("Resume")');
+  assertStringIncludes(banner, 'Button("Resume Run")');
   assertStringIncludes(banner, "Final cost:");
   assertStringIncludes(
     coordinator,

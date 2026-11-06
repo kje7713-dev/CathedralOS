@@ -1550,7 +1550,46 @@ struct ProjectDetailView: View {
                     storyEditorModeRaw = StoryEditorMode.outline.rawValue
                 }
             } else {
-                if let firstSection = outlineSections
+                if let resumableRun = projectRunStatus, resumableRun.isResumable {
+                    Button {
+                        Task { await resumeRun(resumableRun) }
+                    } label: {
+                        HStack(spacing: CathedralTheme.Spacing.md) {
+                            Image(systemName: "arrow.uturn.backward.circle.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(width: 28, height: 28)
+                                .background(CathedralTheme.Colors.accent.opacity(0.16))
+                                .clipShape(Circle())
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Resume Run")
+                                    .font(CathedralTheme.Typography.body(16, weight: .semibold))
+                                Text("Continue from the last saved section; completed sections will not be regenerated.")
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                                    .lineLimit(2)
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "arrow.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        }
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(CathedralTheme.Spacing.md)
+                        .background(CathedralTheme.Colors.accent.opacity(0.10))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                                .stroke(CathedralTheme.Colors.accent.opacity(0.25), lineWidth: 1)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Resume Run")
+                    .accessibilityHint("Continues the saved Run All checkpoint without regenerating completed sections")
+                } else if let firstSection = outlineSections
                     .filter({ $0.parent == nil })
                     .sorted(by: { $0.position < $1.position })
                     .first {
