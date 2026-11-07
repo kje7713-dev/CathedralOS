@@ -19,6 +19,7 @@ enum RunOutlineError: Error, LocalizedError {
     case notConfigured(reason: String)
     case notAuthenticated
     case alreadyRunning(runID: String)
+    case resumeAvailable(runID: String)
     case insufficientCredits(needed: Double, available: Double)
     case rateLimited
     case providerError
@@ -34,6 +35,7 @@ enum RunOutlineError: Error, LocalizedError {
         case .notConfigured(let r): return "Run-outline backend not configured. \(r)"
         case .notAuthenticated: return "Sign in to kick off a generation."
         case .alreadyRunning(let runID): return "A generation is already running (id: \(runID))."
+        case .resumeAvailable(let runID): return "A paid checkpoint is available to resume (id: \(runID))."
         case .insufficientCredits(let needed, let available):
             return "Insufficient credits: need \(needed), have \(available)."
         case .rateLimited: return "Too many requests. Try again in a minute."
@@ -376,6 +378,9 @@ struct RunOutlineService {
         if httpResponse.statusCode == 409 {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let runID = json["run_id"] as? String {
+                if json["errorCode"] as? String == "resume_available" {
+                    throw RunOutlineError.resumeAvailable(runID: runID)
+                }
                 throw RunOutlineError.alreadyRunning(runID: runID)
             }
             throw RunOutlineError.alreadyRunning(runID: "unknown")

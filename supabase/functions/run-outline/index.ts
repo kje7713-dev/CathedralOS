@@ -444,6 +444,7 @@ async function handleKickoff(req: Request): Promise<Response> {
     .select("id, status")
     .eq("idempotency_key", idempotencyKey)
     .maybeSingle();
+
   if (
     existing &&
     (existing.status === "queued" || existing.status === "running" ||
@@ -466,6 +467,50 @@ async function handleKickoff(req: Request): Promise<Response> {
       { status: 409 },
     );
   }
+  // Never replace a paid, incomplete checkpoint with a fresh kickoff.
+  // This is the server-side safety net for clients that lost their cached
+  // run identity: the user must be directed back to the same run so its
+  // completed outputs and settled billing remain authoritative.
+  const { data: resumableRuns } = await adminClient
+    .from("chapter_runs")
+    .select("id, status, sections, credits_actual, updated_at")
+    .eq("user_id", userId)
+    .eq("outline_id", body.outline_id)
+    .in("status", ["failed", "paused_insufficient_credits"])
+    .order("updated_at", { ascending: false })
+    .limit(20);
+  const completedCount = (candidate: Record<string, unknown>) =>
+    Array.isArray(candidate.sections)
+      ? (candidate.sections as Array<Record<string, unknown>>).filter(
+        (section) => section.status === "completed",
+      ).length
+      : 0;
+  const paidCheckpoint = (resumableRuns ?? [])
+    .filter((candidate) => {
+      const sections = Array.isArray(candidate.sections)
+        ? candidate.sections as Array<Record<string, unknown>>
+        : [];
+      const hasIncompleteSection = sections.some((section) =>
+        section.status !== "completed"
+      );
+      const hasSettledSpend = Number(candidate.credits_actual ?? 0) > 0;
+      return hasIncompleteSection &&
+        (candidate.status === "paused_insufficient_credits" ||
+          hasSettledSpend);
+    })
+    .sort((left, right) => completedCount(right) - completedCount(left))[0];
+  if (paidCheckpoint) {
+    return corsResponse(
+      JSON.stringify({
+        errorCode: "resume_available",
+        message: "A paid checkpoint is available. Resume that run instead of starting a new one.",
+        run_id: paidCheckpoint.id,
+        status: paidCheckpoint.status,
+      }),
+      { status: 409 },
+    );
+  }
+
   if (existing) {
     const { error: releaseErr } = await adminClient
       .from("chapter_runs")

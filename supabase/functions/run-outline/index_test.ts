@@ -429,6 +429,30 @@ Deno.test("failed Run All checkpoints resume the same run and preserve completed
   assertEquals(resume.includes(".insert({"), false);
 });
 
+Deno.test("paid resumable checkpoints block replacement kickoffs", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/run-outline/index.ts",
+  );
+  const start = source.indexOf("// Never replace a paid, incomplete checkpoint");
+  const guard = source.slice(start, source.indexOf("const { data: run, error: insertErr }", start));
+  assertStringIncludes(guard, "paidCheckpoint");
+  assertStringIncludes(guard, "credits_actual");
+  assertStringIncludes(guard, 'errorCode: "resume_available"');
+  assertStringIncludes(guard, "run_id: paidCheckpoint.id");
+  assertEquals(guard.includes('.insert({'), false);
+});
+
+Deno.test("iOS adopts a paid checkpoint when kickoff is refused", async () => {
+  const [service, outline] = await Promise.all([
+    Deno.readTextFile("./CathedralOSApp/Services/RunOutlineService.swift"),
+    Deno.readTextFile("./CathedralOSApp/Features/Projects/OutlineSectionsRegionView.swift"),
+  ]);
+  assertStringIncludes(service, "case resumeAvailable(runID: String)");
+  assertStringIncludes(service, 'errorCode"] as? String == "resume_available"');
+  assertStringIncludes(outline, "if case .resumeAvailable(let runID) = error");
+  assertStringIncludes(outline, "installRunStatus(");
+});
+
 Deno.test("failed Run All UI exposes an explicit Resume Run action", async () => {
   const [service, detail, banner] = await Promise.all([
     Deno.readTextFile("./CathedralOSApp/Services/RunOutlineService.swift"),
