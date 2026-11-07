@@ -1461,22 +1461,18 @@ async function handleResume(
         { status: 200 },
       );
     }
-    // Resume from the persisted queue. The next billable stage performs the
-    // authoritative credit check; completed outputs are never regenerated.
+    // Resume from the persisted queue. Queue a fresh HTTP invocation rather
+    // than running the queue inside this Resume request: Supabase may reuse a
+    // warm Edge isolate, and the detached continuation keeps each section
+    // bounded. Completed outputs are never regenerated.
     // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
     EdgeRuntime.waitUntil(
-      runOutline(runId, adminClient).catch(async (err) => {
-        if (isRetryableOutlineLookupError(err)) {
-          await scheduleTransientOutlineLookupRetry(adminClient, runId, err);
-        } else if (isInsufficientCreditsError(err)) {
-          await pauseRunInsufficientCredits(adminClient, runId, null, err);
-        } else {
-          await markRunFailed(
-            adminClient,
-            runId,
-            err instanceof Error ? err.message : String(err),
-          );
-        }
+      queueContinuation(runId).catch(async (err) => {
+        await markRunFailed(
+          adminClient,
+          runId,
+          `resume queue failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }),
     );
     return corsResponse(JSON.stringify({ run_id: runId, status: "running" }), {
@@ -1511,23 +1507,15 @@ async function handleResume(
       );
     }
     // Resume skips whole-run estimate/preflight; the next billable stage
-    // performs its normal authoritative credit check.
+    // performs its normal authoritative credit check in a fresh continuation.
     // @ts-ignore EdgeRuntime is provided by Supabase Edge Runtime
     EdgeRuntime.waitUntil(
-      runOutline(runId, adminClient).catch(async (err) => {
-        if (isRetryableOutlineLookupError(err)) {
-          await scheduleTransientOutlineLookupRetry(
-            adminClient,
-            runId,
-            err,
-          );
-        } else if (isInsufficientCreditsError(err)) {
-          await pauseRunInsufficientCredits(adminClient, runId, null, err);
-        } else {await markRunFailed(
-            adminClient,
-            runId,
-            err instanceof Error ? err.message : String(err),
-          );}
+      queueContinuation(runId).catch(async (err) => {
+        await markRunFailed(
+          adminClient,
+          runId,
+          `resume queue failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }),
     );
     return corsResponse(JSON.stringify({ run_id: runId, status: "running" }), {
@@ -1543,7 +1531,7 @@ async function handleResume(
   EdgeRuntime.waitUntil(
     (run.status === "queued"
       ? prepareRun(runId, adminClient)
-      : runOutline(runId, adminClient)).catch(async (err) => {
+      : queueContinuation(runId)).catch(async (err) => {
         if (isRetryableOutlineLookupError(err)) {
           await scheduleTransientOutlineLookupRetry(
             adminClient,
@@ -2376,6 +2364,14 @@ async function callGenerateStory(
           message: upstreamMessage,
           status: response.status,
         },
+      );
+    }
+    if (response.status === 546 ||
+      (response.status >= 500 && response.status < 600 &&
+        /WORKER_RESOURCE_LIMIT|WallClockTime/i.test(errBody))) {
+      throw new RetryableGenerationError(
+        `generate-story returned ${response.status}: ${errBody.slice(0, 200)}`,
+        60,
       );
     }
     if (response.status === 429) {

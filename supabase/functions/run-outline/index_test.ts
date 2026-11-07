@@ -425,7 +425,8 @@ Deno.test("failed Run All checkpoints resume the same run and preserve completed
   assertStringIncludes(resume, 'section.status === "failed"');
   assertStringIncludes(resume, 'status: "pending"');
   assertStringIncludes(resume, 'sections: resumedSections');
-  assertStringIncludes(resume, "runOutline(runId, adminClient)");
+  assertStringIncludes(resume, "queueContinuation(runId)");
+  assertEquals(resume.includes("runOutline(runId, adminClient)"), false);
   assertEquals(resume.includes(".insert({"), false);
 });
 
@@ -463,6 +464,25 @@ Deno.test("failed Run All UI exposes an explicit Resume Run action", async () =>
   assertStringIncludes(detail, 'Text("Resume Run")');
   assertStringIncludes(detail, "completed sections will not be regenerated");
   assertStringIncludes(banner, 'Button("Resume Run")');
+});
+
+Deno.test("resource-limit responses are retryable and do not terminally fail a section", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/run-outline/index.ts",
+  );
+  const start = source.indexOf("async function callGenerateStory(");
+  const end = source.indexOf("// Fetch raw_text", start);
+  const call = source.slice(start, end);
+  assertStringIncludes(call, "response.status === 546");
+  assertStringIncludes(call, "WORKER_RESOURCE_LIMIT");
+  assertStringIncludes(call, "new RetryableGenerationError");
+});
+
+Deno.test("fractional generation request charges use a numeric database column", async () => {
+  const migration = await Deno.readTextFile(
+    "./supabase/migrations/20261107150000_fix_fractional_generation_request_log_charge.sql",
+  );
+  assertStringIncludes(migration, "alter column actual_charge type numeric(18,6)");
 });
 
 Deno.test("durable continuation auth is server-trusted and owner-derived", async () => {
@@ -742,7 +762,7 @@ Deno.test("credit shortage pauses a resumable run and preserves the exact prose 
   assertStringIncludes(source, "outputID: result.output_id");
   assertStringIncludes(source, "Resume skips whole-run estimate/preflight");
   assertStringIncludes(source, 'run.status === "paused_insufficient_credits"');
-  assertStringIncludes(source, "runOutline(runId, adminClient)");
+  assertStringIncludes(source, "queueContinuation(runId)");
   assertEquals(pause.includes('status: "failed"'), false);
 });
 
