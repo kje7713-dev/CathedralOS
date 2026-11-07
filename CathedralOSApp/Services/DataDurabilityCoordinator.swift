@@ -1813,10 +1813,39 @@ final class DataDurabilityCoordinator: ObservableObject {
         currentSectionCount: Int,
         runOutlineService: RunOutlineService
     ) async {
-        guard let cached = runStatus(for: projectLineageID) else { return }
         guard currentSectionCount > 0,
-              let outlineID,
-              cached.outline_id.map { $0.caseInsensitiveCompare(outlineID.uuidString) == .orderedSame } == true else {
+              let outlineID else {
+            clearPersistedRunStatus(for: projectLineageID)
+            if activeRunProjectLineageID == projectLineageID {
+                activeRunStatus = nil
+                activeRunProjectLineageID = nil
+            }
+            return
+        }
+
+        guard let cached = runStatus(for: projectLineageID) else {
+            do {
+                let discovered = try await runOutlineService.recoverableStatus(
+                    outlineID: outlineID.uuidString
+                )
+                guard discovered.isResumable,
+                      discovered.outline_id.map({
+                          $0.caseInsensitiveCompare(outlineID.uuidString) == .orderedSame
+                      }) == true,
+                      discovered.hasCompatibleSectionCount(with: currentSectionCount)
+                else { return }
+                activeRunProjectLineageID = projectLineageID
+                activeRunStatus = discovered
+                persistRunStatus(discovered, for: projectLineageID)
+            } catch {
+                // A missing checkpoint or transient status failure must not
+                // block the normal Write All action.
+            }
+            return
+        }
+        guard cached.outline_id.map({
+            $0.caseInsensitiveCompare(outlineID.uuidString) == .orderedSame
+        }) == true else {
             clearPersistedRunStatus(for: projectLineageID)
             if activeRunProjectLineageID == projectLineageID {
                 activeRunStatus = nil

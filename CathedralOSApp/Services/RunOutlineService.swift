@@ -308,6 +308,25 @@ struct RunOutlineService {
         return try decode(RunOutlineStatus.self, from: data)
     }
 
+    /// Discover the best resumable checkpoint when the client has no cached
+    /// run identity, such as after reinstalling or opening the project on a
+    /// new device.
+    func recoverableStatus(outlineID: String) async throws -> RunOutlineStatus {
+        let client = try requireClient()
+        let token = try await validAccessToken()
+        var components = URLComponents(url: client.edgeFunctionURL(path: "run-outline"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "outline_id", value: outlineID)]
+        guard let url = components?.url else {
+            throw RunOutlineError.invalidResponse("Could not construct recoverable run URL")
+        }
+        var request = client.authorizedRequest(for: url, userAccessToken: token)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        let (data, response) = try await performRequest(request)
+        try checkStatus(response: response, data: data)
+        return try decode(RunOutlineStatus.self, from: data)
+    }
+
     // MARK: - helpers
 
     private func requireClient() throws -> SupabaseBackendClient {

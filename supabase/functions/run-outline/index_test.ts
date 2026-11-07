@@ -364,7 +364,7 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   );
   assertEquals(source.includes("idempotency_key: null"), true);
   assertEquals(source.includes("latest replacement"), false); // replacement lookup is client/server contract
-  assertEquals(source.includes("outline_id + start_parent_section_id"), true);
+  assertEquals(source.includes("run_id or outline_id required"), true);
   assertEquals(
     source.includes('.from("chapter_runs")\n      .delete()'),
     false,
@@ -514,6 +514,21 @@ Deno.test("run status endpoint exposes an exact idempotent replacement lookup", 
     source.includes("causing a false 404"),
     true,
   );
+});
+
+Deno.test("uncached project launch discovers the most complete resumable checkpoint", async () => {
+  const [backend, service, coordinator] = await Promise.all([
+    Deno.readTextFile("./supabase/functions/run-outline/index.ts"),
+    Deno.readTextFile("./CathedralOSApp/Services/RunOutlineService.swift"),
+    Deno.readTextFile("./CathedralOSApp/Services/DataDurabilityCoordinator.swift"),
+  ]);
+  assertStringIncludes(backend, 'if (!runId && !outlineID)');
+  assertStringIncludes(backend, '.in("status", ["failed", "paused_insufficient_credits"])');
+  assertStringIncludes(backend, "completed(right) - completed(left)");
+  assertStringIncludes(service, 'URLQueryItem(name: "outline_id", value: outlineID)');
+  assertStringIncludes(service, "func recoverableStatus(outlineID: String)");
+  assertStringIncludes(coordinator, "runOutlineService.recoverableStatus(");
+  assertStringIncludes(coordinator, "discovered.isResumable");
 });
 
 Deno.test("initial Run All estimate is not duplicated by model state initialization", async () => {
