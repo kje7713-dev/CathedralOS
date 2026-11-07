@@ -209,6 +209,16 @@ private func makeSuggestion(storyArcBeatID: String = "22222222-2222-2222-2222-22
     )
 }
 
+private func waitForAcceptAllStartRequest(_ service: FakeAcceptAllService) async throws {
+    // The coordinator launches the POST from a MainActor task. Under the full
+    // XCTest suite, a fixed 200ms sleep can expire before that task runs even
+    // though the production path is correct. Wait on the observable seam with
+    // a bounded timeout instead of asserting a scheduler timing assumption.
+    for _ in 0..<40 where service.lastStartRequest == nil {
+        try await Task.sleep(nanoseconds: 50_000_000)
+    }
+}
+
 // MARK: - Tests
 
 @MainActor
@@ -237,8 +247,7 @@ final class AcceptAllLifecycleTests: XCTestCase {
             service: service
         )
 
-        // Yield long enough for the await service.startAcceptAll to complete.
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await waitForAcceptAllStartRequest(service)
 
         XCTAssertEqual(service.startCallCount, 1, "startAcceptAll must be invoked exactly once")
         XCTAssertEqual(service.lastStartRequest?.projectID, projectID)
@@ -295,7 +304,7 @@ final class AcceptAllLifecycleTests: XCTestCase {
             context: context,
             service: service
         )
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await waitForAcceptAllStartRequest(service)
 
         XCTAssertEqual(service.lastStartRequest?.projectID, localProjectID)
         XCTAssertEqual(service.lastStartRequest?.projectLineageID, canonicalLineageID,
