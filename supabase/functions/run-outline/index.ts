@@ -39,8 +39,8 @@ import {
   type UserEntitlement,
 } from "../generate-story/_credits.ts";
 import {
-  buildGenerateStoryRequest,
   buildFutureOutlineContext,
+  buildGenerateStoryRequest,
   generationOutputId,
   projectSnapshotLookupFilter,
 } from "./_generation_request.ts";
@@ -769,10 +769,10 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
   const runId = url.searchParams.get("run_id");
   const outlineID = url.searchParams.get("outline_id");
   const startParentSectionID = url.searchParams.get("start_parent_section_id");
-  if (!runId && (!outlineID || !startParentSectionID)) {
+  if (!runId && !outlineID) {
     return errorResponse(
       "missing_param",
-      "run_id or outline_id + start_parent_section_id required",
+      "run_id or outline_id required",
       400,
     );
   }
@@ -804,9 +804,14 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
       "id, outline_id, start_parent_section_id, status, sections, credits_reserved, credits_actual, error, created_at, updated_at, completed_at",
     )
     .eq("user_id", userData.user.id);
-  const { data: run, error: runErr } = runId
-    ? await runQuery.eq("id", runId).single()
-    : await runQuery
+  let run: Record<string, unknown> | null = null;
+  let runErr: { message?: string } | null = null;
+  if (runId) {
+    const result = await runQuery.eq("id", runId).single();
+    run = result.data as Record<string, unknown> | null;
+    runErr = result.error;
+  } else if (startParentSectionID) {
+    const result = await runQuery
       .eq(
         "idempotency_key",
         `${userData.user.id}:${outlineID}:${startParentSectionID}`,
@@ -814,6 +819,37 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+    run = result.data as Record<string, unknown> | null;
+    runErr = result.error;
+  } else {
+    // A freshly installed client may have no cached run status. Discover the
+    // best resumable checkpoint by outline, preferring the run with the most
+    // completed sections so a mistaken replacement attempt cannot hide the
+    // user's original paid checkpoint.
+    const result = await runQuery
+      .eq("outline_id", outlineID)
+      .in("status", ["failed", "paused_insufficient_credits"])
+      .order("updated_at", { ascending: false })
+      .limit(20);
+    runErr = result.error;
+    const candidates = (result.data ?? []) as Array<Record<string, unknown>>;
+    run = candidates
+      .filter((candidate) => {
+        const sections = Array.isArray(candidate.sections)
+          ? candidate.sections as Array<Record<string, unknown>>
+          : [];
+        return sections.some((section) => section.status !== "completed");
+      })
+      .sort((left, right) => {
+        const completed = (candidate: Record<string, unknown>) =>
+          Array.isArray(candidate.sections)
+            ? (candidate.sections as Array<Record<string, unknown>>).filter(
+              (section) => section.status === "completed",
+            ).length
+            : 0;
+        return completed(right) - completed(left);
+      })[0] ?? null;
+  }
   if (runErr || !run) return errorResponse("not_found", "run not found", 404);
 
   // A status poll is also a lightweight recovery trigger. If an invocation
@@ -1326,11 +1362,16 @@ async function handleResume(
     const sections = Array.isArray(run.sections)
       ? run.sections as Array<Record<string, unknown>>
       : [];
-    const unfinished = sections.some((section) => section.status !== "completed");
+    const unfinished = sections.some((section) =>
+      section.status !== "completed"
+    );
     if (!unfinished) {
-      return corsResponse(JSON.stringify({ run_id: runId, status: run.status }), {
-        status: 200,
-      });
+      return corsResponse(
+        JSON.stringify({ run_id: runId, status: run.status }),
+        {
+          status: 200,
+        },
+      );
     }
     // A failed Run All is a resumable checkpoint. Preserve every completed
     // output and reopen only failed/incomplete queue entries; do not create a
