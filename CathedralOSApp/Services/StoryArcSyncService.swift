@@ -111,6 +111,7 @@ static func fetchAuthoritativeBeats(
     /// Root-fetch prevents accidentally restoring user-deleted beat objects.
     /// Exact legacy-text matching preserves custom descriptions and labels.
     @discardableResult
+    @MainActor
     static func refreshUnmodifiedTemplateBeats(
         arc: StoryArc,
         modelContext: ModelContext
@@ -140,6 +141,7 @@ static func fetchAuthoritativeBeats(
         return changed
     }
 
+    @MainActor
     func syncArc(
         arc: StoryArc,
         modelContext: ModelContext
