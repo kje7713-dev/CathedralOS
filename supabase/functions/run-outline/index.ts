@@ -334,10 +334,44 @@ async function handleKickoff(req: Request): Promise<Response> {
   if (trustedResumeId) {
     const run = await loadDurableRunOwner(adminClient, trustedResumeId);
     if (!run) return errorResponse("not_found", "run not found", 404);
-    return await handleResume(
-      adminClient,
-      run.user_id,
-      run.id,
+    // Trusted continuation requests are worker dispatch, not user resume
+    // requests. Calling handleResume here would enqueue another trusted
+    // continuation, creating an unbounded POST recursion until Supabase's
+    // gateway rate limiter rejects the trace. Dispatch the leased worker
+    // directly; prepareRun will enqueue runOutline once its preflight ends.
+    if (run.status === "queued") {
+      EdgeRuntime.waitUntil(
+        prepareRun(run.id, adminClient).catch(async (err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[run-outline] trusted preparation ${run.id} crashed: ${message}`,
+          );
+          await markRunFailed(adminClient, run.id, message);
+        }),
+      );
+      return corsResponse(
+        JSON.stringify({ run_id: run.id, status: run.status }),
+        { status: 202 },
+      );
+    }
+    if (run.status === "running") {
+      EdgeRuntime.waitUntil(
+        runOutline(run.id, adminClient).catch(async (err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[run-outline] trusted continuation ${run.id} crashed: ${message}`,
+          );
+          await markRunFailed(adminClient, run.id, message);
+        }),
+      );
+      return corsResponse(
+        JSON.stringify({ run_id: run.id, status: run.status }),
+        { status: 202 },
+      );
+    }
+    return corsResponse(
+      JSON.stringify({ run_id: run.id, status: run.status }),
+      { status: 200 },
     );
   }
 
