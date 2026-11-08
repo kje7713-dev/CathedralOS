@@ -451,6 +451,56 @@ platform :ios do
     UI.success("Uploaded #{paths.length} iPhone 6.1-inch screenshots to App Store Connect.")
   end
 
+  # appstore_review_info — update App Review credentials and notes through ASC API.
+  lane :appstore_review_info do
+    preflight_checks(%w[ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY APP_IDENTIFIER APP_REVIEW_CONTACT_EMAIL APP_REVIEW_CONTACT_PHONE APP_REVIEW_DEMO_ACCOUNT APP_REVIEW_DEMO_PASSWORD])
+
+    app_store_connect_api_key(
+      key_id:                ENV["ASC_KEY_ID"],
+      issuer_id:             ENV["ASC_ISSUER_ID"],
+      key_content:           ENV["ASC_API_KEY"],
+      is_key_content_base64: true,
+      in_house:              false
+    )
+
+    app = Spaceship::ConnectAPI::App.find(ENV["APP_IDENTIFIER"])
+    UI.user_error!("App Store Connect app not found for #{ENV['APP_IDENTIFIER']}") unless app
+    version = app.get_edit_app_store_version || app.get_latest_app_store_version
+    UI.user_error!("No App Store version exists yet for #{app.name}") unless version
+
+    notes = <<~NOTES
+      Sign-in: Tap “Sign in with Apple” on the first screen and complete the Apple sign-in sheet. After signing in, create a project from Projects and open the generation flow.
+
+      Purchases: The free flow can be reviewed without purchasing. If purchase testing is needed, use the Sandbox Apple Account supplied in the App Review information; all transactions are sandbox transactions and do not charge real money.
+
+      Support: Account → Developer Tools → Diagnostics shows backend, authentication, StoreKit, credits, and generation-preflight status.
+    NOTES
+    attributes = {
+      contactFirstName: ENV.fetch("APP_REVIEW_CONTACT_FIRST_NAME", "Kevin"),
+      contactLastName: ENV.fetch("APP_REVIEW_CONTACT_LAST_NAME", "Ehatt"),
+      contactEmail: ENV.fetch("APP_REVIEW_CONTACT_EMAIL"),
+      contactPhone: ENV.fetch("APP_REVIEW_CONTACT_PHONE"),
+      demoAccountName: ENV.fetch("APP_REVIEW_DEMO_ACCOUNT"),
+      demoAccountPassword: ENV.fetch("APP_REVIEW_DEMO_PASSWORD"),
+      demoAccountRequired: true,
+      notes: notes
+    }
+
+    detail = begin
+      version.fetch_app_store_review_detail
+    rescue RuntimeError => error
+      raise unless error.message == "No data"
+      nil
+    end
+    if detail
+      detail.update(attributes: attributes)
+      UI.success("Updated App Review information for #{version.version_string}.")
+    else
+      version.create_app_store_review_detail(attributes: attributes)
+      UI.success("Created App Review information for #{version.version_string}.")
+    end
+  end
+
   # appstore_age_rating — apply the reviewed StoryDonkey age-rating declaration.
   # This is an explicit write lane; it is not included in audit/preview/apply.
   # ---------------------------------------------------------------------------

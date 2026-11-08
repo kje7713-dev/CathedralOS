@@ -14,6 +14,7 @@ on:
           - apply
           - screenshots
           - age_rating
+          - review_info
 
 permissions:
   contents: read
@@ -27,6 +28,10 @@ jobs:
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
       APP_IDENTIFIER: ${{ secrets.APP_IDENTIFIER }}
+      APP_REVIEW_DEMO_ACCOUNT: ${{ secrets.APP_REVIEW_DEMO_ACCOUNT }}
+      APP_REVIEW_DEMO_PASSWORD: ${{ secrets.APP_REVIEW_DEMO_PASSWORD }}
+      APP_REVIEW_CONTACT_EMAIL: ${{ secrets.APP_REVIEW_CONTACT_EMAIL }}
+      APP_REVIEW_CONTACT_PHONE: ${{ secrets.APP_REVIEW_CONTACT_PHONE }}
       MODE: ${{ inputs.mode }}
     steps:
       - name: Checkout
@@ -54,5 +59,6 @@ jobs:
             apply) APPLY=true bundle exec fastlane ios appstore_metadata ;;
             screenshots) bundle exec fastlane ios appstore_screenshots ;;
             age_rating) bundle exec fastlane ios appstore_age_rating ;;
+            review_info) bundle exec fastlane ios appstore_review_info ;;
             *) echo "Unknown mode: $MODE"; exit 1 ;;
           esac
