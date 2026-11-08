@@ -412,6 +412,21 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   );
 });
 
+Deno.test("trusted continuations dispatch workers without recursive resume enqueue", async () => {
+  const source = await Deno.readTextFile(
+    "./supabase/functions/run-outline/index.ts",
+  );
+  const trusted = source.slice(
+    source.indexOf("const trustedResumeId"),
+    source.indexOf("// 1. Public auth"),
+  );
+  assertStringIncludes(trusted, 'run.status === "queued"');
+  assertStringIncludes(trusted, "prepareRun(run.id, adminClient)");
+  assertStringIncludes(trusted, 'run.status === "running"');
+  assertStringIncludes(trusted, "runOutline(run.id, adminClient)");
+  assertEquals(trusted.includes("handleResume("), false);
+});
+
 Deno.test("failed Run All checkpoints resume the same run and preserve completed outputs", async () => {
   const source = await Deno.readTextFile(
     "./supabase/functions/run-outline/index.ts",
@@ -498,7 +513,8 @@ Deno.test("durable continuation auth is server-trusted and owner-derived", async
     handler,
     "loadDurableRunOwner(adminClient, trustedResumeId)",
   );
-  assertStringIncludes(handler, "run.user_id");
+  assertStringIncludes(handler, "loadDurableRunOwner");
+  assertStringIncludes(handler, "run.id");
   assertStringIncludes(
     handler,
     'return errorResponse("not_found", "run not found", 404)',
