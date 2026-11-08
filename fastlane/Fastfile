@@ -479,11 +479,24 @@ platform :ios do
       localizations.find { |item| item.locale.to_s.start_with?("en") }
     UI.user_error!("No English App Store localization found") unless localization
 
-    metadata_dir = File.join("fastlane", "metadata", "en-US")
+    metadata_dir = File.expand_path("metadata/en-US", __dir__)
     checks = {
       "description" => [localization.description, File.join(metadata_dir, "description.txt")],
-      "keywords" => [localization.keywords, File.join(metadata_dir, "keywords.txt")]
+      "keywords" => [localization.keywords, File.join(metadata_dir, "keywords.txt")],
+      "promotionalText" => [localization.promotional_text, File.join(metadata_dir, "promotional_text.txt")],
+      "supportUrl" => [localization.support_url, File.join(metadata_dir, "support_url.txt")]
     }
+
+    app_info = app.fetch_edit_app_info
+    UI.user_error!("No editable App Store information exists for #{app.name}") unless app_info
+    info_localization = app_info.get_app_info_localizations.find { |item| item.locale == "en-US" } ||
+      app_info.get_app_info_localizations.find { |item| item.locale.to_s.start_with?("en") }
+    UI.user_error!("No English App Store information localization exists") unless info_localization
+    checks.merge!(
+      "name" => [info_localization.name, File.join(metadata_dir, "name.txt")],
+      "subtitle" => [info_localization.subtitle, File.join(metadata_dir, "subtitle.txt")],
+      "privacyPolicyUrl" => [info_localization.privacy_policy_url, File.join(metadata_dir, "privacy_policy_url.txt")]
+    )
 
     checks.each do |field, (current, path)|
       expected = File.exist?(path) ? File.read(path).strip : ""
@@ -499,6 +512,8 @@ platform :ios do
       end
       UI.message("#{status}: en-US #{field}")
     end
+
+    UI.message("MANUAL: terms_url.txt is not applied; App Store custom EULA remains an operator/API-surface check.")
 
     screenshot_sets = localization.get_app_screenshot_sets
     screenshot_count = screenshot_sets.sum { |set| set.app_screenshots.to_a.length }
