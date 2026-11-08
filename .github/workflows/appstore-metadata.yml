@@ -13,6 +13,7 @@ on:
           - preview
           - apply
           - screenshots
+          - age_rating
 
 permissions:
   contents: read
@@ -43,7 +44,7 @@ jobs:
           test -n "$ASC_ISSUER_ID" || { echo 'ASC_ISSUER_ID is missing'; exit 1; }
           test -n "$ASC_API_KEY" || { echo 'ASC_API_KEY is missing'; exit 1; }
           test -n "$APP_IDENTIFIER" || { echo 'APP_IDENTIFIER is missing'; exit 1; }
-          echo "App Store metadata mode: $MODE (audit/preview are read-only; apply/screenshots can write)"
+          echo "App Store metadata mode: $MODE (audit/preview are read-only; apply/screenshots/age_rating can write)"
 
       - name: Audit or synchronize metadata
         run: |
@@ -52,5 +53,6 @@ jobs:
             preview) APPLY=false bundle exec fastlane ios appstore_metadata ;;
             apply) APPLY=true bundle exec fastlane ios appstore_metadata ;;
             screenshots) bundle exec fastlane ios appstore_screenshots ;;
+            age_rating) bundle exec fastlane ios appstore_age_rating ;;
             *) echo "Unknown mode: $MODE"; exit 1 ;;
           esac

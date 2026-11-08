@@ -451,6 +451,60 @@ platform :ios do
     UI.success("Uploaded #{paths.length} iPhone 6.1-inch screenshots to App Store Connect.")
   end
 
+  # appstore_age_rating — apply the reviewed StoryDonkey age-rating declaration.
+  # This is an explicit write lane; it is not included in audit/preview/apply.
+  # ---------------------------------------------------------------------------
+  lane :appstore_age_rating do
+    preflight_checks(%w[ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY APP_IDENTIFIER])
+
+    app_store_connect_api_key(
+      key_id:                ENV["ASC_KEY_ID"],
+      issuer_id:             ENV["ASC_ISSUER_ID"],
+      key_content:           ENV["ASC_API_KEY"],
+      is_key_content_base64: true,
+      in_house:              false
+    )
+
+    app = Spaceship::ConnectAPI::App.find(ENV["APP_IDENTIFIER"])
+    UI.user_error!("App Store Connect app not found for #{ENV['APP_IDENTIFIER']}") unless app
+    app_info = app.fetch_edit_app_info
+    UI.user_error!("No editable App Store information exists for #{app.name}") unless app_info
+
+    declaration = Spaceship::ConnectAPI.get_age_rating_declaration(app_info_id: app_info.id).to_models.first
+    UI.user_error!("No age-rating declaration exists for #{app.name}") unless declaration
+
+    rating = Spaceship::ConnectAPI::AgeRatingDeclaration::Rating
+    age_rating = Spaceship::ConnectAPI::AgeRatingDeclaration::AgeRating
+    declaration.update(
+      attributes: {
+        ageRatingOverrideV2: age_rating::THIRTEEN_PLUS,
+        userGeneratedContent: true,
+        messagingAndChat: false,
+        unrestrictedWebAccess: false,
+        advertising: false,
+        gambling: false,
+        healthOrWellnessTopics: false,
+        lootBox: false,
+        parentalControls: false,
+        ageAssurance: false,
+        sexualContentOrNudity: rating::INFREQUENT_OR_MILD,
+        sexualContentGraphicAndNudity: rating::NONE,
+        matureOrSuggestiveThemes: rating::INFREQUENT_OR_MILD,
+        horrorOrFearThemes: rating::INFREQUENT_OR_MILD,
+        violenceCartoonOrFantasy: rating::INFREQUENT_OR_MILD,
+        violenceRealistic: rating::INFREQUENT_OR_MILD,
+        violenceRealisticProlongedGraphicOrSadistic: rating::NONE,
+        profanityOrCrudeHumor: rating::INFREQUENT_OR_MILD,
+        alcoholTobaccoOrDrugUseOrReferences: rating::NONE,
+        contests: rating::NONE,
+        gamblingSimulated: rating::NONE,
+        gunsOrOtherWeapons: rating::NONE,
+        medicalOrTreatmentInformation: rating::NONE
+      }
+    )
+    UI.success("Applied StoryDonkey age-rating declaration: 13+, user-created content, infrequent/mild mature themes.")
+  end
+
   # appstore_audit — read current App Store metadata and compare it with the
   # checked-in English metadata. This lane never writes to Apple.
   # ---------------------------------------------------------------------------
