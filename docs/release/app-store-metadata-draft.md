@@ -13,14 +13,15 @@ contains no fabricated legal URLs or credentials.
 | Description | See `fastlane/metadata/en-US/description.txt`. | Existing draft; review before apply |
 | Keywords | See `fastlane/metadata/en-US/keywords.txt`. | Existing draft; review before apply |
 
-## URLs — operator input required
+## URLs and synchronization status
 
-- Privacy Policy URL: **NEEDS OPERATOR**
-- Terms of Use / EULA: **NEEDS OPERATOR**
-- Support URL: **NEEDS OPERATOR**
+- Privacy Policy URL: **checked in and applied by the metadata lane**
+- Support URL: **checked in and applied by the metadata lane**
+- Terms of Use URL: **checked in; custom App Store EULA still requires explicit verification**
 
 Do not replace these with placeholders. The release workflow requires production
-privacy and terms URLs to be real HTTPS URLs.
+privacy and terms URLs to be real HTTPS URLs. Run the read-only App Store audit
+after every apply; it is the source of truth for ASC-vs-repository matches.
 
 ## Review notes — draft
 
@@ -53,9 +54,12 @@ settings in App Store Connect: **NEEDS OPERATOR**.
 
 ## Remaining release metadata checklist
 
-- App Store screenshots: **NEEDS OPERATOR**
-- Age rating and content declarations: **NEEDS OPERATOR**
-- App privacy questionnaire: **NEEDS OPERATOR** after final data-use review
-- Sign in with Apple capability and review path: **NEEDS OPERATOR verification**
-- Banking, tax, and paid-app agreements: **NEEDS OPERATOR**
-- Final TestFlight build selection: **NEEDS OPERATOR**
+- Read-only ASC audit after the next metadata apply: **AUTOMATED; required for verification**
+- Custom App Store EULA / terms field: **MANUAL verification**
+- Additional screenshot display sizes or localizations, if required: **OPERATOR review**
+- Age rating and content declarations: **OPERATOR review**
+- App privacy questionnaire: **OPERATOR review** after final data-use review
+- App Review contact, demo account, and purchase instructions: **OPERATOR input**
+- Sign in with Apple capability and review path: **OPERATOR verification**
+- Banking, tax, and paid-app agreements: **OPERATOR-only**
+- Final build selection and submission: **OPERATOR decision**
