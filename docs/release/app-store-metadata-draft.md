@@ -34,8 +34,11 @@ requested through the StoryDonkey backend; the OpenAI credential is never shippe
 in the app. The Account area includes Diagnostics, Restore Purchases, and account
 deletion. Subscription and credit purchases are handled through StoreKit.
 
-Provide the App Review demo account and any required sandbox purchase instructions
-in App Store Connect before submission: **NEEDS OPERATOR**.
+App Review access is documented in
+[`app-review-access-howto.md`](app-review-access-howto.md). The reviewer signs in
+with Sign in with Apple; a separate Sandbox Apple Account is only for StoreKit
+purchase testing. Enter any private credentials directly in App Store Connect,
+never in this repository. Status: **NEEDS OPERATOR**.
 
 ## StoreKit products to configure and verify
 

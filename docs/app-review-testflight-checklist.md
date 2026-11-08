@@ -54,18 +54,23 @@ purchase, provide a sandbox test account in the App Review notes.
 
 ---
 
-## 3. Test Account Instructions
+## 3. App Review access and test accounts
 
-If App Review or TestFlight testers need a signed-in session:
+Sandbox purchase accounts and app sign-in identities are separate:
 
-1. Create a Sandbox Apple ID in App Store Connect (Users & Access → Sandbox → Testers).
-2. On the device under test, go to Settings → App Store → SANDBOX ACCOUNT and sign in
-   with the sandbox account (iOS 12+). Do **not** sign out of the main Apple ID.
-3. Alternatively, use "Sign in with Apple" inside the app — the app will exchange the
-   Apple identity token for a Supabase session automatically.
+1. Create a dedicated Sandbox Apple Account in App Store Connect (**Users & Access →
+   Sandbox → Testers**) for subscription/credit purchase testing.
+2. On a test device, use Settings → App Store → **SANDBOX ACCOUNT** for StoreKit
+   transactions. Do **not** sign out of the main Apple ID.
+3. StoryDonkey’s normal app sign-in is **Sign in with Apple**. The reviewer should
+   tap that button and complete Apple’s sign-in sheet; the Sandbox account is not
+   the app login account.
+4. In App Review Information, explain that free generation works without a
+   purchase and provide Sandbox credentials only in Apple’s secure fields when
+   purchase testing is needed.
 
-For App Review, add a "Demo Account" note in App Review Information with the
-sandbox credentials.
+See [`docs/release/app-review-access-howto.md`](release/app-review-access-howto.md)
+for paste-ready notes. Never put passwords or private Apple IDs in the repository.
 
 ---
 
