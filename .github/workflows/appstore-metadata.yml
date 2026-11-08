@@ -31,6 +31,7 @@ jobs:
       APP_REVIEW_DEMO_ACCOUNT: ${{ secrets.APP_REVIEW_DEMO_ACCOUNT }}
       APP_REVIEW_DEMO_PASSWORD: ${{ secrets.APP_REVIEW_DEMO_PASSWORD }}
       APP_REVIEW_CONTACT_EMAIL: ${{ secrets.APP_REVIEW_CONTACT_EMAIL }}
+      APP_REVIEW_CONTACT_PHONE: ${{ secrets.APP_REVIEW_CONTACT_PHONE }}
       MODE: ${{ inputs.mode }}
     steps:
       - name: Checkout
