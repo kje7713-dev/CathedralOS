@@ -238,90 +238,61 @@ struct AccountView: View {
     // MARK: - Subscription section
 
     private var subscriptionSection: some View {
-        Section("Credits & Purchases") {
-            VStack(alignment: .leading, spacing: 8) {
-
-                // Plan row
-                HStack {
-                    Text("Plan")
-                    Spacer()
-                    Text(planDisplayName)
-                        .foregroundStyle(
-                            entitlementState.isPro
-                                ? CathedralTheme.Colors.accent
-                                : CathedralTheme.Colors.secondaryText
-                        )
-                        .fontWeight(entitlementState.isPro ? .semibold : .regular)
-                }
-
-                // Backend-authoritative credit balance, including consumable packs.
-                HStack {
-                    Text("Credits available")
-                    Spacer()
-                    Text(formattedCredits(backendCreditState?.availableCredits ?? entitlementState.totalAvailableCredits))
-                        .foregroundStyle(CathedralTheme.Colors.primaryText)
-                }
-
-                // Subscription expiry (Pro only)
-                if let expiresAt = entitlementState.entitlementExpiresAt {
+        Group {
+            Section("Credits") {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Backend-authoritative credit balance, including consumable packs.
                     HStack {
-                        Text("Active until")
+                        Text("Credits available")
                         Spacer()
-                        Text(usageResetDateString(expiresAt))
-                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        Text(formattedCredits(backendCreditState?.availableCredits ?? entitlementState.totalAvailableCredits))
+                            .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    }
+
+                    Button {
+                        showPaywall = true
+                    } label: {
+                        Label("Buy Credits", systemImage: "plus.circle")
+                    }
+                    .disabled(isWorking || isRestoring)
+                }
+                .padding(.vertical, 4)
+            }
+
+            Section("Restore Purchases") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        Task { await attemptRestore() }
+                    } label: {
+                        Label(
+                            isRestoring ? "Restoring…" : "Restore Purchases",
+                            systemImage: isRestoring
+                                ? "arrow.trianglehead.2.clockwise"
+                                : "arrow.triangle.2.circlepath"
+                        )
+                    }
+                    .disabled(isWorking || isRestoring)
+
+                    if let restoreSuccess {
+                        Text(restoreSuccess)
+                            .font(.caption)
+                            .foregroundStyle(CathedralTheme.Colors.accent)
+                    }
+                    if let restoreError {
+                        Text(restoreError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
                 }
+                .padding(.vertical, 4)
+            }
 
-                Button {
-                    showPaywall = true
-                } label: {
-                    Label("Buy Credits", systemImage: "plus.circle")
-                }
-                .disabled(isWorking || isRestoring)
-
-                // Restore purchases
-                Button {
-                    Task { await attemptRestore() }
-                } label: {
-                    Label(
-                        isRestoring ? "Restoring…" : "Restore Purchases",
-                        systemImage: isRestoring
-                            ? "arrow.trianglehead.2.clockwise"
-                            : "arrow.triangle.2.circlepath"
-                    )
-                }
-                .disabled(isWorking || isRestoring)
-
+            Section("Subscriptions") {
                 Link(destination: URL(string: "https://apps.apple.com/account/subscriptions")!) {
-                    Label("Manage Subscription", systemImage: "arrow.up.forward.app")
-                }
-
-                if let restoreSuccess {
-                    Text(restoreSuccess)
-                        .font(.caption)
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                }
-                if let restoreError {
-                    Text(restoreError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    Label("Manage Subscriptions", systemImage: "arrow.up.forward.app")
                 }
             }
-            .padding(.vertical, 4)
         }
-    }
-
-    private func usageResetDateString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter.string(from: date)
-    }
-
-    private var planDisplayName: String {
-        guard !entitlementState.isPro else { return entitlementState.plan.displayName }
-        let purchased = backendCreditState?.purchasedCreditBalance ?? entitlementState.purchasedCreditBalance
-        return purchased > 0 ? "Free plan · Purchased credits" : "Free plan"
     }
 
     private func formattedCredits(_ value: Double) -> String {
