@@ -610,7 +610,7 @@ struct KindleExportView: View {
                 Button(action: kickoffExport) {
                     HStack {
                         Spacer()
-                        Text("Export to Kindle")
+                        Text("Export to EPUB")
                             .font(CathedralTheme.Typography.body(15, weight: .semibold))
                         Spacer()
                     }
