@@ -75,6 +75,7 @@ struct AccountView: View {
         NavigationStack {
             List {
                 accountSection
+                deleteAccountSection
                 blockedCreatorsSection
                 subscriptionSection
                 syncSection
@@ -187,16 +188,22 @@ struct AccountView: View {
                 Label("Sign Out", systemImage: "person.badge.minus")
             }
             .disabled(isWorking || durabilityCoordinator.isRunning)
-            Divider()
-                .padding(.vertical, 6)
-            Button(role: .destructive) {
-                showDeleteAccountConfirmation = true
-            } label: {
-                Label("Delete Account", systemImage: "trash")
-            }
-            .disabled(isWorking || durabilityCoordinator.isRunning)
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var deleteAccountSection: some View {
+        if case .signedIn = authState {
+            Section("Delete Account") {
+                Button(role: .destructive) {
+                    showDeleteAccountConfirmation = true
+                } label: {
+                    Label("Delete Account", systemImage: "trash")
+                }
+                .disabled(isWorking || durabilityCoordinator.isRunning)
+            }
+        }
     }
 
     // MARK: Sign in with Apple button
