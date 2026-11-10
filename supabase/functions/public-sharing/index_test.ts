@@ -95,6 +95,20 @@ function mockClient(options: {
           error: null,
         });
       }
+      if (table === "profiles") {
+        return resolve({
+          data: [{ id: state.owner, display_name: "StoryDonkey Review Publisher" }],
+          error: null,
+        });
+      }
+      if (table === "user_blocks") {
+        return resolve({
+          data: state.blocked
+            ? [{ blocked_user_id: state.owner, created_at: "2026-11-10T00:00:00Z" }]
+            : [],
+          error: null,
+        });
+      }
       return resolve({ data: [], error: null });
     };
     chain.insert = (row: Record<string, unknown>) => {
@@ -199,6 +213,26 @@ Deno.test("EPUB download provenance rejects cross-owner linkage", () => {
   assertEquals(epubPublicationOwnerMatches(OWNER, OTHER), false);
   assertEquals(epubPublicationOwnerMatches(OWNER, null), false);
   assertEquals(epubPublicationOwnerMatches("", OWNER), false);
+});
+
+Deno.test("blocks list includes creator display names", async () => {
+  const response = await enabledHandler(
+    request("GET", "/blocks"),
+    {
+      adminClient: mockClient({ blocked: true }),
+      authenticatedUserId: OTHER,
+      supabaseURL: "https://example.test",
+    },
+  );
+
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), {
+    blocks: [{
+      blocked_user_id: OWNER,
+      created_at: "2026-11-10T00:00:00Z",
+      display_name: "StoryDonkey Review Publisher",
+    }],
+  });
 });
 
 Deno.test("EPUB publish rejects non-owner and inactive exports", async () => {

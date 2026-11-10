@@ -151,7 +151,7 @@ protocol PublicSharingService {
 
     func blockCreator(userID: String) async throws
     func unblockCreator(userID: String) async throws
-    func fetchBlockedCreatorIDs() async throws -> [String]
+    func fetchBlockedCreators() async throws -> [BlockedCreator]
 
     /// Uploads a cover image for a pending shared output and returns persisted metadata.
     func uploadCoverImage(
@@ -172,9 +172,14 @@ extension PublicSharingService {
         throw PublicSharingServiceError.serverError(statusCode: 501, message: "Creator blocking is unavailable")
     }
 
-    func fetchBlockedCreatorIDs() async throws -> [String] {
+    func fetchBlockedCreators() async throws -> [BlockedCreator] {
         throw PublicSharingServiceError.serverError(statusCode: 501, message: "Creator blocking is unavailable")
     }
+}
+
+struct BlockedCreator: Identifiable, Equatable {
+    let id: String
+    let displayName: String?
 }
 
 // MARK: - BackendPublicSharingService
@@ -498,7 +503,7 @@ final class BackendPublicSharingService: PublicSharingService {
         try validateResponse(response, data: data)
     }
 
-    func fetchBlockedCreatorIDs() async throws -> [String] {
+    func fetchBlockedCreators() async throws -> [BlockedCreator] {
         let token = try await resolvedAccessToken()
         guard let url = blocksEndpoint else { throw PublicSharingServiceError.endpointNotConfigured }
         var request = URLRequest(url: url)
@@ -507,7 +512,10 @@ final class BackendPublicSharingService: PublicSharingService {
         let (data, response) = try await performRequest(request, retryOnExpiredJWT: true)
         try validateResponse(response, data: data)
         let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        return (payload?["blocks"] as? [[String: Any]] ?? []).compactMap { $0["blocked_user_id"] as? String }
+        return (payload?["blocks"] as? [[String: Any]] ?? []).compactMap { block in
+            guard let id = block["blocked_user_id"] as? String else { return nil }
+            return BlockedCreator(id: id, displayName: block["display_name"] as? String)
+        }
     }
 
     // MARK: - Private helpers

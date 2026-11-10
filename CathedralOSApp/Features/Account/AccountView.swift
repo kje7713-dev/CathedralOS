@@ -68,7 +68,7 @@ struct AccountView: View {
     @State private var restoreSuccess: String?
     @State private var showPaywall = false
     @State private var showDeleteAccountConfirmation = false
-    @State private var blockedCreatorIDs: [String] = []
+    @State private var blockedCreators: [BlockedCreator] = []
     @State private var blockedCreatorsError: String?
 
     var body: some View {
@@ -303,19 +303,21 @@ struct AccountView: View {
 
     private var blockedCreatorsSection: some View {
         Section("Blocked Creators") {
-            if blockedCreatorIDs.isEmpty {
+            if blockedCreators.isEmpty {
                 Text("No blocked creators.")
                     .font(.caption)
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             } else {
-                ForEach(blockedCreatorIDs, id: \.self) { creatorID in
+                ForEach(blockedCreators) { creator in
                     HStack {
-                        Text(creatorID)
-                            .font(.caption)
+                        Text(creator.displayName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                             ? creator.displayName!
+                             : "Unknown creator")
+                            .font(.body)
                             .lineLimit(1)
                         Spacer()
                         Button("Unblock") {
-                            Task { await unblockCreator(creatorID) }
+                            Task { await unblockCreator(creator.id) }
                         }
                         .buttonStyle(.borderless)
                     }
@@ -329,7 +331,7 @@ struct AccountView: View {
         }
         .task {
             guard authState.isSignedIn else { return }
-            do { blockedCreatorIDs = try await publicSharingService.fetchBlockedCreatorIDs() }
+            do { blockedCreators = try await publicSharingService.fetchBlockedCreators() }
             catch { blockedCreatorsError = PublicSharingServiceError.displayMessage(from: error) }
         }
     }
@@ -337,7 +339,7 @@ struct AccountView: View {
     private func unblockCreator(_ creatorID: String) async {
         do {
             try await publicSharingService.unblockCreator(userID: creatorID)
-            blockedCreatorIDs.removeAll { $0 == creatorID }
+            blockedCreators.removeAll { $0.id == creatorID }
         } catch {
             blockedCreatorsError = PublicSharingServiceError.displayMessage(from: error)
         }

@@ -1405,7 +1405,28 @@ export async function handler(
         .select("blocked_user_id, created_at")
         .eq("blocker_user_id", userID);
       if (error) return jsonResponse({ status: "failed", error: "Could not load blocked creators" }, 500);
-      return jsonResponse({ blocks: data ?? [] });
+      const blockRows = (data ?? []) as Array<Record<string, unknown>>;
+      const blockedUserIDs = blockRows
+        .map((row) => typeof row.blocked_user_id === "string" ? row.blocked_user_id : null)
+        .filter((id): id is string => id !== null);
+      const { data: profiles } = blockedUserIDs.length > 0
+        ? await adminClient.from("profiles").select("id, display_name").in("id", blockedUserIDs)
+        : { data: [] };
+      const displayNameByUserID = new Map(
+        ((profiles ?? []) as Array<Record<string, unknown>>)
+          .filter((profile) => typeof profile.id === "string")
+          .map((profile) => [
+            profile.id as string,
+            typeof profile.display_name === "string" ? profile.display_name : null,
+          ] as const),
+      );
+      return jsonResponse({
+        blocks: blockRows.map((row) => ({
+          blocked_user_id: row.blocked_user_id,
+          created_at: row.created_at,
+          display_name: displayNameByUserID.get(String(row.blocked_user_id)) ?? null,
+        })),
+      });
     }
     if (req.method === "POST" && routePath === "/blocks") {
       let body: { blockedUserID?: unknown };
