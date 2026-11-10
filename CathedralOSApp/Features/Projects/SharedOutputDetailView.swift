@@ -406,6 +406,11 @@ struct SharedOutputDetailView: View {
             CathedralSecondaryButton("Report", systemImage: "flag") {
                 showReportSheet = true
             }
+
+            Text("Hide removes only this item from your device. Block Creator removes this creator's public content from your Shared feed.")
+                .font(CathedralTheme.Typography.caption())
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .multilineTextAlignment(.center)
         }
     }
 
