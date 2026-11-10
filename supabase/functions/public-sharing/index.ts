@@ -38,7 +38,7 @@ const ALLOWED_REPORT_REASONS = new Set([
   "other",
 ]);
 const SHARED_OUTPUT_LIST_SELECT =
-  "id, owner_user_id, share_title, share_excerpt, allow_remix, source_payload_json, generation_length_mode, published_at, created_at, cover_image_path, cover_image_url, cover_image_width, cover_image_height, cover_image_content_type, content_type, book_author_name";
+  "id, owner_user_id, share_title, share_excerpt, allow_remix, source_payload_json, generation_length_mode, published_at, created_at, cover_image_path, cover_image_url, cover_image_width, cover_image_height, cover_image_content_type, content_type, export_metadata_id, book_author_name";
 
 interface PublishRequestBody {
   sharedOutputID?: string;
@@ -94,6 +94,13 @@ function routePathFromURL(urlString: string): string {
 
 function isUUID(value: string | undefined | null): value is string {
   return Boolean(value && UUID_REGEX.test(value));
+}
+
+export function isReadablePublicSharedOutput(
+  row: Record<string, unknown>,
+): boolean {
+  return row.content_type !== "epub" ||
+    isUUID(typeof row.export_metadata_id === "string" ? row.export_metadata_id : null);
 }
 
 function parsePayloadJSON(input: unknown, fallback: unknown = {}): unknown {
@@ -378,6 +385,7 @@ export async function handler(
     }
 
     let rows = (data ?? []) as Array<Record<string, unknown>>;
+    rows = rows.filter(isReadablePublicSharedOutput);
     if (authenticatedUserId && rows.length > 0) {
       const { data: blocks } = await adminClient.from("user_blocks")
         .select("blocked_user_id")
