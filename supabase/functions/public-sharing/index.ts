@@ -1355,7 +1355,7 @@ export async function handler(
 
     const { data: target, error: lookupError } = await adminClient
       .from("shared_outputs")
-      .select("id")
+      .select("id, owner_user_id, share_title")
       .eq("id", sharedOutputID)
       .in("visibility", ["shared", "unlisted"])
       .is("unpublished_at", null)
@@ -1373,11 +1373,27 @@ export async function handler(
       }, 404);
     }
 
+    const ownerUserID = typeof target.owner_user_id === "string"
+      ? target.owner_user_id
+      : "";
+    let creatorDisplayName: string | null = null;
+    if (ownerUserID) {
+      const { data: profile } = await adminClient
+        .from("profiles")
+        .select("display_name")
+        .eq("id", ownerUserID)
+        .maybeSingle();
+      creatorDisplayName = typeof profile?.display_name === "string"
+        ? profile.display_name
+        : null;
+    }
+    const details = typeof body.details === "string" ? body.details : "";
+
     const { data: report, error } = await adminClient.from("shared_output_reports").insert({
       shared_output_id: sharedOutputID,
       reporter_user_id: userID,
       reason,
-      details: typeof body.details === "string" ? body.details : "",
+      details,
     }).select("id, created_at").single();
 
     if (error) {
@@ -1389,7 +1405,16 @@ export async function handler(
     }
     const reportID = String((report as Record<string, unknown> | null)?.id ?? "");
     const createdAt = String((report as Record<string, unknown> | null)?.created_at ?? new Date().toISOString());
-    const alert = notifySharedOutputReport({ reportID, sharedOutputID, reason, createdAt });
+    const alert = notifySharedOutputReport({
+      reportID,
+      sharedOutputID,
+      sharedOutputURL: buildShareURL(publicShareBaseURL, sharedOutputID),
+      shareTitle: typeof target.share_title === "string" ? target.share_title : null,
+      creatorDisplayName,
+      reason,
+      details,
+      createdAt,
+    });
     const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (promise: Promise<unknown>) => void } }).EdgeRuntime;
     if (runtime?.waitUntil) runtime.waitUntil(alert);
     else void alert;

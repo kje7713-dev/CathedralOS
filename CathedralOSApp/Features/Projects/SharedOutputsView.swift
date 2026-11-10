@@ -22,6 +22,7 @@ struct SharedOutputsView: View {
     @State private var loadError: String?
     @State private var hiddenIDs: Set<String> = []
     @State private var viewerAgeTier: StoryViewerAgeTier = .unknown
+    @State private var showHiddenItems = false
 
     private var visibleItems: [SharedOutputListItem] {
         return items.filter {
@@ -61,13 +62,24 @@ struct SharedOutputsView: View {
                         .offset(x: 48)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        Task { await load() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundStyle(CathedralTheme.Colors.accent)
+                    HStack(spacing: CathedralTheme.Spacing.sm) {
+                        if !hiddenIDs.isEmpty {
+                            Button {
+                                showHiddenItems = true
+                            } label: {
+                                Image(systemName: "eye.slash")
+                                    .foregroundStyle(CathedralTheme.Colors.accent)
+                            }
+                            .accessibilityLabel("Hidden shared outputs")
+                        }
+                        Button {
+                            Task { await load() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .foregroundStyle(CathedralTheme.Colors.accent)
+                        }
+                        .disabled(isLoading)
                     }
-                    .disabled(isLoading)
                 }
             }
             .navigationDestination(for: SharedOutputListItem.self) { item in
@@ -81,6 +93,15 @@ struct SharedOutputsView: View {
             .task { await load() }
         }
         .tint(CathedralTheme.Colors.accent)
+        .sheet(isPresented: $showHiddenItems) {
+            HiddenSharedOutputsSheet(
+                items: items.filter { hiddenIDs.contains($0.sharedOutputID) },
+                onUnhide: { sharedOutputID in
+                    hiddenService.unhide(sharedOutputID: sharedOutputID)
+                    hiddenIDs.remove(sharedOutputID)
+                }
+            )
+        }
     }
 
     // MARK: Subviews
@@ -165,6 +186,53 @@ struct SharedOutputsView: View {
             hiddenIDs = hiddenService.hiddenIDs
         } catch {
             loadError = PublicSharingServiceError.displayMessage(from: error)
+        }
+    }
+}
+
+private struct HiddenSharedOutputsSheet: View {
+    @State private var hiddenItems: [SharedOutputListItem]
+    let onUnhide: (String) -> Void
+
+    init(items: [SharedOutputListItem], onUnhide: @escaping (String) -> Void) {
+        _hiddenItems = State(initialValue: items)
+        self.onUnhide = onUnhide
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if hiddenItems.isEmpty {
+                    ContentUnavailableView(
+                        "No Hidden Outputs",
+                        systemImage: "eye",
+                        description: Text("Outputs you hide from Shared will appear here.")
+                    )
+                } else {
+                    List(hiddenItems) { item in
+                        HStack(spacing: CathedralTheme.Spacing.sm) {
+                            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                                Text(item.shareTitle.isEmpty ? "Untitled" : item.shareTitle)
+                                    .font(CathedralTheme.Typography.body())
+                                    .lineLimit(2)
+                                if let author = item.authorDisplayName, !author.isEmpty {
+                                    Text(author)
+                                        .font(CathedralTheme.Typography.caption())
+                                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                                }
+                            }
+                            Spacer()
+                            Button("Show") {
+                                onUnhide(item.sharedOutputID)
+                                hiddenItems.removeAll { $0.sharedOutputID == item.sharedOutputID }
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Hidden Shared Outputs")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 }

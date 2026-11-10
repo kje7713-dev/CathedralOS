@@ -1,7 +1,11 @@
 export interface ReportAlertContext {
   reportID: string;
   sharedOutputID: string;
+  sharedOutputURL?: string | null;
+  shareTitle?: string | null;
+  creatorDisplayName?: string | null;
   reason: string;
+  details?: string | null;
   createdAt: string;
 }
 
@@ -34,13 +38,17 @@ export async function notifySharedOutputReport(
       body: JSON.stringify({
         from,
         to: [to],
-        subject: "StoryDonkey public-content report",
+        subject: `StoryDonkey public-content report: ${context.reason}`,
         text: [
           `Report ID: ${context.reportID}`,
           `Shared output ID: ${context.sharedOutputID}`,
+          `Shared output URL: ${context.sharedOutputURL || "Unavailable"}`,
+          `Title: ${context.shareTitle || "Untitled"}`,
+          `Creator: ${context.creatorDisplayName || "Unknown creator"}`,
           `Reason: ${context.reason}`,
+          `Details: ${context.details || "(none provided)"}`,
           `Timestamp: ${context.createdAt}`,
-        ].join("\\n"),
+        ].join("\n"),
       }),
     });
     if (!response.ok) {
