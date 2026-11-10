@@ -2,7 +2,12 @@ import {
   assert,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { epubPublicationOwnerMatches, handler, normalizePublicAgeRating } from "./index.ts";
+import {
+  epubPublicationOwnerMatches,
+  handler,
+  isReadablePublicSharedOutput,
+  normalizePublicAgeRating,
+} from "./index.ts";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-2222-2222-222222222222";
@@ -373,4 +378,19 @@ Deno.test("normalizePublicAgeRating maps legacy ratings and keeps unknown values
   assertEquals(normalizePublicAgeRating("r"), { ageRating: "18_plus", minimumAge: 18 });
   assertEquals(normalizePublicAgeRating("unknown"), { ageRating: "all_ages", minimumAge: 0 });
   assertEquals(normalizePublicAgeRating(""), { ageRating: "all_ages", minimumAge: 0 });
+});
+
+Deno.test("public shared output list rejects orphaned EPUB rows", () => {
+  assertEquals(
+    isReadablePublicSharedOutput({ content_type: "text", export_metadata_id: null }),
+    true,
+  );
+  assertEquals(
+    isReadablePublicSharedOutput({ content_type: "epub", export_metadata_id: EXPORT_ID }),
+    true,
+  );
+  assertEquals(
+    isReadablePublicSharedOutput({ content_type: "epub", export_metadata_id: null }),
+    false,
+  );
 });
