@@ -336,7 +336,7 @@ struct ProjectDetailView: View {
                     Image(systemName: "book.closed")
                         .foregroundStyle(CathedralTheme.Colors.accent)
                 }
-                .accessibilityLabel("Export to Kindle")
+                .accessibilityLabel("Export to eReader")
             }
         }
         .sheet(isPresented: $showKindleExport) {

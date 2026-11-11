@@ -217,7 +217,7 @@ struct KindleExportView: View {
                 previousExportsSection
                 statusSection
                 }
-            .navigationTitle(sourceOutput == nil ? "Export to Kindle" : "Export Story to EPUB")
+            .navigationTitle("Export to eReader")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 exportToolbar
@@ -277,6 +277,10 @@ struct KindleExportView: View {
             if service == nil { service = makeService() }
             loadSavedMetadata()
             if bookTitle.isEmpty { bookTitle = sourceOutput?.title ?? project.name }
+            if bookDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let suggestedSynopsis {
+                bookDescription = suggestedSynopsis
+            }
             await loadPreviousExports()
         }
         .task(id: jobState.pollToken) {
@@ -304,6 +308,16 @@ struct KindleExportView: View {
             TextField("Language (BCP-47, e.g., 'en')", text: $language)
                 .autocorrectionDisabled()
         }
+    }
+
+    /// Reuse synopsis text the author already supplied for this generated story
+    /// or project. It becomes EPUB's standard dc:description metadata and
+    /// remains editable before export.
+    private var suggestedSynopsis: String? {
+        let candidates = [sourceOutput?.shareExcerpt, project.summary]
+        return candidates
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
     }
 
     private var coverImageSection: some View {
@@ -423,8 +437,14 @@ struct KindleExportView: View {
         Section("Optional") {
             TextField("Dedication", text: $dedication, axis: .vertical)
                 .lineLimit(1...3)
-            TextField("Book description", text: $bookDescription, axis: .vertical)
+            TextField("Synopsis", text: $bookDescription, axis: .vertical)
                 .lineLimit(2...5)
+            if let suggestedSynopsis,
+               bookDescription.trimmingCharacters(in: .whitespacesAndNewlines) != suggestedSynopsis {
+                Button("Use story synopsis") {
+                    bookDescription = suggestedSynopsis
+                }
+            }
             TextField("About author", text: $aboutAuthor, axis: .vertical)
                 .lineLimit(2...5)
             // PR #619 (EPUB Acknowledgements): optional back-matter text rendered
@@ -610,7 +630,7 @@ struct KindleExportView: View {
                 Button(action: kickoffExport) {
                     HStack {
                         Spacer()
-                        Text("Export to EPUB")
+                        Text("Export to eReader")
                             .font(CathedralTheme.Typography.body(15, weight: .semibold))
                         Spacer()
                     }
