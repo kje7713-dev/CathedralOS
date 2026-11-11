@@ -2,6 +2,8 @@
 
 > **Checkpoint 2026-11-10**: PR #847 shipped the user-owned EPUB Library follow-up. Project deletion now retains EPUB artifacts for later user-controlled permanent deletion; the retention-policy question remains intentionally deferred.
 
+> **Checkpoint 2026-11-11**: PR #848 shipped the forward-only EPUB Library auth and identity fix. The library now shares Account's auth service, and future exports persist `project_name` alongside the existing book title so retained rows can display `Recovered from <project name>`. Existing 57 recovered rows were intentionally left unchanged. iOS Build `43028363009` and Supabase Deploy `43030357825` passed; TestFlight Deploy `43030506145` was in archive/upload at checkpoint time.
+
 > **Status**: PR 1 implemented — 1/4 PRs complete; CI green — awaiting review/merge authorization
 > **Source plan**: provided by Kevin via Telegram on 2026-09-23 09:55 EDT
 > **Base branch**: `main` @ `a39417a` (latest after PR #618 merge)
@@ -69,6 +71,7 @@ Open / native iOS Share Sheet / Delete
 ## Progress Log
 
 - 2026-11-10 — **PR #847 shipped as a follow-up to the EPUB history/delete work.** Account → My EPUB Library now lists user-owned exports across deleted and active projects, with Open, Share, Refresh, and explicit permanent Delete. Migration `20261111021714_retain_epubs_after_project_delete` uses nullable project ownership and recovered all 57 existing orphaned `exports` objects through deletion tombstones. Production verification found 57 recovered metadata rows and 0 unmatched storage objects. iOS Build `42946172494`, Supabase Deploy `42947863679`, and TestFlight Deploy `42948013046` passed; Apple processing was not awaited. New rule: project deletion is retention-preserving, while artifact deletion is explicit from the library. Failure mode addressed: the earlier project-delete cleanup removed access metadata but left binaries orphaned in Storage.
+- 2026-11-11 — **PR #848 shipped the forward-only follow-up.** The EPUB library now uses the same auth service instance as Account, preventing the stale-session sign-out path. New exports persist `export_metadata.project_name`; future retained rows keep their entered EPUB title and can display `Recovered from <project name>`. Existing recovered rows were not rewritten. iOS Build `43028363009` passed after one Swift initializer correction; Supabase Deploy `43030357825` passed. TestFlight Deploy `43030506145` was in archive/upload; final polling was temporarily blocked by GitHub API rate limiting.
 
 - 2026-09-23 11:12 EDT — PR #619 head `5aee9de` is cleanly 8 commits ahead of `main` and all five required CI checks pass: iOS Build, export-epub Deno tests, PR-521 scene-memory, Java validator build, and pricing-observation pgTAP. No deployment or merge was performed; production smoke validation remains intentionally pending.
 
