@@ -59,7 +59,7 @@ export async function handleListRequest(
     return json({ error: "invalid_json" }, 400);
   }
   const exportSelect =
-    "id, project_id, book_title, author_name, is_current, is_active, created_at, source_kind, source_generation_output_id";
+    "id, project_id, project_name, book_title, author_name, is_current, is_active, created_at, source_kind, source_generation_output_id";
   let exports: Array<Record<string, unknown>> | null = null;
   let exportError: { message?: string } | null = null;
   if (body.project_id !== undefined) {
