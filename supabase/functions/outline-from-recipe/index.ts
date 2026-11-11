@@ -1353,6 +1353,22 @@ export function preserveAuthoredPremiseComponents(raw: unknown, projectSummary: 
   }
 }
 
+/**
+ * Recovery metadata must never turn an otherwise usable canonical recipe into
+ * a terminal worker failure. The strict validator remains authoritative for
+ * normal provider output; this boundary is only for the paid-stage fallback.
+ */
+export function tryPreserveAuthoredPremiseComponents(
+  raw: unknown,
+  projectSummary: string,
+): PremiseComponent[] | undefined {
+  try {
+    return preserveAuthoredPremiseComponents(raw, projectSummary);
+  } catch {
+    return undefined;
+  }
+}
+
 export function validateStoryMaterialEnrichment(value: unknown, options: { allowMissingProvenance?: boolean; recipe?: CanonicalRecipeEnvelope } = {}): StoryMaterialEnrichment {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("story material enrichment must be an object");
   const candidate = value as Record<string, unknown>;
@@ -6716,10 +6732,21 @@ export async function runSuggestionJob(
                 providerMaterialFallbackReason: error instanceof Error ? error.message.slice(0, 300) : "invalid_enrichment",
               };
               parsedMaterial = repairStoryMaterialFromRecipe(body.recipe, provenance, requestedStoryMaterialFormat(body));
-              parsedMaterial.premiseComponents = preserveAuthoredPremiseComponents(
+              const recoveredPremiseComponents = tryPreserveAuthoredPremiseComponents(
                 undefined,
                 String(body.recipe.project?.summary ?? ""),
               );
+              if (recoveredPremiseComponents) {
+                parsedMaterial.premiseComponents = recoveredPremiseComponents;
+              } else {
+                // The canonical recipe remains usable even when its summary
+                // cannot fit the bounded premise-component contract. Do not
+                // let recovery bookkeeping turn this paid stage into HTTP 500.
+                enrichmentDiagnostics = {
+                  ...enrichmentDiagnostics,
+                  premiseComponentFallback: "omitted_unrepresentable_summary",
+                };
+              }
             }
             const sufficiency = storyMaterialSufficiency(parsedMaterial, body.recipe, requestedStoryMaterialFormat(body));
             // Item-count sufficiency is advisory. A structurally valid package

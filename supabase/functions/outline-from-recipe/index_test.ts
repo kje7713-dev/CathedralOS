@@ -102,6 +102,7 @@ import {
   validateStoryMaterialEnrichment,
   validatePremiseComponents,
   preserveAuthoredPremiseComponents,
+  tryPreserveAuthoredPremiseComponents,
   storyMaterialSufficiency,
   recipeProvenance,
   attachRecipeProvenance,
@@ -6488,6 +6489,11 @@ Deno.test("malformed paid enrichment can continue with an authored-only canonica
   assertEquals(fallback.premiseComponents.every((component) => summary.includes(component.sourceQuote)), true);
   const source = await Deno.readTextFile("./supabase/functions/outline-from-recipe/index.ts");
   assertEquals(source.includes('providerMaterialFallback: "canonical_recipe"'), true);
+});
+
+Deno.test("unrepresentable authored summaries cannot escape paid enrichment recovery", () => {
+  const summary = "A".repeat(12_000);
+  assertEquals(tryPreserveAuthoredPremiseComponents(undefined, summary), undefined);
 });
 
 Deno.test("premise extraction rejects invented source claims and omitted large promises", () => {
