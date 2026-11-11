@@ -21,7 +21,7 @@ const corsHeaders = {
 
 export interface ExportMetadataRow {
   id: string;
-  project_id: string;
+  project_id: string | null;
   book_title: string;
   author_name: string;
   epub_storage_path: string | null;

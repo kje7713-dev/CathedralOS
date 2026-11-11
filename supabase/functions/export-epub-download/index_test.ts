@@ -40,7 +40,6 @@ function makeRow(
   return {
     id: FAKE_METADATA_ID,
     project_id: "project-uuid-dddd",
-    local_project_id: "local-project-uuid-eeee",
     book_title: "Test Book",
     author_name: "Test Author",
     epub_storage_path: "exports/local-project/job-id.epub",
