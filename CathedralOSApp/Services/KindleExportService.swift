@@ -229,6 +229,7 @@ private extension Array {
 }
 struct KindleExportRequest: Codable {
     let project_id: String
+    var project_name: String? = nil
     /// Cloud generation_outputs.id for standalone story exports; nil preserves
     /// the existing project/outline export path.
     var generation_output_id: String? = nil
@@ -290,6 +291,7 @@ struct KindleExportStatusResponse: Codable {
 struct KindleExportHistoryItem: Codable, Identifiable {
     let id: String
     let project_id: String?
+    let project_name: String?
     let book_title: String
     let author_name: String
     let is_current: Bool
@@ -304,6 +306,7 @@ struct KindleExportHistoryItem: Codable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         project_id = try c.decodeIfPresent(String.self, forKey: .project_id)
+        project_name = try c.decodeIfPresent(String.self, forKey: .project_name)
         book_title = try c.decodeIfPresent(String.self, forKey: .book_title) ?? ""
         author_name = try c.decodeIfPresent(String.self, forKey: .author_name) ?? ""
         is_current = try c.decodeIfPresent(Bool.self, forKey: .is_current) ?? false
@@ -316,6 +319,31 @@ struct KindleExportHistoryItem: Codable, Identifiable {
     }
 
     var isStandaloneGenerationOutput: Bool { source_kind == "generation_output" }
+
+    /// Older files recovered after project deletion no longer have the source
+    /// project's title/author metadata. Keep the placeholder as a fallback,
+    /// but give each row a useful, stable date-based label in the library.
+    var displayBookTitle: String {
+        guard book_title == "Recovered EPUB" else { return book_title }
+        let date = Self.displayDate(created_at)
+        return date.isEmpty ? "Recovered EPUB" : "Recovered EPUB • \(date)"
+    }
+
+    var displayAuthorName: String {
+        if project_id == nil, let project_name, !project_name.isEmpty {
+            return "Recovered from \(project_name)"
+        }
+        return author_name == "StoryDonkey archive" ? "Recovered from deleted project" : author_name
+    }
+
+    private static func displayDate(_ value: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        guard let date = formatter.date(from: value) else { return "" }
+        let output = DateFormatter()
+        output.dateStyle = .medium
+        output.timeStyle = .none
+        return output.string(from: date)
+    }
 }
 
 private struct KindleExportHistoryResponse: Codable {

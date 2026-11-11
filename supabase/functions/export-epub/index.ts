@@ -412,6 +412,17 @@ async function processJob(
         );
       }
 
+      // Keep the project label with the immutable export. The project row may
+      // be deleted later, but the retained EPUB still needs a useful origin.
+      const { error: projectNameError } = await supabaseAdmin
+        .from("export_metadata")
+        .update({ project_name: req.project_name?.trim() || null })
+        .eq("id", metaId)
+        .eq("exported_by_user_id", userId);
+      if (projectNameError) {
+        throw new Error(`Failed to preserve project name: ${projectNameError.message}`);
+      }
+
       if (aiCoverReserved) {
         if (!aiCoverBilling) {
           throw new Error("AI cover generation returned no billing usage");

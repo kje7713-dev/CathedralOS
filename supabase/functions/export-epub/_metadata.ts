@@ -27,6 +27,7 @@ export interface ExportMetadata {
 
 export interface ExportRequest {
   project_id: string;
+  project_name?: string;
   book_title: string;
   author_name: string;
   copyright_year?: number;

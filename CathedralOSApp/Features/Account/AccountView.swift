@@ -191,7 +191,7 @@ struct AccountView: View {
             Divider()
                 .padding(.vertical, 6)
             NavigationLink {
-                EPUBLibraryView()
+                EPUBLibraryView(authService: authService)
             } label: {
                 Label("My EPUB Library", systemImage: "books.vertical")
             }
@@ -556,6 +556,7 @@ struct AccountView: View {
 /// User-owned EPUBs remain available here after their source project is deleted.
 /// Permanent deletion is intentionally explicit and happens only from this view.
 private struct EPUBLibraryView: View {
+    let authService: any AuthService
     @State private var exports: [KindleExportHistoryItem] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -578,8 +579,8 @@ private struct EPUBLibraryView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(export.book_title.isEmpty ? "Untitled EPUB" : export.book_title)
-                                Text(export.author_name)
+                                Text(export.displayBookTitle.isEmpty ? "Untitled EPUB" : export.displayBookTitle)
+                                Text(export.displayAuthorName)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -656,7 +657,8 @@ private struct EPUBLibraryView: View {
     }
 
     private func token() async throws -> String {
-        try await AuthSessionResolver.shared.validAccessToken(forceRefresh: false)
+        try await AuthSessionResolver(authService: authService)
+            .validAccessToken(forceRefresh: false)
     }
 
     private func load() async {
@@ -675,7 +677,7 @@ private struct EPUBLibraryView: View {
             let service = try service()
             let url = try await KindleExportDownloader(backend: service.backend)
                 .downloadOrCache(exportMetadataId: export.id, userAccessToken: token())
-            readerTitle = export.book_title
+            readerTitle = export.displayBookTitle
             readerURL = url
             showReader = true
         } catch { errorMessage = error.localizedDescription }
@@ -686,7 +688,7 @@ private struct EPUBLibraryView: View {
             let service = try service()
             let cached = try await KindleExportDownloader(backend: service.backend)
                 .downloadOrCache(exportMetadataId: export.id, userAccessToken: token())
-            shareURL = try EPUBShareItemBuilder.makeShareURL(cachedURL: cached, bookTitle: export.book_title)
+            shareURL = try EPUBShareItemBuilder.makeShareURL(cachedURL: cached, bookTitle: export.displayBookTitle)
             showShare = true
         } catch { errorMessage = error.localizedDescription }
     }
