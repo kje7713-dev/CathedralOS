@@ -15,7 +15,6 @@ const corsHeaders = {
 
 export interface ExportHistoryItem {
   id: string;
-  project_id?: string | null;
   book_title: string;
   author_name: string;
   is_current: boolean;
@@ -58,43 +57,30 @@ export async function handleListRequest(
   } catch {
     return json({ error: "invalid_json" }, 400);
   }
-  const exportSelect =
-    "id, project_id, project_name, book_title, author_name, is_current, is_active, created_at, source_kind, source_generation_output_id";
-  let exports: Array<Record<string, unknown>> | null = null;
-  let exportError: { message?: string } | null = null;
-  if (body.project_id !== undefined) {
-    if (typeof body.project_id !== "string" || !body.project_id) {
-      return json({ error: "invalid_project_id" }, 400);
-    }
-    const { data: snapshot, error: snapshotError } = await client
-      .from("project_snapshots")
-      .select("id")
-      .eq("user_id", user.id)
-      .eq("local_project_id", body.project_id)
-      .maybeSingle();
-    if (snapshotError) return json({ error: "lookup_failed" }, 500);
-    if (!snapshot) return json({ exports: [] });
-    const result = await client
-      .from("export_metadata")
-      .select(exportSelect)
-      .eq("project_id", snapshot.id)
-      .eq("exported_by_user_id", user.id)
-      .eq("is_active", true)
-      .order("created_at", { ascending: false });
-    exports = result.data as Array<Record<string, unknown>> | null;
-    exportError = result.error;
-  } else {
-    const result = await client
-      .from("export_metadata")
-      .select(exportSelect)
-      .eq("exported_by_user_id", user.id)
-      .eq("is_active", true)
-      .order("created_at", { ascending: false });
-    exports = result.data as Array<Record<string, unknown>> | null;
-    exportError = result.error;
+  if (!body.project_id || typeof body.project_id !== "string") {
+    return json({ error: "missing_project_id" }, 400);
   }
+
+  const { data: snapshot, error: snapshotError } = await client
+    .from("project_snapshots")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("local_project_id", body.project_id)
+    .maybeSingle();
+  if (snapshotError) return json({ error: "lookup_failed" }, 500);
+  if (!snapshot) return json({ exports: [] });
+
+  const { data: exports, error: exportError } = await client
+    .from("export_metadata")
+    .select(
+      "id, book_title, author_name, is_current, is_active, created_at, source_kind, source_generation_output_id",
+    )
+    .eq("project_id", snapshot.id)
+    .eq("exported_by_user_id", user.id)
+    .eq("is_active", true)
+    .order("created_at", { ascending: false });
   if (exportError) return json({ error: "lookup_failed" }, 500);
-  const exportRows = exports ?? [];
+  const exportRows = (exports ?? []) as Array<Record<string, unknown>>;
   const ids = exportRows.map((row) => String(row.id));
   let publications: Array<Record<string, unknown>> = [];
   if (ids.length > 0) {

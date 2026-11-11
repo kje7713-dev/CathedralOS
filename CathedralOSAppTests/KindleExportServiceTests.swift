@@ -485,36 +485,6 @@ extension KindleExportServiceTests {
         XCTAssertTrue(got.hasSuffix(".epub"))
     }
 
-    func testRecoveredExportGetsUsefulDisplayLabel() throws {
-        let item = try JSONDecoder().decode(
-            KindleExportHistoryItem.self,
-            from: Data(#"{"id":"recovered","book_title":"Recovered EPUB","author_name":"StoryDonkey archive","created_at":"2026-11-10T21:57:00Z"}"#.utf8)
-        )
-
-        XCTAssertTrue(item.displayBookTitle.hasPrefix("Recovered EPUB • "))
-        XCTAssertEqual(item.displayAuthorName, "Recovered from deleted project")
-    }
-
-    func testNamedExportKeepsItsBookMetadata() throws {
-        let item = try JSONDecoder().decode(
-            KindleExportHistoryItem.self,
-            from: Data(#"{"id":"named","book_title":"The Long Road","author_name":"Kevin","created_at":"2026-11-10T21:57:00Z"}"#.utf8)
-        )
-
-        XCTAssertEqual(item.displayBookTitle, "The Long Road")
-        XCTAssertEqual(item.displayAuthorName, "Kevin")
-    }
-
-    func testRecoveredExportUsesPreservedProjectName() throws {
-        let item = try JSONDecoder().decode(
-            KindleExportHistoryItem.self,
-            from: Data(#"{"id":"future-recovered","project_id":null,"project_name":"The Long Road","book_title":"The Long Road","author_name":"Kevin","created_at":"2026-11-10T21:57:00Z"}"#.utf8)
-        )
-
-        XCTAssertEqual(item.displayBookTitle, "The Long Road")
-        XCTAssertEqual(item.displayAuthorName, "Recovered from The Long Road")
-    }
-
     func testUnicodePreserved() {
         XCTAssertEqual(
             EPUBShareFilenameSanitizer.shareFilename(title: "ハロー・世界"),

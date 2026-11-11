@@ -16,7 +16,7 @@ struct ExportDownloadResponse: Codable {
     let file_size_bytes: Int?
     let is_current: Bool
     let is_active: Bool
-    let project_id: String?
+    let project_id: String
     let created_at: String
 }
 

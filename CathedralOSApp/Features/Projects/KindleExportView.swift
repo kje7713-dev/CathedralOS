@@ -942,7 +942,6 @@ struct KindleExportView: View {
             }
             let request = KindleExportRequest(
                 project_id: project.id.uuidString,
-                project_name: project.name.trimmingCharacters(in: .whitespacesAndNewlines),
                 generation_output_id: sourceID,
                 book_title: (bookTitleOverride ?? bookTitle).trimmingCharacters(in: .whitespaces),
                 author_name: (authorNameOverride ?? authorName).trimmingCharacters(in: .whitespaces),
