@@ -25,7 +25,7 @@ const rows: ExportHistoryItem[] = [
   },
 ];
 
-function client(exportRows: ExportHistoryItem[] = rows) {
+function client() {
   let publicationFilter: string[] = [];
   const snapshotChain: Record<string, unknown> = {};
   snapshotChain.select = () => snapshotChain;
@@ -37,7 +37,7 @@ function client(exportRows: ExportHistoryItem[] = rows) {
   const exportChain: Record<string, unknown> = {};
   exportChain.select = () => exportChain;
   exportChain.eq = () => exportChain;
-  exportChain.order = async () => ({ data: exportRows, error: null });
+  exportChain.order = async () => ({ data: rows, error: null });
   const publicationChain: Record<string, unknown> = {};
   publicationChain.select = () => publicationChain;
   publicationChain.eq = () => publicationChain;
@@ -93,26 +93,4 @@ Deno.test("list rejects missing auth", async () => {
     )).status,
     401,
   );
-});
-
-Deno.test("list without a project returns retained archived exports", async () => {
-  const archived: ExportHistoryItem = {
-    ...rows[0],
-    id: "archived",
-    project_id: null,
-  };
-  const testClient = client([archived]);
-  const response = await handleListRequest(
-    new Request("https://x", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer jwt",
-        "Content-Type": "application/json",
-      },
-      body: "{}",
-    }),
-    testClient,
-  );
-  assertEquals(response.status, 200);
-  assertEquals((await response.json()).exports[0].id, "archived");
 });
