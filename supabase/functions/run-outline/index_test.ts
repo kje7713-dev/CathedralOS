@@ -13,6 +13,7 @@ import {
   generationReadinessFailures,
   handleProviderBillingUnavailableTerminal,
   handleRetryableGenerationFailure,
+  isRetryableGenerationResponse,
   isInsufficientCreditsError,
   loadRunOutline,
   parseEmbedSectionError,
@@ -488,9 +489,24 @@ Deno.test("resource-limit responses are retryable and do not terminally fail a s
   const start = source.indexOf("async function callGenerateStory(");
   const end = source.indexOf("// Fetch raw_text", start);
   const call = source.slice(start, end);
-  assertStringIncludes(call, "response.status === 546");
-  assertStringIncludes(call, "WORKER_RESOURCE_LIMIT");
+  assertStringIncludes(call, "isRetryableGenerationResponse");
   assertStringIncludes(call, "new RetryableGenerationError");
+  assertEquals(
+    isRetryableGenerationResponse(503, "WORKER_RESOURCE_LIMIT"),
+    true,
+  );
+});
+
+Deno.test("Cloudflare 520 responses are retryable generation failures", () => {
+  assertEquals(isRetryableGenerationResponse(520, "upstream error"), true);
+  assertEquals(
+    isRetryableGenerationResponse(500, "upstream error"),
+    false,
+  );
+  assertEquals(
+    isRetryableGenerationResponse(503, "WORKER_RESOURCE_LIMIT"),
+    true,
+  );
 });
 
 Deno.test("fractional generation request charges use a numeric database column", async () => {
