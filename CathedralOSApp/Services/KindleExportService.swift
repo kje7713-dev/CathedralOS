@@ -289,6 +289,7 @@ struct KindleExportStatusResponse: Codable {
 /// A previously generated EPUB available for this project.
 struct KindleExportHistoryItem: Codable, Identifiable {
     let id: String
+    let project_id: String?
     let book_title: String
     let author_name: String
     let is_current: Bool
@@ -302,6 +303,7 @@ struct KindleExportHistoryItem: Codable, Identifiable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
+        project_id = try c.decodeIfPresent(String.self, forKey: .project_id)
         book_title = try c.decodeIfPresent(String.self, forKey: .book_title) ?? ""
         author_name = try c.decodeIfPresent(String.self, forKey: .author_name) ?? ""
         is_current = try c.decodeIfPresent(Bool.self, forKey: .is_current) ?? false
@@ -557,6 +559,27 @@ final class KindleExportService {
         } catch {
             throw KindleExportError.invalidResponse(
                 "Could not decode previous exports: \(error.localizedDescription)")
+        }
+    }
+
+    /// Lists every EPUB still owned by the signed-in user, including exports
+    /// retained after their source project was deleted.
+    func listAllExports(
+        userAccessToken: String,
+    ) async throws -> [KindleExportHistoryItem] {
+        let url = backend.edgeFunctionURL(path: "export-epub-list")
+        var request = backend.authorizedRequest(for: url, userAccessToken: userAccessToken)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("{}".utf8)
+        let (data, response) = try await performAuthenticatedRequest(for: request)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw KindleExportError.networkError("Could not load EPUB library")
+        }
+        do {
+            return try JSONDecoder().decode(KindleExportHistoryResponse.self, from: data).exports
+        } catch {
+            throw KindleExportError.invalidResponse("Could not decode EPUB library: \(error.localizedDescription)")
         }
     }
 
