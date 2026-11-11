@@ -2335,6 +2335,20 @@ class RetryableGenerationError extends Error {
   }
 }
 
+/**
+ * Edge/network failures from the internal generate-story call are safe to
+ * retry. Run All supplies a stable run/section idempotency key to
+ * generate-story, so a lost response cannot create a second charge.
+ */
+export function isRetryableGenerationResponse(
+  status: number,
+  body: string,
+): boolean {
+  return status === 520 || status === 546 ||
+    (status >= 500 && status < 600 &&
+      /WORKER_RESOURCE_LIMIT|WallClockTime/i.test(body));
+}
+
 async function callGenerateStory(
   payload: Record<string, unknown>,
 ): Promise<
@@ -2400,9 +2414,7 @@ async function callGenerateStory(
         },
       );
     }
-    if (response.status === 546 ||
-      (response.status >= 500 && response.status < 600 &&
-        /WORKER_RESOURCE_LIMIT|WallClockTime/i.test(errBody))) {
+    if (isRetryableGenerationResponse(response.status, errBody)) {
       throw new RetryableGenerationError(
         `generate-story returned ${response.status}: ${errBody.slice(0, 200)}`,
         60,
