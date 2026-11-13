@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import { canonicalUUID, canonicalUUIDSet, uuidSetsEqual } from "../_shared/uuid.ts";
+import { beatsToDelete } from "./_protected_beats.ts";
 
 const BEAT_A = "cca975fc-e13a-4ade-8344-2470a8c2b3a0";
 const BEAT_B = "11111111-1111-4111-8111-111111111111";
@@ -25,7 +26,18 @@ Deno.test("repeat sync has no deletion when only UUID casing differs", () => {
 Deno.test("replace sync still deletes genuinely removed beats", () => {
   const existingIDs = canonicalUUIDSet([BEAT_A, BEAT_B]);
   const incomingIDs = canonicalUUIDSet([BEAT_A.toUpperCase()]);
-  assertEquals([...existingIDs].filter((id) => !incomingIDs.has(id)), [BEAT_B]);
+  assertEquals(beatsToDelete(existingIDs, incomingIDs, new Set()), [BEAT_B]);
+});
+
+Deno.test("accepted outline beat is retained when the live arc changes", () => {
+  const existingIDs = canonicalUUIDSet([BEAT_A, BEAT_B]);
+  const incomingIDs = canonicalUUIDSet([BEAT_A]);
+  const protectedIDs = canonicalUUIDSet([BEAT_B.toUpperCase()]);
+  assertEquals(beatsToDelete(existingIDs, incomingIDs, protectedIDs), []);
+  assertEquals(uuidSetsEqual(
+    [...incomingIDs, ...protectedIDs],
+    [BEAT_A, BEAT_B],
+  ), true);
 });
 
 Deno.test("sync postcondition rejects a persisted set mismatch", () => {
