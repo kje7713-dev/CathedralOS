@@ -32,8 +32,6 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { canonicalUUID, uuidSetsEqual } from "../_shared/uuid.ts";
-import { canonicalizeUnmodifiedBeatDetails, type TemplateBeatDefault } from "./_template_defaults.ts";
-import { beatsToDelete } from "./_protected_beats.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -228,55 +226,10 @@ Deno.serve(async (req: Request) => {
   }
   const existingIds = new Set((existingBeats ?? []).map((b) => canonicalUUID(String(b.id))));
   const incomingIds = new Set(beats.map((b) => canonicalUUID(b.id!)));
-  const candidateToDelete = [...existingIds].filter((id) => !incomingIds.has(id));
-  let protectedBeatIDs = new Set<string>();
-  if (candidateToDelete.length > 0) {
-    const { data: protectedSections, error: protectedErr } = await adminClient
-      .from("outline_sections")
-      .select("story_arc_beat_id")
-      .eq("status", "accepted")
-      .in("story_arc_beat_id", candidateToDelete);
-    if (protectedErr) {
-      console.error(
-        `[sync-story-arc] accepted beat protection lookup failed: ${protectedErr.message}`,
-      );
-      return errorResponse(
-        "database_error",
-        `accepted beat protection lookup failed: ${protectedErr.message}`,
-        500,
-      );
-    }
-    protectedBeatIDs = new Set(
-      (protectedSections ?? [])
-        .map((section) => section.story_arc_beat_id)
-        .filter((id): id is string => typeof id === "string")
-        .map(canonicalUUID),
-    );
-  }
-  const toDelete = beatsToDelete(existingIds, incomingIds, protectedBeatIDs);
+  const toDelete = [...existingIds].filter((id) => !incomingIds.has(id));
   console.log(
-    `[sync-story-arc] beats incoming=${beats.length} existing=${existingIds.size} ` +
-      `protected=${protectedBeatIDs.size} toDelete=${toDelete.length}`,
+    `[sync-story-arc] beats incoming=${beats.length} existing=${existingIds.size} toDelete=${toDelete.length}`,
   );
-
-  // Older installed clients may still carry the PRE-upgrade built-in beat
-  // descriptions. Preserve the new canonical creative progression on sync
-  // only when the incoming description and label EXACTLY match that prior
-  // default. Never alter explicitly customized beats or resurrect deletions.
-  let templateBeats: TemplateBeatDefault[] = [];
-  if (body.template_id && beats.length > 0) {
-    const { data: template, error: templateErr } = await adminClient
-      .from("story_arc_templates")
-      .select("beats")
-      .eq("id", body.template_id)
-      .maybeSingle();
-    if (templateErr) {
-      // Don't introduce a new failure path for otherwise valid beat syncs.
-      console.error("[sync-story-arc] default lookup failed:", templateErr.message);
-    } else if (Array.isArray(template?.beats)) {
-      templateBeats = template.beats as TemplateBeatDefault[];
-    }
-  }
 
   // --- Step 3: UPSERT beats. ---
   let beatsUpserted = 0;
@@ -287,16 +240,10 @@ Deno.serve(async (req: Request) => {
       position: b.position,
       role: b.role ?? "",
       label: b.label ?? "",
-      details: canonicalizeUnmodifiedBeatDetails(b, templateBeats),
+      details: b.details ?? "",
     }));
-    // A beat already referenced by an accepted section is part of that
-    // outline's frozen arc. Do not let a later live-arc edit mutate its label,
-    // role, or details in place; a new beat identity is required for a new
-    // meaning.
-    const mutableRows = rows.filter((row) => !protectedBeatIDs.has(row.id));
-    const { error: beatsErr } = mutableRows.length > 0
-      ? await adminClient.from("story_arc_beats").upsert(mutableRows, { onConflict: "id" })
-      : { error: null };
+    const { error: beatsErr } = await adminClient.from("story_arc_beats")
+      .upsert(rows, { onConflict: "id" });
     if (beatsErr) {
       console.error(
         `[sync-story-arc] beats upsert failed: ${beatsErr.message}`,
@@ -307,7 +254,7 @@ Deno.serve(async (req: Request) => {
         500,
       );
     }
-    beatsUpserted = mutableRows.length;
+    beatsUpserted = rows.length;
   }
   console.log(`[sync-story-arc] beats upserted=${beatsUpserted}`);
 
@@ -350,10 +297,9 @@ Deno.serve(async (req: Request) => {
     );
   }
   const finalIds = (finalBeats ?? []).map((beat) => canonicalUUID(String(beat.id)));
-  const expectedFinalIds = new Set([...incomingIds, ...protectedBeatIDs]);
-  if (!uuidSetsEqual(finalIds, expectedFinalIds)) {
+  if (!uuidSetsEqual(finalIds, incomingIds)) {
     console.error(
-      `[sync-story-arc] final beat set mismatch expected=${expectedFinalIds.size} actual=${finalIds.length}`,
+      `[sync-story-arc] final beat set mismatch expected=${incomingIds.size} actual=${finalIds.length}`,
     );
     return errorResponse(
       "database_error",

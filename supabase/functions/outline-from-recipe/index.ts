@@ -40,7 +40,6 @@ import {
   renderRequiredRecipeCoverage,
   renderStoryNonNegotiableMustDos,
 } from "./_recipe_obligations.ts";
-import { canonicalizeLegacyArcTemplate, type TemplateBeatDefault } from "../sync-story-arc/_template_defaults.ts";
 import {
   notifyProviderBillingUnavailable,
   type ProviderBillingUnavailableContext,
@@ -640,7 +639,7 @@ export function validateNovelLeafContainers(
 
 /** Interleave a beat's planned containers rather than grouping similar
  * sizes together. Counts and slot names remain deterministic on replay. */
-export function plannedNovelContainerSlots(counts: NovelContainerCounts, reserveClimaxSetPiece = false, requiredFunctionsAfterClimax = 0): Array<typeof NOVEL_LEAF_CONTAINERS[number]> {
+export function plannedNovelContainerSlots(counts: NovelContainerCounts): Array<typeof NOVEL_LEAF_CONTAINERS[number]> {
   const total = NOVEL_LEAF_CONTAINERS.reduce((sum, type) => sum + counts[type], 0);
   const used = Object.fromEntries(NOVEL_LEAF_CONTAINERS.map((type) => [type, 0])) as NovelContainerCounts;
   const slots: Array<typeof NOVEL_LEAF_CONTAINERS[number]> = [];
@@ -651,13 +650,6 @@ export function plannedNovelContainerSlots(counts: NovelContainerCounts, reserve
         (i + 1) * counts[best] / total - used[best] ? type : best);
     slots.push(chosen);
     used[chosen]++;
-  }
-  // Keep the climactic set-piece in the named climax slot, even if the beat
-  // reserves an additional resolution/aftermath slot after its climax.
-  const climaxSlot = slots.length - requiredFunctionsAfterClimax - 1;
-  if (reserveClimaxSetPiece && counts.setPiece > 0 && climaxSlot >= 0 && slots[climaxSlot] !== "setPiece") {
-    const setPieceIndex = slots.lastIndexOf("setPiece");
-    [slots[setPieceIndex], slots[climaxSlot]] = [slots[climaxSlot], slots[setPieceIndex]];
   }
   return slots;
 }
@@ -859,10 +851,7 @@ export function flattenSuggestionResponse(
       : null;
     if (!sections) throw new Error(`response missing beat ${beat.id}`);
     const plannedContainers = allocation?.get(beat.id)?.containerCounts
-      ? plannedNovelContainerSlots(allocation.get(beat.id)!.containerCounts!,
-        requiredFunctionOrderByBeat?.get(beat.id)?.includes("climax") ?? false,
-        Math.max(0, (requiredFunctionOrderByBeat?.get(beat.id)?.length ?? 0) -
-          (requiredFunctionOrderByBeat?.get(beat.id)?.indexOf("climax") ?? -1) - 1))
+      ? plannedNovelContainerSlots(allocation.get(beat.id)!.containerCounts!)
       : null;
     if (plannedContainers && sections.length !== plannedContainers.length) {
       throw new Error(`beat ${beat.id} returned ${sections.length} sections but allocation requires ${plannedContainers.length}`);
@@ -1353,22 +1342,6 @@ export function preserveAuthoredPremiseComponents(raw: unknown, projectSummary: 
   }
 }
 
-/**
- * Recovery metadata must never turn an otherwise usable canonical recipe into
- * a terminal worker failure. The strict validator remains authoritative for
- * normal provider output; this boundary is only for the paid-stage fallback.
- */
-export function tryPreserveAuthoredPremiseComponents(
-  raw: unknown,
-  projectSummary: string,
-): PremiseComponent[] | undefined {
-  try {
-    return preserveAuthoredPremiseComponents(raw, projectSummary);
-  } catch {
-    return undefined;
-  }
-}
-
 export function validateStoryMaterialEnrichment(value: unknown, options: { allowMissingProvenance?: boolean; recipe?: CanonicalRecipeEnvelope } = {}): StoryMaterialEnrichment {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("story material enrichment must be an object");
   const candidate = value as Record<string, unknown>;
@@ -1464,7 +1437,7 @@ Offer genuinely different kinds of dramatic development, not variations of one d
 ## Entertainment, Audacity, and Creative Intensity
 Actively seek the most compelling, original, entertaining, and dramatically exciting realization of the author's premise. Do not default to the safest, most restrained, respectable, conventional, administratively plausible, or morally reassuring choice. When supported by the authored genre, tone, and intended reader experience, favor wild, eccentric, larger-than-life supporting characters with outrageous personalities, unusual desires, dangerous flaws, unpredictable behavior, and relationships that create trouble. Favor absurd situations, spectacular mistakes, escalating disasters, reckless decisions, dangerous encounters, betrayals, confrontations, unexpected reversals, dark humor, grotesque absurdity, shocking developments, chaotic action, surreal experiences, and memorable set pieces.
 
-Characters' addictions, appetites, obsessions, moral corruption, impulsivity, cruelty, selfishness, sexuality, and psychological contradictions may actively generate the story when the recipe makes them part of the creative identity. Invent situations that make those characteristics consequential rather than merely listing them as traits. Let surprising situations escalate beyond what characters intended and become progressively harder to control. When multiple options fit the recipe, favor greater originality, dramatic energy, surprise, interpersonal conflict, and reader entertainment. Do not assume a morally compromised protagonist must become responsible, descend further into vice, or receive an ethical verdict. Honor any moral or character trajectory explicitly authored or genuinely called for by a compatible selected Story Arc; if it is left open, let the characters' particular choices and consequences determine it. Never impose a generic moral lesson, institutional reform, orderly solution, or reassuring conclusion merely to make the story respectable.
+Characters' addictions, appetites, obsessions, moral corruption, impulsivity, cruelty, selfishness, sexuality, and psychological contradictions may actively generate the story when the recipe makes them part of the creative identity. Invent situations that make those characteristics consequential rather than merely listing them as traits. Let surprising situations escalate beyond what characters intended and become progressively harder to control. When multiple options fit the recipe, favor greater originality, dramatic energy, surprise, interpersonal conflict, and reader entertainment. Do not automatically transform morally compromised protagonists into responsible heroes. Do not impose redemption arcs, moral lessons, institutional reform, orderly solutions, or reassuring conclusions unless the author requests them.
 
 Do not unnecessarily sanitize or dilute authored adult intensity. If the recipe specifies explicit adult sexual content, drug use, grotesque violence, depravity, moral corruption, or disturbing subject matter, treat that intensity as part of the creative identity, subject to applicable content constraints. Characters may be deeply flawed, irrational, destructive, cruel, depraved, frightening, or unredeemable when appropriate to the story. Do not routinely replace explicit adult themes with vague implications, tame descriptions, sanitized relationships, or conventional moral commentary.
 
@@ -3255,18 +3228,10 @@ export function buildPrompt(
   obligations: RecipeObligation[] = [],
   storyMaterial?: StoryMaterialEnrichment,
   storyArchitecture?: StoryArchitecture,
-  causalContract?: CausalArchitectureContract,
 ): { system: string; user: string } {
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
-  const causalDevelopmentLines = causalContract
-    ? causalContract.beatDevelopments.map(({ beatIndex, development }) => {
-      const beat = req.arcTemplate.beats[beatIndex];
-      return `- ${beat?.label ?? `Beat ${beatIndex + 1}`}: ${development}`;
-    }).join("\n")
-    : "";
   // A recipe-grounded causal architecture now precedes allocation; its selected
-  // beat-level developments must remain binding input to the global outline generator.
-  const reservedFunctions = outstandingRequiredFunctionsByBeat(req.arcTemplate.beats, req.arcTemplate.name, req.existingSections ?? []);
+  // beat rationales are intentionally passed to the global outline generator.
   const allocationLines = Array.from(allocation.entries())
     .map(([beatId, info]) => {
       const beat = req.arcTemplate.beats.find((b) => b.id === beatId);
@@ -3274,8 +3239,7 @@ export function buildPrompt(
         ? `complete first-pass allocation: ${info.minSections} section${info.minSections === 1 ? "" : "s"}`
         : `minimum ${info.minSections} section${info.minSections === 1 ? "" : "s"}`;
       const typePlan = isNovel && info.containerCounts
-        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; beat word budget: ${plannedNovelContainerSlots(info.containerCounts).reduce((sum, type) => sum + NOVEL_CONTAINER_WORD_TARGETS[type], 0).toLocaleString()} words; ordered slots: ${plannedNovelContainerSlots(info.containerCounts, reservedFunctions.get(beatId)?.includes("climax") ?? false,
-          Math.max(0, (reservedFunctions.get(beatId)?.length ?? 0) - (reservedFunctions.get(beatId)?.indexOf("climax") ?? -1) - 1)).map((type, index) => `${plannedNovelSlotKey(index)}=${type} (~${NOVEL_CONTAINER_WORD_TARGETS[type].toLocaleString()} words)`).join(", ")}`
+        ? `; planned containers: ${NOVEL_LEAF_CONTAINERS.filter((type) => info.containerCounts![type] > 0).map((type) => `${type}=${info.containerCounts![type]}`).join(", ")}; beat word budget: ${plannedNovelContainerSlots(info.containerCounts).reduce((sum, type) => sum + NOVEL_CONTAINER_WORD_TARGETS[type], 0).toLocaleString()} words; ordered slots: ${plannedNovelContainerSlots(info.containerCounts).map((type, index) => `${plannedNovelSlotKey(index)}=${type} (~${NOVEL_CONTAINER_WORD_TARGETS[type].toLocaleString()} words)`).join(", ")}`
         : "";
       const narrativeCommitment = storyArchitecture && info.rationale
         ? `; planned dramatic movement: ${compactArcNarrativeText(info.rationale)}`
@@ -3284,7 +3248,7 @@ export function buildPrompt(
     })
     .join("\n");
   const allocationDirective = isNovel
-    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Do not manufacture extra sections solely to hit a numeric target: each allocated section must correspond to a different planned dramatic contribution with its own cause, effect, and inherited state. If a beat's rationale describes fewer events than its slots, develop distinct story BEFORE generating the outline, not an encore of a completed event. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections, except when a beat has outstanding required dramatic functions. For those beats return an object with "sections" (the ordinary sections in order) and "required" (one named section per required dramatic function, such as "climax" or "resolution"). Those required sections occupy the final ordered slots, in the order the functions are listed below. ONLY the reserved section may perform its one-time required dramatic event. This reserves the EVENT AND OUTCOME, not merely the dramaticFunction label: an ordinary section must not confess, reveal, defeat, choose, or resolve the exact decisive event that the reserved section is assigned to perform. Even an earlier setPiece or transformation in that SAME beat may only create distinct prerequisites, crises, reversals, costs, or consequences. If two slots would do the same dramatic work, redesign the NON-OWNING slot to create genuinely new story, regardless of which slot comes first. No duplicate events or outcomes anywhere in the returned outline, including paraphrases with different titles or labels. Write each section for its exact ordered container slot above. Omit "container" from every planned novel section: the server assigns it from the slot. Give each section enough distinct dramatic development to justify its planned scale; never pass off a brief event as a chapter. The allocator already assigned an explicit WORD budget to every section. Each budget is the intended size of the eventual written section, not the length of this outline JSON. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
+    ? `## Complete first-pass allocation\n\nThe allocation above constrains section counts, ordered container types, and Story Arc beat placement, and carries recipe-and-arc-grounded narrative commitments selected BEFORE sizing. Each beat's rationale must realize that beat's authored dramatic requirement through concrete character-driven action and consequence, not simply furnish a plot event under the right label. Follow those commitments unless they conflict with the canonical recipe or already accepted story; planner-generated enrichment alone is not canon. The allocation is the intended complete first-pass distribution for this novel, not a minimum-only Story Arc coverage floor. Plan substantial, distinct dramatic development for every allocated section before selecting its container. Return one ordered JSON array per beat with exactly the allocated number of sections, except when a beat has outstanding required dramatic functions. For those beats return an object with "sections" (the ordinary sections in order) and "required" (one named section per required dramatic function, such as "climax" or "resolution"). Those required sections occupy the final ordered slots, in the order the functions are listed below. ONLY the reserved section may perform its one-time required dramatic event. This reserves the EVENT AND OUTCOME, not merely the dramaticFunction label: an ordinary section must not confess, reveal, defeat, choose, or resolve the exact decisive event that the reserved section is assigned to perform. Even an earlier setPiece or transformation in that SAME beat may only create distinct prerequisites, crises, reversals, costs, or consequences. If two slots would do the same dramatic work, redesign the NON-OWNING slot to create genuinely new story, regardless of which slot comes first. No duplicate events or outcomes anywhere in the returned outline, including paraphrases with different titles or labels. Write each section for its exact ordered container slot above. Omit "container" from every planned novel section: the server assigns it from the slot. Give each section enough distinct dramatic development to justify its planned scale; never pass off a brief event as a chapter. The allocator already assigned an explicit WORD budget to every section. Each budget is the intended size of the eventual written section, not the length of this outline JSON. Give each unit genuinely appropriate dramatic development; do not merely relabel a small event as a long chapter. Routine book-length development belongs in the first pass, not later expansion. Existing accepted sections already contribute to the complete projection; the allocation is residual new work, and a beat with sufficient existing coverage remains at zero.`
     : `## Use the minimum-only allocation\n\nFor each beat, generate at least the stated minimum number of distinct sections while respecting the format's length policy. The minimum is a coverage floor, not permission to exceed the format's constraints. A beat with minimum 0 is already covered for this pass and must produce no new suggestion. Never pad with paraphrases.`;
   const contractLines = req.arcTemplate.beats.map((beat) => {
     const contract = arcRoleContract(beat, req.arcTemplate.name);
@@ -3310,17 +3274,13 @@ ${storyArchitecture?.arcExperience ? `The allocation committed to this concrete 
 ## Selected Story Arc drives events across the first pass
 Honor the planner's arc-shaped centralQuestion, characterCausality, decisiveClimax, and beat rationales as a single causal spine, not merely as an emotional interpretation of a reusable external plot. The distinctive dramatic requirement of each authored beat should determine what its characters DO, what changes irreversibly, and what new choice, constraint, or reversal follows into the next movement. Where two beats could be filled by the same generic pursuit, confrontation, rescue, revelation, or escape, invent a different character-caused development within the EXISTING allocation that realizes this arc's distinct progression. Retain explicitly authored recipe events and accepted history; never demand an invented arc-specific plot device, additional section, validator, model call, or repair stage.
 
-## Binding beat-by-beat causal developments
-${causalDevelopmentLines || "Legacy checkpoint: no beat-level causal developments were persisted; use the authored beat progression and selected architecture."}
-When beat-level causal developments are present, they are binding sequence commitments, not suggestions. Preserve their order and distinct ownership when writing sections. The development assigned to a beat must be completed by that beat's sections; do not move its outcome into an earlier or later beat, split one irreversible outcome into contradictory versions, or write an aftermath before the event that causes it. If a beat has multiple allocated sections, use earlier sections for distinct prerequisites, pressures, reversals, or costs and reserve the development's decisive outcome for the final section that owns it.
-
 ## Dramatize the chosen story — shared across all arcs
 Turn the saved architecture into distinct, lived events driven by choices, resistance, surprise, and irreversible consequences. Across the outline, major events must be caused or reshaped by emotionally consequential interactions: characters hurt, protect, deceive, depend on, abandon, confront, or choose one another in ways that change what can happen next. The plot and relationships should evolve through the SAME actions, rather than alternating external-problem chapters with unrelated emotional check-ins. Each section must materially transform the narrative situation rather than merely advance the steps of a familiar plot pattern. The actions and their outcomes must matter to these particular characters and deliver the experience promised by their recipe and selected arc.
 
-Honor any kind of storytelling genuinely required by the author or arc, but do not substitute a neatly completed process for a compelling dramatic resolution. Across the complete outline, including its later sections, preserve the recipe's defining drives as generators of actions and conflict, not merely facts mentioned in setup and copied into a summary. Let the characters' ongoing desires, flaws, appetites, contradictory loyalties, and relationships instigate new, surprising situations before choosing an easy logistical device. If a characteristic behavior changes, dramatize the cause and downstream consequences; otherwise do not quietly retire it when the external plot or climax becomes prominent. Repeated enactments of a flaw without a NEW resulting state are not continuity, they are repetitive writing. Do not impose moral improvement, conventional reassurance, or routine closure on characters whose authored identities and story experience do not warrant it. Preserve the selected architecture, accepted history, allocated slots, and genre obligations. Improve the execution in this same first pass without additional stages, sections, or repair.
+Honor any kind of storytelling genuinely required by the author or arc, but do not substitute a neatly completed process for a compelling dramatic resolution. Do not impose moral improvement, conventional reassurance, or routine closure on characters whose authored identities and story experience do not warrant it. Preserve the selected architecture, accepted history, allocated slots, and genre obligations. Improve the execution in this same first pass without additional stages, sections, or repair.
 
 ## Fresh dramatic work across the complete outline
-For each planned section, inherit the last completed dramatic state and determine what the characters actually DO that has not already been dramatically accomplished. Dramatize the NEXT causal event promised by the Story Arc and allocation rationale, not another instance of the same thematic problem. The scene must change a real option, relationship, danger, power balance, ability, or obligation for the sections that follow. A character can retain the same flaws and still create genuinely different trouble; neither automatic moral improvement nor automatic moral decline is a substitute for an earned character trajectory. Changes come from the recipe, the selected arc's compatible requirements, and irreversible events—not a generic expectation of what surviving the story should teach. Recurring emotional themes are welcome; replaying the same confrontation, confession, choice, lesson, or relationship conclusion in new words is not. If a proposed section only revisits a known truth or repeats a previously demonstrated character response, use that slot for its next distinct consequence, an unforeseen collision, or a new costly choice grounded in the established architecture.
+For each planned section, determine what the characters actually DO that has not already been dramatically accomplished, and what their actions now make possible, impossible, or irreversibly different. Recurring emotional themes are welcome; replaying the same confrontation, confession, choice, lesson, or relationship conclusion in new words is not. If a proposed section only revisits a known truth or repeats a previously demonstrated character response, use that slot for its next distinct consequence, an unforeseen collision, or a new costly choice grounded in the established architecture.
 
 Develop substantial variety of scenes, settings, encounters, supporting-character agency, relationship reversals, and genre-specific experiences according to the authored story rather than forcing one repetitive kind of event. Preserve the arc's reserved climax and resolution: the climax must deliver an exceptional, emotionally powerful and causally earned change in the actual story, while the ending must inherit its consequences rather than default to a tidy moral lesson or administrative closure. Quiet outcomes may be extraordinary through what they irreversibly mean. This is direction for the SAME first-pass outline, not a request for extra sections, another pass, or new rules.
 
@@ -3387,9 +3347,9 @@ Before writing any sections, assign each author-required behavior, event, and st
 When multiple developments satisfy the recipe, Story Arc, continuity, and section contract, choose the most entertaining, original, surprising, and dramatically compelling option. Let authored and invented characters' distinctive personalities, desires, flaws, obsessions, relationships, and unpredictable decisions generate events: supporting characters should create complications, change relationships, trigger reversals, and produce lasting consequences rather than serving as informants, exposition, transportation, or other functional devices. When the authored genre and tone support it, seek daring encounters, consequential emotional choices, reckless mistakes, surprising reversals, memorable revelations, and escalating consequences. Investigations, administrative discoveries, tactical missions, and procedural storytelling are entirely valid when they actively deliver the selected arc's experience; do not categorically prefer or prohibit any plot device. Preserve intended adult intensity without sanitizing it; make the climax emerge from the protagonists' distinctive choices and behavior and deliver the premise's consequential outcome rather than merely completing a generic tactical objective. Do not force randomness, spectacle, or artificial chaos into restrained stories. Preserve causality, continuity, and authorial intent.
 
 ## Character-caused story selection before plot construction
-First choose the story's causal drivers, BEFORE deciding on its central apparatus, tactical objective, climax method, or beat-by-beat plot. Read the authored protagonists' motives and relationships and the planningContext.characterDecisionCandidates. Identify the distinct desires and compromised choices that could make this story happen specifically to THESE people. Select the strongest optional supporting characters for their independent decisions that change the conflict, conflicting agendas, betrayals, selfish gambles, outrageous mistakes, and effects on the protagonists. For each selected character, work out privately what they want, the distinctive choice they make, whose plan it derails, and a later consequence that would not happen without that choice. Their choices and the protagonists' reactions must supply the causal spine; a preselected institutional mission, pursuit, technical device, or generic threat must not be the spine with characters added afterward. If the recipe calls for a system-driven procedural story, preserve it, but still let authored character agency determine its crucial turns.
+First choose the story's causal drivers, BEFORE deciding on its central apparatus, tactical objective, climax method, or beat-by-beat plot. Read the authored protagonists' motives and relationships and the planningContext.characterDecisionCandidates. Identify the distinct desires and compromised choices that could make this story happen specifically to THESE people. Select the strongest optional supporting characters for their independent decisions, conflicting agendas, betrayals, selfish gambles, outrageous mistakes, and effects on the protagonists. For each selected character, work out privately what they want, the distinctive choice they make, whose plan it derails, and a later consequence that would not happen without that choice. Their choices and the protagonists' reactions must supply the causal spine; a preselected institutional mission, pursuit, technical device, or generic threat must not be the spine with characters added afterward. If the recipe calls for a system-driven procedural story, preserve it, but still let authored character agency determine its crucial turns.
 
-Do not force every generated character into the outline. A candidate whose choices cannot earn a consequence may be dropped; do not add cameos, exposition couriers, or filler scenes to satisfy an invented cast quota. Keep the actual decisions and fallout of selected supporting people, not just their colorful introductions. Equally, do not replace a distinctive, consequential candidate with a nameless official, contact, or contractor merely because a functional role makes the plot easier. Before finalizing the sequence, test each retained supporting character: if substituting an interchangeable job title would leave the important events unchanged, give that character a genuinely consequential personal decision or omit them. Reconcile the authored Story Arc's dramatic progression with the recipe BEFORE committing to the plot, rather than fitting previously selected plot machinery into its beat labels. Preserve the author's tone, adult intensity, ambiguity, restrained genres, and all continuity and output contracts.
+Do not force every generated character into the outline. A candidate whose choices cannot earn a consequence may be dropped; do not add cameos, exposition couriers, or filler scenes to satisfy an invented cast quota. Equally, do not replace a distinctive, consequential candidate with a nameless official, contact, or contractor merely because a functional role makes the plot easier. Before finalizing the sequence, test each retained supporting character: if substituting an interchangeable job title would leave the important events unchanged, give that character a genuinely consequential personal decision or omit them. Reconcile the authored Story Arc's dramatic progression with the recipe BEFORE committing to the plot, rather than fitting previously selected plot machinery into its beat labels. Preserve the author's tone, adult intensity, ambiguity, restrained genres, and all continuity and output contracts.
 
 ## Premise outcome and ending causality
 Before drafting sections, identify the intended reader experience from this recipe's specific genre, tone, emotional promises, and character relationships, then the BOOK-level dramatic question. Honor the arc-specific climactic payoff chosen in the existing planning call; work backward from its irreversible consequence to the preceding decisions, relationships, and reversals that earn it. Determine the cause-and-effect trajectory that delivers that experience, including the decisive climax, the irreversible character/world change it causes, and an ending that inherits that change. A major premise element may be an unresolved pressure, mystery, relationship, or long-range stake rather than a problem the protagonists are required to investigate, explain, solve, or defeat. Equally, investigation, explanation, or external victory may be central when the author requests them. Plan the book's definite outcome before distributing distinct events across Story Arc beats. The protagonists' specific traits, choices, and relationships must materially cause or complicate that outcome; an interchangeable tactical or institutional solution must not replace their agency. Preserve the architecture's specifically selected, extraordinary arc-driven payoff: a mere narrow escape, surviving together, stopping a routine operation, or returning to the road cannot be the sole decisive event. A twist, revelation, enormous irreversible consequence, sacrifice, or intense emotional reckoning must be EARNED by earlier chapters and appropriate to the selected arc and authored ending, rather than inserted as last-minute spectacle. Across the entire sequence, preserve irreversible events: a threat stopped in one section stays stopped unless a new and expressly caused event changes that state; deaths, departures, promises, discoveries, and destroyed objects persist. Do not let a subsequent section restart the same countdown, restage a resolved confrontation, or resolve the central conflict a second time. Check the complete resultingChange and terminalState sequence before returning the first-pass outline. The ending can be ambiguous, tragic, grotesque, destructive, morally compromised, or only partly understood; it need not answer every question, but must deliver the premise's consequential promise.
@@ -3507,11 +3467,6 @@ export type StoryArchitecture = {
   deliberatelyOpenThreads: string;
 };
 
-export type CausalArchitectureContract = {
-  architecture: StoryArchitecture;
-  beatDevelopments: Array<{ beatIndex: number; development: string }>;
-};
-
 const STORY_ARCHITECTURE_SCHEMA = {
   type: "object",
   properties: {
@@ -3526,23 +3481,11 @@ const STORY_ARCHITECTURE_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-const CAUSAL_ARCHITECTURE_SCHEMA = {
-  type: "object",
-  properties: {
-    architecture: STORY_ARCHITECTURE_SCHEMA,
-    beatDevelopments: { type: "array", minItems: 1, maxItems: MAX_PLANNED_SECTIONS,
-      items: { type: "object", properties: {
-        beatIndex: { type: "integer", minimum: 0 },
-        development: { type: "string", minLength: 1, maxLength: 850 },
-      }, required: ["beatIndex", "development"], additionalProperties: false } },
-  },
-  required: ["architecture", "beatDevelopments"], additionalProperties: false,
-} as const;
-
-// Allocation is deliberately separate from the causal architecture call.
+// A single strict response contains causal decisions AND chapter sizing.
 const ALLOCATION_SCHEMA = {
   type: "object",
   properties: {
+    storyArchitecture: STORY_ARCHITECTURE_SCHEMA,
     allocations: {
       type: "array",
       minItems: 0,
@@ -3552,14 +3495,25 @@ const ALLOCATION_SCHEMA = {
         properties: {
           beatIndex: { type: "integer", minimum: 0 },
           minSections: { type: "integer", minimum: 0, maximum: 20 },
-          rationale: { type: "string", minLength: 1, maxLength: 1200 },
+          containerCounts: {
+            type: "object", additionalProperties: false,
+            properties: {
+              scene: { type: "integer", minimum: 0, maximum: 20 },
+              developedScene: { type: "integer", minimum: 0, maximum: 20 },
+              setPiece: { type: "integer", minimum: 0, maximum: 20 },
+              sceneSequence: { type: "integer", minimum: 0, maximum: 20 },
+              chapter: { type: "integer", minimum: 0, maximum: 20 },
+            },
+            required: ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"],
+          },
+          rationale: { type: "string", minLength: 1, maxLength: 500 },
         },
-        required: ["beatIndex", "minSections", "rationale"],
+        required: ["beatIndex", "minSections", "containerCounts", "rationale"],
         additionalProperties: false,
       },
     },
   },
-  required: ["allocations"],
+  required: ["storyArchitecture", "allocations"],
   additionalProperties: false,
 } as const;
 
@@ -3677,74 +3631,45 @@ export function fitAllocationToNovelBudget(
     selected.plan.minSections--;
   }
 
-  // Preserve model-authored section count, dramatic assignments, and section
-  // types. A word-count shortfall is internal QA, not license to synthesize
-  // another empty narrative slot. The planning model must provide enough
-  // distinct dramatic substance in its FIRST allocation response; downstream
-  // fitting may recover legacy malformed container mixes but never pad a valid
-  // first-pass outline with additional sections.
+  // The provider chooses the actual story structure. Respect any plan already
+  // within 115k–125k finished-prose words; 121k is a creative AIM, not permission
+  // to invent an extra chapter. Only bring objectively short plans to the floor.
+  const desiredTotalWords = Math.min(NOVEL_PREFERRED_MIN_WORDS, NOVEL_MAX_WORDS);
+  const startingCounts = new Map(Array.from(normalized.entries()).map(([id, plan]) => [id, plan.minSections]));
+  const addedCounts = new Map<string, number>();
+  while ((req.existingSections?.length ?? 0) === 0 &&
+    existingWords + plannedWords() < desiredTotalWords && sectionCount() < MAX_PLANNED_SECTIONS &&
+    (missingMixBeatIDs.length === 0 || existingWords + plannedWords() < NOVEL_PREFERRED_MIN_WORDS)) {
+    const availableWords = nominalRemainingWords - plannedWords();
+    const container = (["chapter", "sceneSequence", "setPiece", "developedScene", "scene"] as const)
+      .find((type) => NOVEL_CONTAINER_WORD_TARGETS[type] <= availableWords);
+    if (!container) break;
+    const eligible = Array.from(normalized.entries())
+      .filter(([, plan]) => plan.minSections > 0 && plan.minSections < 20)
+      .sort(([a, ap], [b, bp]) => {
+        const aBase = Math.max(1, startingCounts.get(a) ?? 1);
+        const bBase = Math.max(1, startingCounts.get(b) ?? 1);
+        // Allocate additional dramatic space proportionally to already
+        // developed beats rather than creating a generic post-climax tail.
+        return ((addedCounts.get(a) ?? 0) + 1) / aBase -
+          ((addedCounts.get(b) ?? 0) + 1) / bBase || bp.minSections - ap.minSections;
+      });
+    if (!eligible.length) break;
+    const [beatID, plan] = eligible[0];
+    plan.containerCounts![container]++;
+    plan.minSections++;
+    addedCounts.set(beatID, (addedCounts.get(beatID) ?? 0) + 1);
+  }
 
   // The returned plan remains recoverable even for impossible one-beat/fully
   // accepted corner cases; never introduce a new terminal failure condition.
-  // Never pollute the provider-authored causal rationale with numeric fitter notes.
-  // Its distinct planned events remain the first pass's narrative commitments.
-  return normalized;
-}
-
-/**
- * The allocator's numeric plan is advisory, but an uncovered authored
- * dramatic function is not optional.  A model can legally return zero for a
- * beat while the response contract still requires (for example) a climax.
- * Reconcile that contradiction deterministically before constructing the
- * paid outline response schema; otherwise schema construction throws a 500
- * before the provider can produce the required section.
- */
-export function ensureRequiredFunctionCapacity(
-  allocation: Map<string, Allocation>,
-  req: OutlineFromRecipeRequest,
-): Map<string, Allocation> {
-  const requiredByBeat = outstandingRequiredFunctionsByBeat(
-    req.arcTemplate.beats,
-    req.arcTemplate.name,
-    req.existingSections ?? [],
-  );
-  return new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
-    const required = requiredByBeat.get(beatID)?.length ?? 0;
-    if (required <= plan.minSections) return [beatID, plan];
-    return [beatID, {
-      ...plan,
-      minSections: required,
-      coverageMinimum: Math.max(plan.coverageMinimum ?? 0, required),
-      allocationMinimum: Math.max(plan.allocationMinimum ?? 0, required),
-    }];
-  }));
-}
-
-/**
- * Last-resort allocation after both bounded planner attempts fail.  This is
- * intentionally conservative: reserve one new section for every beat that
- * has no accepted coverage, plus any still-uncovered required functions.
- * It keeps the outline usable without inventing a plot or charging another
- * planning retry.
- */
-export function fallbackSectionAllocation(
-  req: OutlineFromRecipeRequest,
-): Map<string, Allocation> {
-  const requiredByBeat = outstandingRequiredFunctionsByBeat(
-    req.arcTemplate.beats,
-    req.arcTemplate.name,
-    req.existingSections ?? [],
-  );
-  return new Map(req.arcTemplate.beats.map((beat) => {
-    const hasAcceptedCoverage = (req.existingSections ?? []).some((section) => section.storyArcBeatID === beat.id);
-    const required = requiredByBeat.get(beat.id)?.length ?? 0;
-    const minimum = Math.max(required, hasAcceptedCoverage ? 0 : 1);
-    return [beat.id, {
-      minSections: minimum,
-      coverageMinimum: minimum,
-      allocationMinimum: minimum,
-      rationale: "Deterministic safety fallback after bounded allocation-planner retry exhaustion.",
-    }];
+  return new Map(Array.from(normalized.entries()).map(([beatID, plan]) => {
+    const original = allocation.get(beatID)!;
+    const changed = original.minSections !== plan.minSections ||
+      JSON.stringify(original.containerCounts ?? null) !== JSON.stringify(plan.containerCounts);
+    return [beatID, changed
+      ? { ...plan, rationale: `${plan.rationale} Word-budget reconciled for the full 115,000–125,000-word first pass; every added section must deliver a distinct irreversible event or character consequence.` }
+      : plan] as [string, Allocation];
   }));
 }
 
@@ -3996,52 +3921,20 @@ export function parseAndValidateAllocation(
   return new Map(beats.map((beat) => [beat.id, out.get(beat.id)!]));
 }
 
-export function parseAndValidateCausalArchitecture(raw: string, beats: Array<{ id: string }>): CausalArchitectureContract {
-  let parsed: unknown;
-  try { parsed = parseOutlineJSON(raw); } catch (_) { throw new Error("causal architecture returned invalid JSON"); }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("causal architecture must be an object");
-  const value = parsed as Record<string, unknown>;
-  const rawArchitecture = value.architecture;
-  if (!rawArchitecture || typeof rawArchitecture !== "object" || Array.isArray(rawArchitecture)) throw new Error("causal architecture missing architecture");
-  const architecture = {} as StoryArchitecture;
-  for (const key of STORY_ARCHITECTURE_SCHEMA.required) {
-    const item = (rawArchitecture as Record<string, unknown>)[key];
-    const maxLength = STORY_ARCHITECTURE_SCHEMA.properties[key].maxLength;
-    if (typeof item !== "string" || !item.trim() || item.length > maxLength) throw new Error(`causal architecture has invalid ${key}`);
-    architecture[key] = item.trim();
-  }
-  if (!Array.isArray(value.beatDevelopments) || value.beatDevelopments.length !== beats.length) throw new Error("causal architecture must cover every beat");
-  const seen = new Set<number>();
-  const beatDevelopments = value.beatDevelopments.map((item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("causal architecture has malformed beat development");
-    const candidate = item as Record<string, unknown>;
-    const beatIndex = candidate.beatIndex;
-    if (!Number.isInteger(beatIndex) || Number(beatIndex) < 0 || Number(beatIndex) >= beats.length || seen.has(Number(beatIndex))) throw new Error("causal architecture has invalid beat coverage");
-    if (typeof candidate.development !== "string" || !candidate.development.trim() || candidate.development.length > 850) throw new Error("causal architecture has invalid beat development");
-    seen.add(Number(beatIndex));
-    return { beatIndex: Number(beatIndex), development: candidate.development.trim() };
-  });
-  return { architecture, beatDevelopments: beatDevelopments.sort((a, b) => a.beatIndex - b.beatIndex) };
-}
-
 export function buildAllocationPrompt(
   req: OutlineFromRecipeRequest,
   obligations: RecipeObligation[] = [],
-  causalContract?: CausalArchitectureContract,
 ): { system: string; user: string } {
   const isNovel = requestedStoryMaterialFormat(req) === "novel";
   const maxBudgetedSections = isNovel ? maximumContainerPlannedNewSections(req) : maximumBudgetedNewSections(req);
   const containerBudgetInstructions = isNovel
-    ? `Budget in finished-prose WORDS, never API output tokens. Return the number of distinct causal developments each beat needs; the server assigns the appropriate section container and fits the resulting word capacity. Do not emit container types or perform word-budget arithmetic. The plan must still contain enough distinct dramatic substance to support the requested book length; never add filler or duplicate events.`
+    ? `Budget in finished-prose WORDS, never API output tokens: scene=${NOVEL_CONTAINER_WORD_TARGETS.scene.toLocaleString()} words, developedScene=${NOVEL_CONTAINER_WORD_TARGETS.developedScene.toLocaleString()}, setPiece=${NOVEL_CONTAINER_WORD_TARGETS.setPiece.toLocaleString()}, sceneSequence=${NOVEL_CONTAINER_WORD_TARGETS.sceneSequence.toLocaleString()}, chapter=${NOVEL_CONTAINER_WORD_TARGETS.chapter.toLocaleString()}. Return containerCounts on each beat, with minSections exactly their sum. Sum the WORD targets of every proposed section plus accepted existing sections. The first-pass book must plan 115,000–125,000 words (aim approximately ${NOVEL_FIRST_PASS_WORD_GOAL.toLocaleString()} to accommodate deduplication). Give every section distinct dramatic substance appropriate to its word budget; never fill with paraphrased events. The 125,000-word nominal planning cap is absolute. The server reconciles any incomplete or short valid mix in WORDS before generation.`
     : "Allocate the number of format-appropriate sections needed for complete Story Arc coverage without the novel-only word or container budget.";
   const system =
     `You are an expert outliner. Given a complete canonical recipe/project payload, a verified story-material enrichment package, and a story arc template (ordered beats), design a complete ${requestedStoryMaterialFormat(req)} story and allocate its first-pass sections.
 
 ${isNovel ? `## Binding whole-book creative objective — BEFORE inventing the plot
 Design a FULL-LENGTH NOVEL whose finished prose has a minimum objective of 115,000 WORDS, with a hard maximum of 125,000 words. Develop the story architecture, defining conflict, character journeys, distinct dramatic developments, reversals, climax, and irreversible aftermath with ENOUGH ORIGINAL STORY SUBSTANCE to sustain at least 115,000 words. The word target determines the necessary depth and breadth of DISTINCT dramatic material, never the kind of story the model should choose. Do not select a central conflict because it is familiar, easy to expand, or convenient to structure. First commit to the most compelling recipe-and-arc-faithful conflict and climax; then deepen that chosen story through genuinely different consequential developments rather than changing its creative identity to meet a word budget. After making those author-and-arc-driven story decisions, assign word budgets across the sections, targeting approximately ${NOVEL_FIRST_PASS_WORD_GOAL.toLocaleString()} words as a safety buffer. Words are the story unit; API output tokens are not.` : ""}
-
-${causalContract ? `## Validated causal spine (do not replace)
-A separate causal-planning call already selected the architecture and one distinct development for every beat. Use it as binding input; allocate counts only after respecting these causal commitments.` : ""}
 
 ## Binding experience of the selected Story Arc (same model call)
 ${arcReaderExperienceDirective(req.arcTemplate)}
@@ -4052,14 +3945,14 @@ First read the AUTHOR'S RECIPE and the selected Story Arc as one creative brief.
 ## Select the strongest author-and-arc-driven dramatic engine
 Within THIS EXISTING planning response, privately consider meaningfully different book-level conflicts before selecting one. Choose the idea whose dramatic engine is the evolving emotional and interpersonal conflict among THESE characters, expressing their needs, desires, fears, contradictions, attachment, resentment, and shifting loyalties through actions. The defining reversals and climax must arise from those interactions or become inseparable from them; external obstacles should amplify that human conflict, not independently generate an interchangeable plot. The selected arc determines how that conflict is experienced and transformed. Do not output alternatives, add stages, add model calls, or change the schema.
 
-Generated suggestions and familiar genre patterns are resources, not instructions. Reject a central conflict if it could be transplanted into an unrelated story without substantially changing the characters' actions, reversals, climax, or consequences. Prefer character-driven disturbances, incompatible desires, reckless bargains, unforeseen alliances, intimate or social collisions, and independently motivated supporting-person choices when the recipe makes them compelling. An object, document, delivery, permit, institution, investigation, or operation is useful only when it becomes consequential through what these people choose and risk; it cannot replace their continuing motives as the narrative engine. Do not replace originality with arbitrary shocks or impose noise on an intentionally quiet recipe. Favor a distinctive causal chain of decisions and irreversible developments over the easiest recognizable plot to organize, expand, or explain. Any mode of storytelling, including procedural or investigative storytelling, remains appropriate when its dramatic form is genuinely justified by the author and selected arc.
+Generated suggestions and familiar genre patterns are resources, not instructions. Reject a central conflict if it could be transplanted into an unrelated story without substantially changing the characters' actions, reversals, climax, or consequences. Favor a distinctive causal chain of decisions and irreversible developments over the easiest recognizable plot to organize, expand, or explain. Any mode of storytelling, including procedural or investigative storytelling, remains appropriate when its dramatic form is genuinely justified by the author and selected arc.
 
 Before committing to the architecture, imagine the defining events as scenes the reader would experience. If the conflict or climax does not fulfill this story's particular emotional, tonal, and genre promises, choose a stronger realization before allocating sections. This is an internal creative decision, not a new validity gate or failure path.
 
 ## Book-scale transformations before section allocation
-Design a whole-book trajectory with materially different phases of interpersonal conflict and consequential action. Keep each recipe-defined person's characteristic wants, compulsions, habits, contradictions, relationship pressures, and tonal intensity available as active causes in the LATER phases too. Evolving consequences may genuinely change a person, but a new external problem, section number, or genre convention does not by itself rehabilitate, condemn, tame, or erase them. Let the recipe and earned turns choose any moral outcome; do not make a virtue lesson or a plunge into vice the default destination. For each major phase, imagine distinct circumstances that pull different choices from the same specific people, instead of revisiting one moral argument under new scenery. Major reversals should transform the characters' circumstances, relationships, power, allegiances, and understanding so that the next dramatic problem is meaningfully different from the last, not simply the original danger or argument repeated with more pressure. Once a truth is revealed or a decision has changed the relationship, its next appearance must cause a NEW choice or irreversible consequence rather than replay the same disclosure, apology, restraint, or negotiation.
+Design a whole-book trajectory with materially different phases of interpersonal conflict and consequential action. Major reversals should transform the characters' circumstances, relationships, power, allegiances, and understanding so that the next dramatic problem is meaningfully different from the last, not simply the original danger or argument repeated with more pressure. Once a truth is revealed or a decision has changed the relationship, its next appearance must cause a NEW choice or irreversible consequence rather than replay the same disclosure, apology, restraint, or negotiation.
 
-Select optional enrichment people for independently motivated decisions that force genuinely new choices, not merely for distinctive biographies or opportunities to deliver exposition. Preserve those decisions and their downstream consequences in the existing beat rationales, then carry them into the outline. Never impose a cast quota or make a generated character canonical. Prepare surprising developments through established motives and earlier decisions; no arbitrary twists or genre-inappropriate escalation. Map these transformations into the EXISTING ordered arc beats and their rationale before assigning containers or word budgets. The entire ordered Story Arc is a causal progression, not a set of topical headings. Each beat MUST inherit the concrete changes achieved earlier and leave a new, irreversible situation for the next beat. For a beat allocated N sections, describe N different actual character actions and resulting state changes in that beat's rationale IN ORDER; each one should create a new problem, unexpected opportunity, altered allegiance, or specific new cost. Never count a second apology, responsibility declaration, boundary discussion, confession, similar publicity incident, training drill, or procedural confirmation as a new event when its dramatic job has already been achieved. A familiar emotional struggle may recur only when a NEW external or interpersonal action genuinely changes what is now possible. Use independent enriched characters to cause startling, genre-faithful turns, not merely to restate the protagonists' existing dilemma. The 115,000-word objective must be supported by genuinely evolving dramatic substance, not by revisiting a smaller story for more sections. Do not create mandatory twist counts, schema fields, model calls, validation gates, or repair stages.
+Let independently motivated supporting characters and unexpected consequences alter the protagonists' options and the nature of the conflict. Prepare surprising developments through established motives and earlier decisions; no arbitrary twists or genre-inappropriate escalation. Map these transformations into the EXISTING ordered arc beats and their rationale before assigning containers or word budgets. The 115,000-word objective must be supported by genuinely evolving dramatic substance, not by revisiting a smaller story for more sections. Do not create mandatory twist counts, schema fields, model calls, validation gates, or repair stages.
 
 ## Story Arc selection governs the book's causal conflict
 Use the recipe and the FULL authored beat progression together to choose which conflict becomes THIS book's central engine, which character choice triggers it, and which irreversible reversals change its direction. The arc must determine the kinds of problems and consequential choices that arise, not merely the protagonists' emotional reactions to a preselected external plot. Preserve every explicit recipe promise, including any authored external events or ending; do not invent mandatory plot machinery from a broad premise or impose a canned genre formula. Express this jointly chosen causal story using the EXISTING storyArchitecture and beat rationales, not additional stages or fields.
@@ -4075,8 +3968,6 @@ After interpreting the author’s recipe AND the selected arc’s complete progr
 
 Test the proposed ending against the author's characters and arc: Would a reader remember this as an extraordinary, specific consequence of THESE people following THIS arc? Would the ending be essentially unchanged if the same recipe used another dramatically different Story Arc? If so, reject it and invent a DIFFERENT primary dramatic question, conflict trajectory, decisive event, and outcome for the selected arc. Merely changing labels, tone, or which relationship gets a final conversation is insufficient. Survival, escape, staying together, a disrupted operation, continued travel, or an unresolved bigger threat may occur as secondary consequences, but are not by themselves an exceptional book-level payoff. An authored external victory is valid when it produces the distinctive high-impact experience required by the chosen arc. Respect any explicitly authored ending, guaranteed relationship outcome, or accepted prior chapters: deepen its impact rather than contradict it. Preserve wider series promises at their authored scope.
 
-Before finalizing the architecture, check whether the planned centralQuestion, decisiveClimax, and endingConsequence have silently converted the recipe's defining behaviors and relationships into a generic lesson about becoming better, worse, or more socially acceptable people. Such a transformation is valid only if it is authored, specifically required by a compatible arc, or earned by the chosen causal story. Keep the actual characters' desires and contradictions capable of CAUSING the decisive event, not merely being corrected before it.
-
 Before finalizing the architecture, perform a COUNTERFACTUAL ARC CHECK mentally across the WHOLE dramatic spine: initial disruption, primary conflict, defining reversal, decisive climax, and irreversible aftermath. If substantially different authored Story Arcs could reuse those same core events with only changed emotions, beat labels, or final conversations, the arc has merely decorated a generic plot. Rechoose the book-level conflict and its sequence of character-caused developments until these five turning points are meaningfully shaped by the selected arc's actual beat descriptions. Do not replace events or outcomes that the author explicitly mandates, and do not manufacture differences through spectacle, arbitrary shocks, or new author requirements. Having chosen the payoff, WORK BACKWARD to the prior character decisions, costs, reversals, and arc beats that make it surprising but inevitable in hindsight; THEN choose the concrete plot apparatus that serves those movements.
 
 ## Establish the climax's causal chain inside the EXISTING story architecture
@@ -4089,15 +3980,12 @@ After reconciling the recipe with the ordered arc movements, return a compact st
 ## Assign one-time events to their owning Story Arc movement
 Before distributing section counts, determine which authored beat actually owns each irreversible dramatic change, especially the event that answers this book's central question. Record the decisive event in the existing storyArchitecture.decisiveClimax and the appropriate beat rationale; do not invent another schema field or another stage. Earlier beats can threaten, prepare, reverse an apparent advantage, or force sacrifices, but must not already accomplish that same decisive event. Within the decisive beat itself, any earlier ordinary or set-piece section must ONLY create a distinct prerequisite, obstacle, reversal, or cost; it must NOT perform the chosen decisive action or achieve its result. The final required climax section alone owns the complete action and outcome. Do not allocate two versions of one confession, broadcast, confrontation, choice, relationship commitment, or victory to fill the beat's word budget. Later beats must start from the changed reality and develop its distinct consequences, not perform the event a second time. Apply the same ownership principle to revelations, identity disclosures, irreversible relationship decisions, destroyed objects, departures, and lesser victories. If the chosen arc calls for several genuine stages of a confrontation, each stage must accomplish a different change; a subsequent reversal can reopen a settled condition only through an explicitly new cause. This is one continuous causal story across ALL beats, not a requirement for every genre to use the same type of climax.
 
-THEN work backward from that chosen payoff through the ordered arc beats and write the character-driven setup, promises, escalating costs, revelations, reversals, and consequences into each allocation rationale. Across early, middle, and late beat rationales, keep recipe-defined drives and volatile interpersonal dynamics present as causes of genuinely NEW decisions or consequences. Do not spend an author's most defining material in the setup and replace it in later beats with lessons, tidy management, an interchangeable rescue mission, or an external process. Nor should every beat restage the same flaw: invent changing dilemmas and unpredictable collisions that expose different sides of the people. A meaningful change of character must have its own earned trigger and continuing consequences; the story is free to choose any direction compatible with the recipe and arc. Allocate the specific earlier developments that establish the stakes, causal leverage, and prerequisites for the decisive action; the climactic beat must enact the mechanism that changes the outcome, and the aftermath must inherit only the resulting changes. Do not postpone explanations for why the climax works until the final section or assume an unexplained interruption proves a larger victory. Each rationale must explain BOTH the specific effect required by that beat's authored description AND the distinct event/choice/consequence that realizes it in this story; not merely label a plot step or justify a chapter count. In the existing rationales, connect neighboring beats causally: what irreversible choice or changed circumstance in this movement makes the next movement necessary, possible, or harder? Do not let a fixed external plot advance on its own while the arc supplies commentary afterward. Make the climax and ending rationales realize their respective arc requirements and the saved architecture's definite outcome. Only AFTER those story and arc decisions, assign the distinct development count (minSections). The server derives container types and word capacity after causal validation. All reasoning about story and causality belongs in this planning response; numeric container sizing is deterministic server work.
+THEN work backward from that chosen payoff through the ordered arc beats and write the character-driven setup, promises, escalating costs, revelations, reversals, and consequences into each allocation rationale. Allocate the specific earlier developments that establish the stakes, causal leverage, and prerequisites for the decisive action; the climactic beat must enact the mechanism that changes the outcome, and the aftermath must inherit only the resulting changes. Do not postpone explanations for why the climax works until the final section or assume an unexplained interruption proves a larger victory. Each rationale must explain BOTH the specific effect required by that beat's authored description AND the distinct event/choice/consequence that realizes it in this story; not merely label a plot step or justify a chapter count. In the existing rationales, connect neighboring beats causally: what irreversible choice or changed circumstance in this movement makes the next movement necessary, possible, or harder? Do not let a fixed external plot advance on its own while the arc supplies commentary afterward. Make the climax and ending rationales realize their respective arc requirements and the saved architecture's definite outcome. Only AFTER those story and arc decisions, budget and assign containerCounts and minSections. All reasoning and output belong to this ONE existing outline-plan response, not another stage or model call.
 
-This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 121,000 FINISHED-PROSE WORDS, within the 115,000–125,000-word target range. Finished-prose word capacity is assigned by the server after causal validation; token counts are NOT word budgets. Account for the projected WORDS contributed by existing accepted sections exactly once. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat. Distribute substantial dramatic movements according to the narrative material each beat requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. ${containerBudgetInstructions}
-
-## Dramatic behavior must drive the causal chain — process is not a default bridge
-For every transition between planned developments, first identify the character behavior, relationship choice, betrayal, reckless act, mistake, appetite, or independent supporting-person decision that changes the situation. Do not use a discussion, explanation, investigation, confession, negotiation, document, procedural confirmation, or tidy resolution merely because it is the easiest way to connect two plot points. Those forms are valid only when the act itself causes an irreversible change in danger, allegiance, power, access, obligation, relationship, or available choice. If removing the process element would leave the same story state, replace it with a consequential dramatic event. Surprise must come from distinctive behavior and established motives, not arbitrary randomness; every increase in stakes, scope, power, or consequence must show the intervening mechanism that makes the next state possible.
+This request is for a ${requestedStoryMaterialFormat(req)}. For a novel, plan the complete first-pass book at approximately 121,000 FINISHED-PROSE WORDS, within the 115,000–125,000-word target range. Add the explicit word targets of the chosen container types; token counts are NOT word budgets. Account for the projected WORDS contributed by existing accepted sections exactly once. Consider the author's recipe and explicit requirements, enriched story material, the selected Story Arc and the relative dramatic weight of each beat. Distribute substantial dramatic movements according to the narrative material each beat requires; do not evenly distribute a quota or create filler. Every additional section must introduce meaningful events, consequences, decisions, discoveries, reversals, or changes in tactical or emotional state. Preserve the complete author-specified story, and never allocate duplicate or unnecessary sections merely to reach the word target. ${containerBudgetInstructions}
 
 ## Select dramatic shape BEFORE doing container arithmetic
-For every beat, identify the actual distinct dramatic units implied by the chosen architecture and beat rationale, then select their appropriate container TYPES based on the material: scene for one focused event; developedScene for a sustained event with meaningful resistance/reversal; setPiece for a concentrated high-impact encounter; sceneSequence for related scenes across places or time; chapter only for a cohesive publishing unit with MULTIPLE substantive movements. A chapter is not merely a 4,200-word slot. Each planned chapter must contain enough connected-but-distinct developments to sustain its size. Do not select chapters just because they make the 115,000–125,000-WORD arithmetic easy. An outline of 29 identically sized chapters is valid ONLY if each really has chapter-scale multi-movement material. Do not force artificial variety or fixed percentages: a genuinely chapter-shaped novel can have many chapters, and an event needing a short focused scene should not be inflated into one. If the resulting material cannot sustain the full novel, deepen the actual causal story with fresh meaningful developments BEFORE assigning the length budget; do not enlarge the labels or repeat dramatic work.
+For each beat, identify the actual distinct dramatic units implied by the chosen architecture and beat rationale, then select their appropriate container TYPES based on the material: scene for one focused event; developedScene for a sustained event with meaningful resistance/reversal; setPiece for a concentrated high-impact encounter; sceneSequence for related scenes across places or time; chapter only for a cohesive publishing unit with MULTIPLE substantive movements. A chapter is not merely a 4,200-word slot. Each planned chapter must contain enough connected-but-distinct developments to sustain its size. Do not select chapters just because they make the 115,000–125,000-WORD arithmetic easy. An outline of 29 identically sized chapters is valid ONLY if each really has chapter-scale multi-movement material. Do not force artificial variety or fixed percentages: a genuinely chapter-shaped novel can have many chapters, and an event needing a short focused scene should not be inflated into one. If the resulting material cannot sustain the full novel, deepen the actual causal story with fresh meaningful developments BEFORE assigning the length budget; do not enlarge the labels or repeat dramatic work.
 
 Allocate sections according to distinct dramatic developments, not the number of steps, conversations, or locations involved in one development. Base the size and distribution on the dramatic developments already selected in storyArchitecture and each beat's narrative commitment. Consecutive preparations for the same confrontation, repeated consideration of the same decision, and multiple observations of one outcome generally belong within a larger section unless each independently changes the narrative state. Prefer the container whose dramatic form actually fits the unit; never choose the largest container merely to satisfy a word quota.
 
@@ -4114,7 +4002,7 @@ ${renderRequiredRecipeCoverage(obligations)}
 ## Recipe obligations
 The JSON request contains the authoritative obligations exactly once.
 
-Using the validated causal spine in the planning context, return exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs in allocations. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 121,000 finished-prose words (within 115,000–125,000), computed by adding each container\'s word target, not tokens. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Each allocation rationale records the selected beat's causal movement, especially the decisive clash and its later consequences. Do not output any other root key or repeat the causal architecture.
+Output a single storyArchitecture FIRST (all six short text fields, including required arcExperience), THEN exactly one allocation for every Story Arc beat using beatIndex, the zero-based ordinal from the ordered beat list below. Never output UUIDs or beat IDs in allocations. The server maps beatIndex to the canonical beat identity. Include every beat exactly once. For a fresh novel with no accepted sections, minSections is the intended complete first-pass allocation for that beat, not merely a minimum coverage estimate; the allocations together must plan the complete book at approximately 121,000 finished-prose words (within 115,000–125,000), computed by adding each container\'s word target, not tokens. Account for the supplied existingSections before allocating new work: when accepted sections already contribute to a beat, minSections is only the additional sections still required, and a beat with sufficient existing coverage must remain at 0. Every allocated section must represent distinct substantive material supported by the recipe, enrichment, and arc. Do not add sections to a sufficiently covered beat, invent padding, or leave routine book-length development to later expansion. Each allocation rationale records the selected beat's causal movement, especially the decisive clash and its later consequences. Do not output any other root key. ${isNovel ? "Provide all five containerCounts keys for every beat, including zeros." : "Do not return novel-only containerCounts."}
 
 Output JSON only. No commentary, no prose.`;
 
@@ -4138,11 +4026,10 @@ Output JSON only. No commentary, no prose.`;
     .map((section) => ({ title: section.title ?? null, summary: section.summary ?? null }));
   const user = JSON.stringify({
     planningContext: planningView,
-    ...(causalContract ? { causalArchitecture: causalContract } : {}),
     existingSectionsByBeat,
     existingUnlinkedSections,
     allocation: isNovel
-      ? "Return only the distinct development count per beat and its rationale. The server derives container types and word capacity deterministically from the validated causal developments; do not calculate or emit containerCounts. Accepted existing work counts once."
+      ? "Choose containerCounts first; minSections equals their sum. Sum the explicit word targets to approximately 121,000 words (115,000–125,000 permitted). Accepted existing work counts once."
       : "For non-novels, return format-appropriate residual minSections per beat without novel containerCounts.",
     ...(isNovel ? { containerWordTargets: NOVEL_CONTAINER_WORD_TARGETS,
       firstPassWordGoal: NOVEL_FIRST_PASS_WORD_GOAL, minimumNovelWords: NOVEL_PREFERRED_MIN_WORDS, maximumNovelWords: NOVEL_MAX_WORDS } : {}),
@@ -4155,13 +4042,17 @@ Output JSON only. No commentary, no prose.`;
 function allocationSchemaForFormat(req: OutlineFromRecipeRequest) {
   const allocations = requestedStoryMaterialFormat(req) === "novel"
     ? ALLOCATION_SCHEMA.properties.allocations
-    : (() => ({
-      ...ALLOCATION_SCHEMA.properties.allocations,
-      items: {
-        ...ALLOCATION_SCHEMA.properties.allocations.items,
-        required: ["beatIndex", "minSections", "rationale"],
-      },
-    }))();
+    : (() => {
+      const { containerCounts: _novelOnly, ...properties } = ALLOCATION_SCHEMA.properties.allocations.items.properties;
+      return {
+        ...ALLOCATION_SCHEMA.properties.allocations,
+        items: {
+          ...ALLOCATION_SCHEMA.properties.allocations.items,
+          properties,
+          required: ["beatIndex", "minSections", "rationale"],
+        },
+      };
+    })();
   return {
     ...ALLOCATION_SCHEMA,
     properties: { ...ALLOCATION_SCHEMA.properties, allocations: {
@@ -4173,29 +4064,14 @@ function allocationSchemaForFormat(req: OutlineFromRecipeRequest) {
   };
 }
 
-export async function planCausalArchitecture(
-  req: OutlineFromRecipeRequest,
-  apiKey: string,
-  billableCall?: SuggestionLLMCall,
-  obligations: RecipeObligation[] = [],
-): Promise<CausalArchitectureContract> {
-  const { system, user } = buildAllocationPrompt(req, obligations);
-  const causalSystem = `${system}\n\nReturn ONLY a compact causal architecture contract. Choose one causal development for every ordered beat before any section sizing. Do not return allocations, counts, containers, or word budgets.`;
-  const responseFormat = { type: "json_schema", json_schema: { name: "outline_causal_architecture", strict: true, schema: CAUSAL_ARCHITECTURE_SCHEMA } };
-  const result = billableCall
-    ? await billableCall(causalSystem, user, 2600, responseFormat, "outline-causal-architecture", (content) => parseAndValidateCausalArchitecture(content, req.arcTemplate.beats))
-    : { content: await callOpenAI(causalSystem, user, apiKey, { maxTokens: 2600, useJsonSchema: true, jsonSchemaName: "outline_causal_architecture", jsonSchema: CAUSAL_ARCHITECTURE_SCHEMA }), creditCostCharged: 0, remainingCredits: 0 };
-  return parseAndValidateCausalArchitecture(result.content, req.arcTemplate.beats);
-}
-
 export async function planSectionAllocation(
   req: OutlineFromRecipeRequest,
   apiKey: string,
   billableCall?: SuggestionLLMCall,
   obligations: RecipeObligation[] = [],
-  options: { retryOnly?: boolean; deferRetry?: boolean; causalContract?: CausalArchitectureContract; onArchitecture?: (architecture: StoryArchitecture) => void } = {},
+  options: { retryOnly?: boolean; deferRetry?: boolean; onArchitecture?: (architecture: StoryArchitecture) => void } = {},
 ): Promise<Map<string, Allocation>> {
-  const { system, user } = buildAllocationPrompt(req, obligations, options.causalContract);
+  const { system, user } = buildAllocationPrompt(req, obligations);
   const allocationSchema = allocationSchemaForFormat(req);
   const responseFormat = {
     type: "json_schema",
@@ -4237,9 +4113,14 @@ export async function planSectionAllocation(
   const corrections = options.retryOnly ? [true] : [false, true];
   for (const correction of corrections) {
     try {
-      const parsed = parseAndValidateAllocation(await call(correction), req.arcTemplate.beats);
-      const reconciled = ensureRequiredFunctionCapacity(parsed, req);
-      return fitAllocationToNovelBudget(reconciled, req);
+      let architecture: StoryArchitecture | undefined;
+      const parsed = parseAndValidateAllocation(
+        await call(correction), req.arcTemplate.beats, undefined,
+        (value) => { architecture = value; },
+      );
+      const fitted = fitAllocationToNovelBudget(parsed, req);
+      if (architecture) options.onArchitecture?.(architecture);
+      return fitted;
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
       if (error instanceof OutlineOutputExhaustedError) throw error;
@@ -6443,7 +6324,6 @@ export async function runSuggestionJob(
     // Stored alongside the existing allocationEntries for durable worker
     // resume; an older checkpoint can still complete without a blueprint.
     let storyArchitecture = planningState.storyArchitecture as StoryArchitecture | undefined;
-    let causalContract = planningState.causalArchitecture as CausalArchitectureContract | undefined;
     const sectionAllocationDeficits = (suggestions: Suggestion[]) => {
       const effectiveAllocation = allocation ?? new Map<string, Allocation>(
         Array.isArray(planningState.allocationEntries) ? planningState.allocationEntries as Array<[string, Allocation]> : [],
@@ -6790,21 +6670,10 @@ export async function runSuggestionJob(
                 providerMaterialFallbackReason: error instanceof Error ? error.message.slice(0, 300) : "invalid_enrichment",
               };
               parsedMaterial = repairStoryMaterialFromRecipe(body.recipe, provenance, requestedStoryMaterialFormat(body));
-              const recoveredPremiseComponents = tryPreserveAuthoredPremiseComponents(
+              parsedMaterial.premiseComponents = preserveAuthoredPremiseComponents(
                 undefined,
                 String(body.recipe.project?.summary ?? ""),
               );
-              if (recoveredPremiseComponents) {
-                parsedMaterial.premiseComponents = recoveredPremiseComponents;
-              } else {
-                // The canonical recipe remains usable even when its summary
-                // cannot fit the bounded premise-component contract. Do not
-                // let recovery bookkeeping turn this paid stage into HTTP 500.
-                enrichmentDiagnostics = {
-                  ...enrichmentDiagnostics,
-                  premiseComponentFallback: "omitted_unrepresentable_summary",
-                };
-              }
             }
             const sufficiency = storyMaterialSufficiency(parsedMaterial, body.recipe, requestedStoryMaterialFormat(body));
             // Item-count sufficiency is advisory. A structurally valid package
@@ -6921,57 +6790,24 @@ export async function runSuggestionJob(
       );
     }
     await updateRun({ planning_context: planningContext, planning_context_hash: planningContextHash, planning_context_version: claimedRun.planning_context_version ?? 1, diagnostics });
-    const persistedAllocation = Array.isArray(planningState.allocationEntries)
-      ? planningState.allocationEntries as Array<[string, Allocation]>
-      : null;
-    // Establish and durably checkpoint the causal spine before deterministic
-    // allocation. Legacy settled allocation checkpoints remain resumable.
-    if (!causalContract && !persistedAllocation) {
-      causalContract = await planCausalArchitecture(body, openaiKey, billableCall, recipeObligations);
-      storyArchitecture = causalContract!.architecture;
-      planningState = { ...planningState, phase: "causal_architecture_complete", nextAction: "outline-plan", causalArchitecture: causalContract, storyArchitecture };
-      diagnostics = markMeaningfulProgress({ ...diagnostics, stage: "causal_architecture_complete", storyArchitecture }, `causal_architecture_validated:${stableJSONStringify(causalContract)}`);
-      await updateRun({ planning_state: planningState, diagnostics });
-    } else {
-      storyArchitecture = causalContract?.architecture;
-    }
     // PR 5: allocation counts are residual NEW sections. Persist the validated
     // plan before the next provider boundary so continuation does not rerun a
     // settled allocation call or double-subtract existing coverage.
+    const persistedAllocation = Array.isArray(planningState.allocationEntries)
+      ? planningState.allocationEntries as Array<[string, Allocation]>
+      : null;
     if (persistedAllocation) {
       allocation = new Map<string, Allocation>(persistedAllocation);
     } else {
       const retryOnly = planningState.nextAction === "outline-plan-retry";
-      const allocationRetryAttempts = Number(planningState.allocationRetryAttempts ?? 0);
-      const retryExhausted = retryOnly && allocationRetryAttempts >= 1;
-      if (retryOnly && !retryExhausted) {
-        planningState = { ...planningState, allocationRetryAttempts: allocationRetryAttempts + 1 };
-        await updateRun({ planning_state: planningState });
-      }
-      diagnostics = { ...diagnostics, stage: retryExhausted ? "allocation_fallback" : "allocation_generation" };
-      if (retryExhausted) {
-        allocation = fallbackSectionAllocation(body);
-        planningState = {
-          ...planningState,
-          phase: "allocation_complete",
-          nextAction: "outline-suggestions",
-          allocationEntries: Array.from(allocation.entries()),
-          storyArchitecture,
-          allocationRetryReason: undefined,
-        };
-        diagnostics = {
-          ...diagnostics,
-          allocationFallback: true,
-          allocationFallbackReason: "allocation planner exhausted its bounded correction retry",
-        };
-        await updateRun({ planning_state: planningState, diagnostics });
-      } else try {
+      diagnostics = { ...diagnostics, stage: "allocation_generation" };
+      try {
         allocation = await planSectionAllocation(
           body,
           openaiKey,
           billableCall,
           recipeObligations,
-          { retryOnly, deferRetry: !retryOnly, causalContract },
+          { retryOnly, deferRetry: !retryOnly, onArchitecture: (chosen) => { storyArchitecture = chosen; } },
         );
       } catch (error) {
         if (error instanceof AllocationRetryRequired) {
@@ -6984,50 +6820,24 @@ export async function runSuggestionJob(
           await updateRun({ planning_state: planningState, diagnostics: { ...diagnostics, stage: "allocation_retry_pending", allocationRetryReason: error.reason } });
           throw new SuggestionWorkerYield();
         }
-        // The bounded correction attempt is the last planner call.  A
-        // malformed/contradictory planner response must not discard the
-        // outline run; continue with a conservative deterministic allocation.
-        // Provider billing outages remain real external blockers and are not
-        // hidden by pretending the paid stage completed.
-        if (retryOnly && !isProviderBillingUnavailable(error)) {
-          allocation = fallbackSectionAllocation(body);
-          planningState = {
-            ...planningState,
-            phase: "allocation_complete",
-            nextAction: "outline-suggestions",
-            allocationEntries: Array.from(allocation.entries()),
-            storyArchitecture,
-            allocationRetryReason: undefined,
-          };
-          diagnostics = {
-            ...diagnostics,
-            stage: "allocation_fallback",
-            allocationFallback: true,
-            allocationFallbackReason: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
-          };
-          await updateRun({ planning_state: planningState, diagnostics });
-        } else {
-          throw error;
-        }
+        throw error;
       }
-      if (diagnostics.stage !== "allocation_fallback") {
-        planningState = {
-          ...planningState,
-          phase: "allocation_complete",
-          nextAction: "outline-suggestions",
-          allocationEntries: Array.from(allocation.entries()),
-          storyArchitecture,
-          allocationRetryReason: undefined,
-        };
-        diagnostics = markCompletedStage(
-          markMeaningfulProgress(
-            { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
-            `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
-          ),
-          "allocation",
-        );
-        await updateRun({ planning_state: planningState, diagnostics });
-      }
+      planningState = {
+        ...planningState,
+        phase: "allocation_complete",
+        nextAction: "outline-suggestions",
+        allocationEntries: Array.from(allocation.entries()),
+        storyArchitecture,
+        allocationRetryReason: undefined,
+      };
+      diagnostics = markCompletedStage(
+        markMeaningfulProgress(
+          { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
+          `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
+        ),
+        "allocation",
+      );
+      await updateRun({ planning_state: planningState, diagnostics });
     }
     const allocationCountsByBeat = Object.fromEntries(
       Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections]),
@@ -7043,7 +6853,7 @@ export async function runSuggestionJob(
       recipeObligations,
       ...(storyArchitecture ? { storyArchitecture } : {}),
     };
-    const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial, storyArchitecture, causalContract);
+    const { system, user: userPrompt } = buildPrompt(body, allocation, recipeObligations, storyMaterial, storyArchitecture);
     const responseSchema = buildSuggestionResponseSchema(body.arcTemplate.beats, allocation, recipeObligations, body.arcTemplate.name, requestedStoryMaterialFormat(body), body.existingSections ?? []);
     const requiredFunctionOrderByBeat = outstandingRequiredFunctionsByBeat(
       body.arcTemplate.beats, body.arcTemplate.name, body.existingSections ?? [],
@@ -7746,24 +7556,6 @@ Deno.serve(async (req: Request) => {
   // outline-from-recipe request with a brand-new idempotency key.
   body = canonicalBody;
   identity = identityResolution.canonicalIdentity;
-  // Rebase exact, unchanged default text from older iOS builds for NEW
-  // runs only, before billing. Preserve project edits, deleted beats, and
-  // original idempotency identity for matching reconnects to earlier runs.
-  if (/^a0000001-0000-0000-0000-0000000000[0-9]{2}$/i.test(body.arcTemplate.id)) {
-    const { data: catalogTemplate, error: catalogError } = await db
-      .from("story_arc_templates")
-      .select("name, description, beats")
-      .eq("id", body.arcTemplate.id)
-      .maybeSingle();
-    if (catalogError) {
-      console.error("[outline-from-recipe] catalog lookup failed", catalogError.message);
-    } else if (catalogTemplate && Array.isArray(catalogTemplate.beats)) {
-      body = { ...body, arcTemplate: canonicalizeLegacyArcTemplate(
-        body.arcTemplate,
-        { ...catalogTemplate, beats: catalogTemplate.beats as TemplateBeatDefault[] },
-      ) };
-    }
-  }
   const selectedModel = await new SupabaseGenerationModelStore(db).getEnabledModelById(body.modelID!);
   if (!selectedModel) {
     return errorResponse("model_unavailable", `Selected outline model is unavailable: ${body.modelID}`, 422);

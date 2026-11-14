@@ -1628,22 +1628,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 isGenerationStarting = false
             }
         } catch let error as RunOutlineError {
-            if case .resumeAvailable(let runID) = error {
-                // The server refused to replace a paid checkpoint. Install
-                // that exact run so the Resume Run action becomes available;
-                // never turn this recovery path into a fresh kickoff.
-                do {
-                    let status = try await runOutlineService.status(runID: runID)
-                    generationTarget = nil
-                    runOutlineError = nil
-                    durabilityCoordinator.installRunStatus(
-                        status,
-                        for: project.stableLineageID
-                    )
-                } catch {
-                    runOutlineError = error.localizedDescription
-                }
-            } else if case .alreadyRunning(let runID) = error {
+            if case .alreadyRunning(let runID) = error {
                 // A retry can discover a durable server run that was started
                 // before this view was recreated. Adopt it instead of leaving
                 // the user with a dead-end 409 alert.
@@ -2342,8 +2327,8 @@ struct ActiveRunBanner: View {
             .contentShape(Rectangle())
             .onTapGesture { onNavigate?() }
             Spacer()
-            if status.isResumable, let onResume {
-                Button("Resume Run") {
+            if isPaused, let onResume {
+                Button("Resume") {
                     Task { await onResume() }
                 }
                 .buttonStyle(.borderedProminent)

@@ -40,8 +40,6 @@ import {
   buildExpansionPrompt,
   isRetryableInsufficientCreditFailure,
   fitAllocationToNovelBudget,
-  ensureRequiredFunctionCapacity,
-  fallbackSectionAllocation,
   maximumBudgetedNewSections,
   maximumContainerPlannedNewSections,
   NOVEL_MIXED_SECTION_ESTIMATE_TOKENS,
@@ -88,7 +86,6 @@ import {
   projectedExpectedTokens,
   projectedTokenRange,
   parseAndValidateAllocation,
-  parseAndValidateCausalArchitecture,
   flattenSuggestionResponse,
   validateRequest,
   logicalSuggestionIdentity,
@@ -104,7 +101,6 @@ import {
   validateStoryMaterialEnrichment,
   validatePremiseComponents,
   preserveAuthoredPremiseComponents,
-  tryPreserveAuthoredPremiseComponents,
   storyMaterialSufficiency,
   recipeProvenance,
   attachRecipeProvenance,
@@ -434,16 +430,6 @@ Deno.test("story non-negotiables are rendered as explicit must-do acceptance cri
   assertEquals(planningContext.mustDos[0].directive.includes("There must be 10 hard core long sex scenes built in."), true);
 });
 
-Deno.test("causal architecture parser requires one development for every ordered beat", () => {
-  const architecture = { arcExperience: "A tightening emotional trap ends in an earned rupture.", centralQuestion: "Will they choose truth?", characterCausality: "Their choices create each reversal.", decisiveClimax: "A choice changes the relationship and danger.", endingConsequence: "The changed relationship cannot return to normal.", deliberatelyOpenThreads: "The wider threat remains active." };
-  const parsed = parseAndValidateCausalArchitecture(JSON.stringify({ architecture, beatDevelopments: [
-    { beatIndex: 0, development: "A reckless promise creates the first cost." },
-    { beatIndex: 1, development: "A betrayal forces the decisive choice." },
-  ] }), [{ id: "b1" }, { id: "b2" }]);
-  assertEquals(parsed.beatDevelopments.map((item) => item.beatIndex), [0, 1]);
-  assertThrows(() => parseAndValidateCausalArchitecture(JSON.stringify({ architecture, beatDevelopments: [{ beatIndex: 0, development: "Only one beat." }] }), [{ id: "b1" }, { id: "b2" }]));
-});
-
 Deno.test("outline prompts distinguish substantial dramatic developments from fragments", () => {
   const request = { ...sparseRequest, requestedFormat: "novel" } as any;
   const outlinePrompt = buildPrompt(request, new Map()).system;
@@ -460,9 +446,6 @@ Deno.test("outline prompts distinguish substantial dramatic developments from fr
   assertStringIncludes(allocationPrompt, "Allocate sections according to distinct dramatic developments, not the number of steps, conversations, or locations involved in one development.");
   assertStringIncludes(allocationPrompt, "Consecutive preparations for the same confrontation");
   assertStringIncludes(allocationPrompt, "Select dramatic shape BEFORE doing container arithmetic");
-  assertStringIncludes(allocationPrompt, "process is not a default bridge");
-  assertStringIncludes(allocationPrompt, "If removing the process element would leave the same story state, replace it with a consequential dramatic event.");
-  assertStringIncludes(allocationPrompt, "every increase in stakes, scope, power, or consequence must show the intervening mechanism");
   assertStringIncludes(allocationPrompt, "A chapter is not merely a 4,200-word slot.");
   assertStringIncludes(allocationPrompt, "Do not select chapters just because they make the 115,000–125,000-WORD arithmetic easy.");
   assertStringIncludes(allocationPrompt, "Do not force artificial variety or fixed percentages");
@@ -601,26 +584,27 @@ Deno.test("unknown novel allocation uses the mixed-section estimate", () => {
   assertEquals(scale.exceedsMaximum, false);
 });
 
-Deno.test("causal allocation derives a mixed 120k-word first pass beyond 29 slots", () => {
+Deno.test("container-aware planner can allocate a mixed 120k-word first pass beyond 29 slots", () => {
   const beats = [{ id: "beat-1" }, { id: "beat-2" }];
+  const counts = { scene: 0, developedScene: 6, setPiece: 5, sceneSequence: 4, chapter: 5 };
   const parsed = parseAndValidateAllocation(JSON.stringify({
     allocations: [
-      { beatIndex: 0, minSections: 20, rationale: "opening and development" },
-      { beatIndex: 1, minSections: 20, rationale: "turns and resolution" },
+      { beatIndex: 0, minSections: 20, containerCounts: counts, rationale: "opening and development" },
+      { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "turns and resolution" },
     ],
   }), beats);
   const req = { ...sparseRequest, requestedFormat: "novel", arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
   assertEquals(maximumBudgetedNewSections(req), 46, "unknown-mix fallback uses the mixed-section estimate");
   const fitted = fitAllocationToNovelBudget(parsed, req);
   assertEquals(Array.from(fitted.values()).reduce((sum, plan) => sum + plan.minSections, 0), 40);
-  const plannedContainers = Array.from(fitted.values()).flatMap((plan) =>
-    Object.entries(plan.containerCounts!).flatMap(([container, count]) =>
+  const plannedContainers = Array.from({ length: 2 }).flatMap(() =>
+    Object.entries(counts).flatMap(([container, count]) =>
       Array.from({ length: count }, () => ({ container }))));
-  assertEquals(projectedExpectedTokens(plannedContainers), 150800);
+  assertEquals(projectedExpectedTokens(plannedContainers), 157000);
   const scale = evaluateNovelScale(plannedContainers);
   assertEquals(scale.meetsPreferredMinimum, true);
   assertEquals(scale.exceedsMaximum, false);
-  assertEquals(scale.projectedWords, 115800);
+  assertEquals(scale.projectedWords, 120800);
   const schema: any = buildSuggestionResponseSchema(beats, fitted, [], "", "novel");
   const beatSchema = schema.properties.beats.properties["beat-1"];
   assertEquals(beatSchema.type, "array");
@@ -629,13 +613,12 @@ Deno.test("causal allocation derives a mixed 120k-word first pass beyond 29 slot
   assertEquals(beatSchema.items.properties.container, undefined);
   assertEquals(beatSchema.items.required.includes("container"), false);
   assertOpenAIStrictSchema(schema);
-  const slots = plannedNovelContainerSlots(fitted.get("beat-1")!.containerCounts!);
-  const slotsBeat2 = plannedNovelContainerSlots(fitted.get("beat-2")!.containerCounts!);
+  const slots = plannedNovelContainerSlots(counts);
   assertEquals(slots.filter((type) => type === "scene").length, 0);
-  assertEquals(slots.filter((type) => type === "chapter").length, 10);
+  assertEquals(slots.filter((type) => type === "chapter").length, 5);
   // This exact mix projects >115k without depending on expansion. No new provider call.
   const compactResponse = { beats: Object.fromEntries(beats.map((beat, beatIndex) => [
-    beat.id, (beatIndex === 0 ? slots : slotsBeat2).map((_container, index) => ({ title: `Section ${beatIndex * 20 + index + 1}`, summary: "Distinct event.", pov: "thirdPersonLimited", terminalBeat: "Mara shuts the door." })),
+    beat.id, slots.map((_container, index) => ({ title: `Section ${beatIndex * 20 + index + 1}`, summary: "Distinct event.", pov: "thirdPersonLimited", terminalBeat: "Mara shuts the door." })),
   ])) };
   const flattened = flattenSuggestionResponse(compactResponse, beats, fitted);
   const mismatched: any = structuredClone(compactResponse);
@@ -643,13 +626,13 @@ Deno.test("causal allocation derives a mixed 120k-word first pass beyond 29 slot
   assertThrows(() => flattenSuggestionResponse(mismatched, beats, fitted), Error, "declared a container that disagrees");
   assertEquals(flattened.suggestions.length, 40);
   assertEquals(flattened.suggestions.slice(0, 20).map((section) => section.container), slots);
-  assertEquals(flattened.suggestions.slice(20).map((section) => section.container), slotsBeat2);
+  assertEquals(flattened.suggestions.slice(20).map((section) => section.container), slots);
   assertEquals(evaluateNovelScale(flattened.suggestions).meetsPreferredMinimum, true);
   assertEquals(evaluateNovelScale(flattened.suggestions).exceedsMaximum, false);
   assertEquals(flattened.suggestions[20].storyArcBeatID, "beat-2");
   const { system } = buildPrompt(req, fitted);
-  assertEquals(system.includes("planned containers:"), true);
-  assertEquals(buildAllocationPrompt(req).system.includes("Do not emit container types"), true);
+  assertEquals(system.includes("planned containers: developedScene=6, setPiece=5, sceneSequence=4, chapter=5"), true);
+  assertEquals(buildAllocationPrompt(req).system.includes("containerCounts"), true);
 });
 
 Deno.test("novel planning provider receives strict typed budget and carries 40 section mix without scaling", async () => {
@@ -662,23 +645,21 @@ Deno.test("novel planning provider receives strict typed budget and carries 40 s
   ) => {
     providerCalls++;
     assertEquals(action, "outline-plan");
-    assertEquals(system.includes("Do not emit container types"), true);
+    assertEquals(system.includes("Return containerCounts on each beat"), true);
     assertEquals(user.includes("containerWordTargets"), true);
     assertEquals(user.includes("containerMidpointTokens"), false);
     const schema = format.json_schema.schema;
     const item = schema.properties.allocations.items;
-    assertEquals(item.required.includes("containerCounts"), false);
-    assertEquals("containerCounts" in item.properties, false);
+    assertEquals(item.required.includes("containerCounts"), true);
+    assertEquals(item.properties.containerCounts.required.length, 5);
     return { content: JSON.stringify({ allocations: [
-      { beatIndex: 0, minSections: 20, rationale: "opening" },
-      { beatIndex: 1, minSections: 20, rationale: "resolution" },
+      { beatIndex: 0, minSections: 20, containerCounts: counts, rationale: "opening" },
+      { beatIndex: 1, minSections: 20, containerCounts: counts, rationale: "resolution" },
     ] }), creditCostCharged: 0, remainingCredits: 0 };
   });
   assertEquals(providerCalls, 1);
   assertEquals(Array.from(allocation.values()).reduce((count, entry) => count + entry.minSections, 0), 40);
-  assertEquals(allocation.get("beat-1")?.containerCounts, {
-    scene: 0, developedScene: 10, setPiece: 0, sceneSequence: 0, chapter: 10,
-  });
+  assertEquals(allocation.get("beat-1")?.containerCounts, counts);
 });
 
 
@@ -701,7 +682,6 @@ Deno.test("arc-first architecture derives plot from every authored beat before c
     assertEquals(payload.planningContext.arc.name, arcName);
     assertEquals(payload.planningContext.arc.beats.map((beat: any) => beat.description), beats.map((beat) => beat.description));
     const outline = buildPrompt(request, new Map(), [], undefined, {
-      arcExperience: "The selected arc turns intimate dread into an irreversible emotional aftershock.",
       centralQuestion: "Which value will the protagonist betray?",
       characterCausality: "The protagonist makes decisions that compound the cost.",
       decisiveClimax: "A decisive act permanently changes the relationship.",
@@ -958,19 +938,28 @@ Deno.test("arc controls whole causal spine through the same planner and first-pa
   }
 });
 
-Deno.test("high-impact endings preserve causal spine input and one-call allocation planning", async () => {
+Deno.test("high-impact endings preserve existing architecture schema and one-call planning", async () => {
   const req = { ...sparseRequest, requestedFormat: "novel" } as any;
   let calls = 0;
   const result = await planSectionAllocation(req, "unused", async (system: string, _user: string, _maxTokens: number, format: any, action: string) => {
     calls += 1;
     assertEquals(action, "outline-plan");
     assertStringIncludes(system, "Choose an exceptional, arc-specific ending before building the central plot");
-    assertEquals(format.json_schema.schema.required, ["allocations"]);
+    assertEquals(Object.keys(format.json_schema.schema.properties.storyArchitecture.properties).sort(),
+      ["arcExperience", "centralQuestion", "characterCausality", "decisiveClimax", "deliberatelyOpenThreads", "endingConsequence"].sort());
     return {
       content: JSON.stringify({
+        storyArchitecture: {
+          arcExperience: "The decisive emotional consequences must fulfill the chosen arc.",
+          centralQuestion: "Will Mara tell the truth despite the irreversible consequences?",
+          characterCausality: "Her betrayal sets off the final reckoning.",
+          decisiveClimax: "Mara exposes her part in the betrayal and loses the person she most wanted to protect.",
+          endingConsequence: "The family knows the truth and is permanently changed.",
+          deliberatelyOpenThreads: "The wider political conspiracy remains.",
+        },
         allocations: [
-          { beatIndex: 0, minSections: 2, rationale: "Mara's fatal mistake begins the betrayal." },
-          { beatIndex: 1, minSections: 2, rationale: "The irrevocable loss and resulting changed family fulfill this arc." },
+          { beatIndex: 0, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "Mara's fatal mistake begins the betrayal." },
+          { beatIndex: 1, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "The irrevocable loss and resulting changed family fulfill this arc." },
         ],
       }),
       creditCostCharged: 1,
@@ -1100,74 +1089,6 @@ Deno.test("compact novel schemas reserve mandatory dramatic functions without pe
   }
 });
 
-Deno.test("allocator reconciliation reserves uncovered required dramatic functions", () => {
-  const req = {
-    ...sparseRequest,
-    requestedFormat: "novel",
-    arcTemplate: {
-      ...sparseRequest.arcTemplate,
-      name: "Save the Cat!",
-      beats: [{ id: "decisive", role: "climax", label: "Climax" }],
-    },
-    existingSections: [],
-  } as any;
-  const allocation = new Map([[
-    "decisive",
-    { minSections: 0, allocationMinimum: 0, coverageMinimum: 0, rationale: "the decisive turn" },
-  ]]);
-
-  const reconciled = ensureRequiredFunctionCapacity(allocation, req);
-  assertEquals(reconciled.get("decisive")?.minSections, 1);
-  assertEquals(reconciled.get("decisive")?.allocationMinimum, 1);
-  assertEquals(reconciled.get("decisive")?.coverageMinimum, 1);
-  assertEquals(allocation.get("decisive")?.minSections, 0, "reconciliation must not mutate the provider result");
-
-  const schema: any = buildSuggestionResponseSchema(
-    req.arcTemplate.beats,
-    fitAllocationToNovelBudget(reconciled, req),
-    [],
-    req.arcTemplate.name,
-    "novel",
-  );
-  assertEquals(schema.properties.beats.properties.decisive.type, "object");
-  assertEquals(schema.properties.beats.properties.decisive.properties.required.properties.climax.properties.dramaticFunction.enum, ["climax"]);
-});
-
-Deno.test("allocator reconciliation respects already accepted required functions", () => {
-  const req = {
-    ...sparseRequest,
-    requestedFormat: "novel",
-    arcTemplate: {
-      ...sparseRequest.arcTemplate,
-      name: "Save the Cat!",
-      beats: [{ id: "decisive", role: "climax", label: "Climax" }],
-    },
-    existingSections: [{ storyArcBeatID: "decisive", dramaticFunction: "climax" }],
-  } as any;
-  const allocation = new Map([[
-    "decisive",
-    { minSections: 0, allocationMinimum: 0, coverageMinimum: 0, rationale: "already covered" },
-  ]]);
-  assertEquals(ensureRequiredFunctionCapacity(allocation, req).get("decisive")?.minSections, 0);
-});
-
-Deno.test("allocation fallback keeps every uncovered beat generatable", () => {
-  const req = {
-    ...sparseRequest,
-    requestedFormat: "shortStory",
-    arcTemplate: {
-      ...sparseRequest.arcTemplate,
-      name: "Worker Arc",
-      beats: [{ id: "beat-1", role: "setup" }, { id: "beat-2", role: "resolution" }],
-    },
-    existingSections: [{ storyArcBeatID: "beat-1", dramaticFunction: "setup" }],
-  } as any;
-  const fallback = fallbackSectionAllocation(req);
-  assertEquals(fallback.get("beat-1")?.minSections, 0);
-  assertEquals(fallback.get("beat-2")?.minSections, 1);
-  assertEquals(fallback.get("beat-2")?.rationale.includes("safety fallback"), true);
-});
-
 Deno.test("required slots preserve climax, resolution, section order and planned scale", () => {
   const beats = [
     { id: "decisive", role: "climax", label: "Climax" },
@@ -1270,7 +1191,7 @@ Deno.test("novel final schema stays compact for the production-scale 10-beat pla
   assertOpenAIStrictSchema(schema);
 });
 
-Deno.test("validated causal spine is passed to allocation with recipe authority and optional enrichment", async () => {
+Deno.test("architecture + allocation share one provider response, with recipe authority and optional enrichment", async () => {
   const req = { ...sparseRequest, requestedFormat: "novel" } as any;
   const architecture = {
     arcExperience: "The chosen arc creates increasing emotional jeopardy and an irreversible payoff.",
@@ -1282,42 +1203,32 @@ Deno.test("validated causal spine is passed to allocation with recipe authority 
   };
   let calls = 0;
   let saved: any;
-  const planned = await planSectionAllocation(req, "unused", async (_system: string, user: string, maxTokens: number, format: any, action: string) => {
+  const planned = await planSectionAllocation(req, "unused", async (_system: string, _user: string, maxTokens: number, format: any, action: string) => {
     calls++;
     assertEquals(action, "outline-plan");
-    assertStringIncludes(user, '"causalArchitecture"');
-    assertStringIncludes(user, "Mara's lie launches the family conflict.");
     assertEquals(maxTokens >= 3500, true);
     const schema = format.json_schema.schema;
-    assertEquals(schema.required.includes("storyArchitecture"), false);
+    assertEquals(schema.required.includes("storyArchitecture"), true);
+    assertEquals(schema.properties.storyArchitecture.required.length, 6);
     return {
       content: JSON.stringify({
+        storyArchitecture: architecture,
         allocations: [
-          { beatIndex: 0, minSections: 2, rationale: "Mara's lie launches the family conflict." },
-          { beatIndex: 1, minSections: 2, rationale: "Mara confronts the threat, pays the cost, and the family survives." },
+          { beatIndex: 0, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "Mara's lie launches the family conflict." },
+          { beatIndex: 1, minSections: 2, containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 2 }, rationale: "Mara confronts the threat, pays the cost, and the family survives." },
         ],
       }),
       creditCostCharged: 1, remainingCredits: 99,
     } as any;
-  }, [], { causalContract: { architecture, beatDevelopments: [
-    { beatIndex: 0, development: "Mara's lie launches the family conflict." },
-    { beatIndex: 1, development: "Mara confronts the threat and pays the cost." },
-  ] }, onArchitecture: (a) => { saved = a; } });
+  }, [], { onArchitecture: (a) => { saved = a; } });
   assertEquals(calls, 1);
-  assertEquals(saved, undefined);
+  assertEquals(saved, architecture);
   assertEquals(planned.size, 2);
-  const causalContract = { architecture, beatDevelopments: [
-    { beatIndex: 0, development: "Mara's lie launches the family conflict." },
-    { beatIndex: 1, development: "Mara confronts the threat and pays the cost." },
-  ] };
-  const { system, user } = buildPrompt(req, planned, [], undefined, architecture, causalContract);
+  const { system, user } = buildPrompt(req, planned, [], undefined, saved);
   assertStringIncludes(system, "## Selected causal architecture from the allocation call");
   assertStringIncludes(system, architecture.decisiveClimax);
   assertStringIncludes(system, architecture.endingConsequence);
-  assertStringIncludes(system, "## Binding beat-by-beat causal developments");
-  assertStringIncludes(system, "Opening Image: Mara's lie launches the family conflict.");
-  assertStringIncludes(system, "Break into Two: Mara confronts the threat and pays the cost.");
-  assertStringIncludes(system, "reserve the development's decisive outcome for the final section that owns it");
+  assertStringIncludes(system, "Mara confronts the threat, pays the cost");
   assertStringIncludes(system, "the decisive BOOK-level outcome must be DRAMATIZED as the climax section's dramaticEvent");
   const payload = JSON.parse(user);
   assertEquals(payload.allocation[0][1].minSections, planned.get("beat-1")?.minSections);
@@ -1417,7 +1328,6 @@ Deno.test("selected book-level climax persists into outline without forcing the 
     },
   };
   const savedArchitecture = {
-    arcExperience: "The selected arc turns intimate dread into an irreversible emotional aftershock.",
     centralQuestion: "Will Mara betray the people she promised to protect?",
     characterCausality: "Her lies and her friend's reckless choices force a costly decision.",
     decisiveClimax: "She chooses her friends and permanently loses the only safe home she knows.",
@@ -1490,11 +1400,11 @@ Deno.test("allocation prompt selects causal outcome before sizing chapters witho
   assertStringIncludes(allocationPrompt.system, "## Interpret the recipe AND selected Story Arc BEFORE choosing the story");
   assertStringIncludes(allocationPrompt.system, "The recipe governs premise, genre, intended experience");
   assertStringIncludes(allocationPrompt.system, "THEN work backward from that chosen payoff through the ordered arc beats");
-  assertStringIncludes(allocationPrompt.system, "Only AFTER those story and arc decisions, assign the distinct development count");
+  assertStringIncludes(allocationPrompt.system, "Only AFTER those story and arc decisions, budget and assign containerCounts");
   assertStringIncludes(allocationPrompt.system, "No narrative form or mechanism is mandatory");
   const payload = JSON.parse(allocationPrompt.user);
   assertEquals(payload.planningContext.recipe, req.recipe);
-  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2").source, "planner");
+  assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p2"), undefined);
   assertEquals(payload.planningContext.materialIndex.find((item: any) => item.id === "p1").source, "planner");
   assertStringIncludes(buildEnrichmentPrompt(req).system, "avoid defaulting to a government contractor");
   const original = buildPrompt(req, new Map(), [], material);
@@ -1627,8 +1537,11 @@ Deno.test("malformed mixes recover first-pass novel length without changing vali
   }
 });
 
-Deno.test("short first-pass allocations preserve model-authored dramatic section count", () => {
-  const beats = Array.from({length:10},(_,i)=>({id:`beat-${i}`}));
+Deno.test("November 4 typed 28-section allocation is reconciled in WORDS before the paid first pass", () => {
+  // Actual production mix: 14 chapters, eight sequences, three set pieces,
+  // three developed scenes. This previously bypassed the <=3-chapter repair
+  // and forced expansion from ~103k words.
+  const beats = Array.from({ length: 10 }, (_, i) => ({ id: `arc-${i}` }));
   const mix = [
     {chapter:2,sceneSequence:0,setPiece:0,developedScene:0,scene:0},
     {chapter:1,sceneSequence:1,setPiece:0,developedScene:0,scene:0},
@@ -1641,39 +1554,34 @@ Deno.test("short first-pass allocations preserve model-authored dramatic section
     {chapter:1,sceneSequence:1,setPiece:0,developedScene:0,scene:0},
     {chapter:1,sceneSequence:1,setPiece:0,developedScene:0,scene:0},
   ];
-  const plan = new Map(beats.map((beat,i)=>[beat.id,{
+  const allocation = new Map(beats.map((beat,i) => [beat.id,{
     minSections:Object.values(mix[i]).reduce((a,b)=>a+b,0),
-    containerCounts:{...mix[i]},rationale:`Unique action in ${beat.id}`,
+    containerCounts:{...mix[i]},rationale:`Distinct dramatic shift for ${beat.id}`,
   }]));
-  const req={...sparseRequest,requestedFormat:"novel",arcTemplate:{...sparseRequest.arcTemplate,beats},existingSections:[]} as any;
-  const output=fitAllocationToNovelBudget(plan as any,req);
-  assertEquals(Array.from(plan.values()).reduce((n,p)=>n+p.minSections,0),28);
-  assertEquals(Array.from(output.values()).reduce((n,p)=>n+p.minSections,0),28);
-  for(const [id,value] of plan){
-    assertEquals(output.get(id)?.containerCounts,value.containerCounts);
-    assertEquals(output.get(id)?.rationale,value.rationale);
-  }
-  assertEquals(buildPrompt(req,output as any).system.includes("Do not manufacture extra sections solely to hit a numeric target"),true);
-});
-
-Deno.test("word-budget adjustment never overwrites or appends to the dramatic plan", () => {
-  const beats = Array.from({ length: 10 }, (_, i) => ({ id: `beat-${i}` }));
-  const allocations = new Map(beats.map((beat, i) => [beat.id, {
-    minSections: 3,
-    containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 3 },
-    rationale: `Beat ${i}: a costly decision changes the next character's options. Then a separate reversal transforms the plan. Finally a new consequence changes the next beat.`,
-  }]));
-  const req = { ...sparseRequest, requestedFormat: "novel",
-    arcTemplate: { ...sparseRequest.arcTemplate, beats }, existingSections: [] } as any;
-  const fitted = fitAllocationToNovelBudget(allocations as any, req);
-  const beforeSections = [...allocations.values()].reduce((n, a) => n + a.minSections, 0);
-  const afterSections = [...fitted.values()].reduce((n, a) => n + a.minSections, 0);
-  assertEquals(beforeSections, 30);
-  assertEquals(afterSections, 29, "one oversized chapter is trimmed without introducing a new story unit");
-  for (const [beatID, original] of allocations) {
-    assertEquals(fitted.get(beatID)?.rationale, original.rationale,
-      "do not splice a budget-status note into the middle of the model's story events");
-  }
+  const original = Array.from(allocation.values()).flatMap((plan) =>
+    Object.entries(plan.containerCounts).flatMap(([container,count]) =>
+      Array.from({length:count},()=>({container}))));
+  assertEquals(original.length,28);
+  assertEquals(projectedExpectedWords(original),102950);
+  const req = {...sparseRequest,requestedFormat:"novel",
+    arcTemplate:{...sparseRequest.arcTemplate,beats},existingSections:[]} as any;
+  const fitted = fitAllocationToNovelBudget(allocation as any,req);
+  const full = Array.from(fitted.values()).flatMap((plan) =>
+    Object.entries(plan.containerCounts!).flatMap(([container,count]) =>
+      Array.from({length:count},()=>({container}))));
+  assertEquals(full.length,31,"three additional chapters close the true 115k minimum gap");
+  assertEquals(projectedExpectedWords(full),115550);
+  assertEquals(evaluateNovelScale(full).meetsMinimum,true);
+  assertEquals(evaluateNovelScale(full).exceedsMaximum,false);
+  assertEquals(evaluateNovelScale(full.filter((s)=>s.container!=="chapter")
+    .concat(full.filter((s)=>s.container==="chapter").slice(2))).meetsMinimum,false,
+    "post-dedup shortfalls are accepted without later expansion; do not add padding upfront");
+  assertEquals(Array.from(allocation.values()).reduce((n,p)=>n+p.minSections,0),28,
+    "the original model allocation remains unchanged");
+  const prompt = buildPrompt(req,fitted as any).system;
+  assertEquals(prompt.includes("beat word budget"),true);
+  assertEquals(prompt.includes("words)"),true);
+  assertEquals(NOVEL_FIRST_PASS_WORD_GOAL,121000);
 });
 
 Deno.test("valid 118,100-word 29-section model allocation passes through unchanged", () => {
@@ -1706,33 +1614,46 @@ Deno.test("valid 118,100-word 29-section model allocation passes through unchang
   assertEquals(Array.from(fitted.values()).reduce((n, plan) => n + plan.minSections, 0), 29);
 });
 
-Deno.test("never invent chapters for an otherwise valid short outline",()=>{
-  const beats=Array.from({length:10},(_,i)=>({id:`beat-${i}`}));
-  const allocation=new Map(beats.map((b,i)=>{
-    const n=i<6?3:2;
-    return [b.id,{minSections:n,rationale:`Distinct action ${i}`,containerCounts:{
-      scene:0,developedScene:0,setPiece:0,sceneSequence:0,chapter:n,
-    }}] as const;
+Deno.test("valid near-target 26-chapter allocation is reconciled before first-pass generation", () => {
+  const beats = Array.from({ length: 10 }, (_, index) => ({ id: `beat-${index + 1}` }));
+  const allocation = new Map(beats.map((beat, index) => {
+    const chapters = index < 6 ? 3 : 2;
+    return [beat.id, {
+      minSections: chapters, rationale: `Distinct character-caused development in ${beat.id}`,
+      containerCounts: { scene: 0, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: chapters },
+    }] as const;
   }));
-  const req={...sparseRequest,requestedFormat:"novel",
-    arcTemplate:{...sparseRequest.arcTemplate,beats},existingSections:[]} as any;
-  const fitted=fitAllocationToNovelBudget(allocation as any,req);
-  assertEquals(Array.from(fitted.values()).reduce((n,p)=>n+p.minSections,0),26);
-  assertEquals(evaluateNovelScale(Array.from({length:26},()=>({container:"chapter"}))).projectedWords,109200);
-  const short=new Map([["short",{minSections:1,rationale:"One authored event",
-    containerCounts:{scene:1,developedScene:0,setPiece:0,sceneSequence:0,chapter:0}}]]);
-  const output=fitAllocationToNovelBudget(short as any,req);
-  assertEquals(output.get("short")?.minSections,1);
-  assertEquals(output.get("short")?.containerCounts?.scene,1);
-  const legacy=new Map([["legacy",{minSections:1,rationale:"Legacy event"}]]);
-  assertEquals(fitAllocationToNovelBudget(legacy as any,req).get("legacy")?.minSections,1);
+  const req = { ...sparseRequest, requestedFormat: "novel",
+    existingSections: [], arcTemplate: { ...sparseRequest.arcTemplate, beats } } as any;
+  assertEquals(evaluateNovelScale(Array.from({ length: 26 }, () => ({ container: "chapter" }))).projectedWords, 109200);
+  const fitted = fitAllocationToNovelBudget(allocation as any, req);
+  const all = Array.from(fitted.values()).flatMap((plan) =>
+    Array.from({ length: plan.containerCounts!.chapter }, () => ({ container: "chapter" })));
+  assertEquals(all.length, 28, "stop at the 115k minimum instead of filling toward the 121k aim");
+  assertEquals(evaluateNovelScale(all).meetsMinimum, true);
+  assertEquals(evaluateNovelScale(all).projectedWords <= 125000, true);
+  assertEquals(evaluateNovelScale(all.slice(1)).projectedWords, 113400,
+    "a discarded duplicate may leave a deliverable shortfall without forcing expansion");
+  assertEquals(Array.from(fitted.values()).every((plan) => plan.minSections <= 20), true);
+  assertEquals(Array.from(fitted.values()).every((plan) => plan.containerCounts!.chapter === plan.minSections), true);
+  assertEquals(Array.from(allocation.values()).reduce((sum, plan) => sum + plan.minSections, 0), 26,
+    "never mutate the original model allocation");
 });
+Deno.test("valid short plans must be grown within the per-beat safety cap, without new errors", () => {
+  const counts = { scene: 1, developedScene: 0, setPiece: 0, sceneSequence: 0, chapter: 0 };
+  const valid = new Map([["beat-1", { minSections: 1, containerCounts: counts, rationale: "intentionally short" }]]);
+  const req = { ...sparseRequest, requestedFormat: "novel", existingSections: [] } as any;
+  const unchanged = fitAllocationToNovelBudget(valid, req);
+  assertEquals(unchanged.get("beat-1")?.containerCounts?.scene, 1,
+    "original model-authored scene is not silently converted into a chapter");
+  assertEquals(unchanged.get("beat-1")?.minSections, 20,
+    "even severely short but valid plans are no longer blindly trusted; per-beat cap remains");
 
-Deno.test("final required climax reserves the set-piece container",()=>{
-  const counts={scene:0,developedScene:0,sceneSequence:0,setPiece:1,chapter:3};
-  assertEquals(plannedNovelContainerSlots(counts,true),["chapter","chapter","chapter","setPiece"]);
-  assertEquals(plannedNovelContainerSlots(counts,true,1),["chapter","chapter","setPiece","chapter"]);
-  assertEquals(plannedNovelContainerSlots(counts,false).filter(c=>c==="setPiece").length,1);
+  const missing = new Map([["beat-1", { minSections: 1, rationale: "only one slot available" }]]);
+  const recovered = fitAllocationToNovelBudget(missing, req);
+  assertEquals(recovered.get("beat-1")?.minSections, 20);
+  assertEquals(recovered.get("beat-1")?.containerCounts?.chapter, 20);
+  assertEquals(evaluateNovelScale([{ container: "chapter" }]).meetsMinimum, false);
 });
 
 Deno.test("container-aware allocation completes and trims incomplete or oversized mixes", () => {
@@ -4513,9 +4434,8 @@ Deno.test("enrichment prompt favors audacity, adult intensity, and memorable exp
   assertStringIncludes(prompt, "wild, eccentric, larger-than-life supporting characters");
   assertStringIncludes(prompt, "spectacular mistakes, escalating disasters, reckless decisions");
   assertStringIncludes(prompt, "addictions, appetites, obsessions, moral corruption");
-  assertStringIncludes(prompt, "Do not assume a morally compromised protagonist must become responsible, descend further into vice");
-  assertStringIncludes(prompt, "Honor any moral or character trajectory explicitly authored");
-  assertStringIncludes(prompt, "Never impose a generic moral lesson, institutional reform");
+  assertStringIncludes(prompt, "Do not automatically transform morally compromised protagonists into responsible heroes");
+  assertStringIncludes(prompt, "Do not impose redemption arcs, moral lessons, institutional reform");
   assertStringIncludes(prompt, "Do not unnecessarily sanitize or dilute authored adult intensity");
   assertStringIncludes(prompt, "subject to applicable content constraints");
   assertStringIncludes(prompt, "## Invent distinctive experiences");
@@ -4760,7 +4680,7 @@ Deno.test("PR3 expansion prioritizes unused enrichment and exposes soft word ran
   assertEquals(plannedWordRangeForContainer("scene"), { minWords: 615, maxWords: 1385 });
   const prompt = buildExpansionPrompt({ ...sparseRequest, storyMaterialEnrichment: material } as any, current as any);
   assertEquals(prompt.user.includes("unusedStoryMaterial"), true);
-  assertEquals(prompt.user.includes("force-emergency-network"), true);
+  assertEquals(prompt.user.includes("force-emergency-network"), false);
   assertEquals(prompt.system.includes("deepen the authored recipe's premise"), true);
   assertEquals(prompt.system.includes("unused or underdeveloped enrichment items"), false);
   assertEquals(prompt.system.includes("soft literary planning range"), false);
@@ -6319,11 +6239,6 @@ function fakeWorkerBilling(requestedActions: string[], providerCalls = requested
       const section = (beat: string, title: string) => ({ title, summary: `${title} summary`, container: "scene", pov: "thirdPersonLimited", terminalBeat: `${title} ends`, storyArcBeatID: beat, dramaticFunction: beat === "beat-1" ? "setup" : "resolution", recipeRequirementIDs: Array.from({ length: 63 }, (_, index) => `R${index + 1}`), entryState: "The prior state holds.", dramaticEvent: beat === "beat-1" ? `${title} happens.` : `${title} resolves the central conflict.`, resultingChange: beat === "beat-1" ? `${title} changes the pressure.` : `${title} settles the central conflict.`, terminalState: beat === "beat-1" ? `${title} hands forward a new pressure.` : `${title} establishes the new normal.` });
       return { featureResult: JSON.stringify({ beats: { "beat-1": [section("beat-1", "Opening route")], "beat-2": [section("beat-2", "Cost of the route")] } }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
     }
-    if (request.action === "outline-causal-architecture") {
-      return { featureResult: JSON.stringify({ architecture: {
-        arcExperience: "A tightening emotional trap ends in an earned rupture.", centralQuestion: "Will they choose truth?", characterCausality: "Their choices create each reversal.", decisiveClimax: "A choice changes the relationship and danger.", endingConsequence: "The changed relationship cannot return to normal.", deliberatelyOpenThreads: "The wider threat remains active.",
-      }, beatDevelopments: [{ beatIndex: 0, development: "A reckless promise creates the first cost." }, { beatIndex: 1, development: "A betrayal forces the decisive choice." }] }), charged: true, actualCharge: 1, remainingCredits: 99 } as any;
-    }
     if (request.action === "outline-plan") {
       return { featureResult: JSON.stringify({ allocations: [
         { beatIndex: 0, minSections: 1, rationale: "fixture" },
@@ -6364,9 +6279,7 @@ function validatedWorkerBilling(
     actions.push(request.action);
     const content = request.action === "outline-semantic-verification"
       ? semanticResponseFor(request)
-      : request.action === "outline-causal-architecture"
-        ? { architecture: { arcExperience: "A tightening emotional trap ends in an earned rupture.", centralQuestion: "Will they choose truth?", characterCausality: "Their choices create each reversal.", decisiveClimax: "A choice changes the relationship and danger.", endingConsequence: "The changed relationship cannot return to normal.", deliberatelyOpenThreads: "The wider threat remains active." }, beatDevelopments: [{ beatIndex: 0, development: "A reckless promise creates the first cost." }, { beatIndex: 1, development: "A betrayal forces the decisive choice." }] }
-        : responseFor(request.action);
+      : responseFor(request.action);
     if (request.onProviderSuccess) {
       await request.onProviderSuccess({ content: typeof content === "string" ? content : JSON.stringify(content) });
     }
@@ -6561,11 +6474,6 @@ Deno.test("malformed paid enrichment can continue with an authored-only canonica
   assertEquals(source.includes('providerMaterialFallback: "canonical_recipe"'), true);
 });
 
-Deno.test("unrepresentable authored summaries cannot escape paid enrichment recovery", () => {
-  const summary = "A".repeat(12_000);
-  assertEquals(tryPreserveAuthoredPremiseComponents(undefined, summary), undefined);
-});
-
 Deno.test("premise extraction rejects invented source claims and omitted large promises", () => {
   const summary = "The friends become notorious. Their unintended influence shakes the entire country. Their unpredictable choices will one day determine whether humanity survives.";
   assertThrows(() => validatePremiseComponents([
@@ -6754,56 +6662,12 @@ Deno.test("allocation semantic failure checkpoints one retry without repeating t
     scheduleContinuation: async () => {},
   });
   await run();
-  assertEquals(actions, ["outline-causal-architecture"]);
-  assertEquals(db.row.planning_state.nextAction, "outline-plan");
-  await run();
-  assertEquals(actions, ["outline-causal-architecture", "outline-plan"]);
+  assertEquals(actions, ["outline-plan"]);
   assertEquals(db.row.planning_state.nextAction, "outline-plan-retry");
   await run();
-  assertEquals(actions, ["outline-causal-architecture", "outline-plan", "outline-plan-retry"]);
+  assertEquals(actions, ["outline-plan", "outline-plan-retry"]);
   assertEquals(db.row.planning_state.phase, "allocation_complete");
   assertEquals(db.row.attempt_count, 0);
-});
-
-Deno.test("allocation retry stops after one correction instead of rebilling indefinitely", async () => {
-  const body = await executableWorkerBody();
-  const row: any = {
-    ...checkpointedWorkerRow(body),
-    planning_state: { version: 2, phase: "enrichment_complete", nextAction: "outline-plan" },
-    request_json: body,
-  };
-  const db = new ExecutableRunDb(row);
-  const actions: string[] = [];
-  const invalid = { allocations: [] };
-  const billable = validatedWorkerBilling(actions, () => invalid);
-  const run = () => runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
-    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
-    billableLLM: billable as any,
-    scheduleContinuation: async () => {},
-  });
-
-  await run();
-  assertEquals(actions, ["outline-causal-architecture"]);
-  assertEquals(db.row.status, "pending");
-  assertEquals(db.row.planning_state.nextAction, "outline-plan");
-
-  await run();
-  assertEquals(actions, ["outline-causal-architecture", "outline-plan"]);
-  assertEquals(db.row.planning_state.nextAction, "outline-plan-retry");
-
-  await run();
-  assertEquals(actions, ["outline-causal-architecture", "outline-plan", "outline-plan-retry"]);
-  assertEquals(db.row.status, "pending");
-  assertEquals(db.row.planning_state.nextAction, "outline-suggestions");
-  assertEquals(db.row.diagnostics.allocationFallback, true);
-
-  await run();
-  assertEquals(actions, ["outline-causal-architecture", "outline-plan", "outline-plan-retry", "outline-suggestions"]);
-  assertEquals(db.row.error_code, "server_error");
-  assertEquals(db.row.planning_state.allocationRetryAttempts, 1);
-
-  await run();
-  assertEquals(actions, ["outline-causal-architecture", "outline-plan", "outline-plan-retry", "outline-suggestions"]);
 });
 
 Deno.test("empty arc evidence is no claim and still reaches semantic verification", async () => {
@@ -7077,8 +6941,7 @@ Deno.test("fresh novel worker sequence is enrichment then allocation then one gl
   await run();
   await run();
   await run();
-  await run();
-  assertEquals(actions, ["story-material-enrichment", "outline-causal-architecture", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.diagnostics.generatedOrReused, "generated", "a continuation must not rewrite a fresh run as prior-run enrichment reuse");
   assertEquals(db.row.diagnostics.enrichmentLoadedFromCheckpoint, true);
   assertEquals(db.row.attempt_count, 0);
@@ -7114,17 +6977,14 @@ Deno.test("worker resume rehydrates prior stages without fabricating cross-stage
   await run();
   const afterEnrichment = db.row.diagnostics.worker.lastMeaningfulProgressAt;
   await run();
-  await run();
   const afterAllocation = db.row.diagnostics.worker.lastMeaningfulProgressAt;
   assertEquals(afterAllocation !== afterEnrichment, true);
-  assertEquals(db.row.planning_state.causalArchitecture?.beatDevelopments.length, 2);
   assertEquals(db.row.id, "run-worker-fixture");
 
   const replayStart = db.patchHistory.length;
   await run();
   await run();
-  await run();
-  assertEquals(actions, ["story-material-enrichment", "outline-causal-architecture", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
   const replayedStages = db.patchHistory.slice(replayStart)
     .filter((patch) => (patch.diagnostics as any)?.stage === "story_material_ready")
@@ -7184,11 +7044,7 @@ Deno.test("actual worker persistence advances for a genuinely new allocation che
     db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
     billableLLM: billable as any, scheduleContinuation: async () => {},
   });
-  await runSuggestionJob("run-worker-fixture", body as any, "user-worker", "test-key", 0, "Bearer worker-token", {
-    db, model: { provider_model: "fixture-model" }, provider: {}, creditStore: {},
-    billableLLM: billable as any, scheduleContinuation: async () => {},
-  });
-  assertEquals(actions, ["outline-causal-architecture", "outline-plan"]);
+  assertEquals(actions, ["outline-plan"]);
   assertEquals(db.row.status, "pending");
   assertEquals(db.row.diagnostics.worker.lastMeaningfulProgressAt !== before, true);
   assertEquals((db.row.diagnostics.worker.completedMeaningfulCheckpointIdentities as string[]).some((value) => value.startsWith("allocation_validated:")), true);
@@ -7261,8 +7117,7 @@ Deno.test("reclaimed worker trusts an intact persisted planning checkpoint after
   await run();
   await run();
   await run();
-  await run();
-  assertEquals(actions, ["story-material-enrichment", "outline-causal-architecture", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
+  assertEquals(actions, ["story-material-enrichment", "outline-plan", "outline-suggestions", "outline-semantic-verification"]);
   assertEquals(db.row.status, "completed");
 });
 
@@ -7553,8 +7408,8 @@ Deno.test("authored recipe and character candidates survive but procedural enric
   const request: any = { ...sparseRequest, storyMaterialEnrichment: material };
   const planning = buildArchitecturePlanningView(request, [], material);
   const index = planning.materialIndex as any[];
-  assertEquals(index.some((item) => item.id === "invented-raid"), true);
-  assertEquals(index.some((item) => item.id === "procedural-reversal"), true);
+  assertEquals(index.some((item) => item.id === "invented-raid"), false);
+  assertEquals(index.some((item) => item.id === "procedural-reversal"), false);
   assertEquals(index.some((item) => item.id === "recipe-person"), true);
   assertEquals(index.some((item) => item.id === "eccentric-character"), true);
   assertEquals(index.some((item) => item.id === "poisonous-pact"), true);
@@ -7569,9 +7424,9 @@ Deno.test("authored recipe and character candidates survive but procedural enric
     ["initial outline", outlinePrompt],
     ["length expansion", expansionPrompt],
   ] as const) {
-    assertEquals(prompt.user.includes("invented-raid"), true, stage);
-    assertEquals(prompt.user.includes("procedural-reversal"), true, stage);
-    assertEquals(prompt.user.includes("Contractor transport and containment mission"), true, stage);
+    assertEquals(prompt.user.includes("invented-raid"), false, stage);
+    assertEquals(prompt.user.includes("procedural-reversal"), false, stage);
+    assertEquals(prompt.user.includes("Contractor transport and containment mission"), false, stage);
     assertEquals(prompt.user.includes("eccentric-character"), true, stage);
     assertEquals(prompt.user.includes("recipe-person"), true, stage);
   }
@@ -7713,9 +7568,6 @@ Deno.test("provider billing unavailable during allocation bypasses retry and fai
   const scheduled: Promise<unknown>[] = [];
   let continuationCount = 0;
   const billable = async (request: any) => {
-    if (request.action === "outline-causal-architecture") {
-      return fakeWorkerBilling([])(request);
-    }
     assertEquals(request.action, "outline-plan");
     throw new ProviderBillingUnavailableError({
       code: "organization_spend_limit_exceeded",
@@ -7724,17 +7576,6 @@ Deno.test("provider billing unavailable during allocation bypasses retry and fai
     });
   };
 
-  await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
-    db,
-    model: { provider_model: "fixture-model" },
-    provider: {},
-    creditStore: {},
-    billableLLM: billable as any,
-    scheduleContinuation: async () => { continuationCount++; },
-    notifyProviderBillingUnavailable: async (context) => { contexts.push(context); },
-    scheduleAlert: (promise) => { scheduled.push(promise); },
-  });
-  continuationCount = 0;
   await runSuggestionJob("run-worker-fixture", body, "user-worker", "test-key", 0, "Bearer worker-token", {
     db,
     model: { provider_model: "fixture-model" },
@@ -8228,25 +8069,7 @@ Deno.test("paid enrichment output exhaustion recovers; later provider-stage exha
       body: fullBody,
       row: {
         ...checkpointedWorkerRow(fullBody),
-        planning_state: {
-          version: 2,
-          phase: "causal_architecture_complete",
-          nextAction: "outline-plan",
-          causalArchitecture: {
-            architecture: {
-              arcExperience: "A tightening emotional trap ends in an earned rupture.",
-              centralQuestion: "Will they choose truth?",
-              characterCausality: "Their choices create each reversal.",
-              decisiveClimax: "A choice changes the relationship and danger.",
-              endingConsequence: "The changed relationship cannot return to normal.",
-              deliberatelyOpenThreads: "The wider threat remains active.",
-            },
-            beatDevelopments: [
-              { beatIndex: 0, development: "A reckless promise creates the first cost." },
-              { beatIndex: 1, development: "A betrayal forces the decisive choice." },
-            ],
-          },
-        },
+        planning_state: { version: 2, phase: "enrichment_complete", nextAction: "outline-plan" },
       },
       action: "outline-plan",
       failureStage: "allocation_generation",
