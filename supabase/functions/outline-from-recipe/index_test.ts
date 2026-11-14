@@ -1627,7 +1627,7 @@ Deno.test("malformed mixes recover first-pass novel length without changing vali
   }
 });
 
-Deno.test("short first-pass allocations preserve model-authored dramatic section count", () => {
+Deno.test("short fresh novel allocations grow to the product word floor", () => {
   const beats = Array.from({length:10},(_,i)=>({id:`beat-${i}`}));
   const mix = [
     {chapter:2,sceneSequence:0,setPiece:0,developedScene:0,scene:0},
@@ -1648,10 +1648,14 @@ Deno.test("short first-pass allocations preserve model-authored dramatic section
   const req={...sparseRequest,requestedFormat:"novel",arcTemplate:{...sparseRequest.arcTemplate,beats},existingSections:[]} as any;
   const output=fitAllocationToNovelBudget(plan as any,req);
   assertEquals(Array.from(plan.values()).reduce((n,p)=>n+p.minSections,0),28);
-  assertEquals(Array.from(output.values()).reduce((n,p)=>n+p.minSections,0),28);
+  assertEquals(Array.from(output.values()).reduce((n,p)=>n+p.minSections,0),31);
+  assertEquals(evaluateNovelScale(Array.from(output.values()).flatMap((plan) =>
+    Object.entries(plan.containerCounts!).flatMap(([container, count]) =>
+      Array.from({ length: count }, () => ({ container }))))).meetsMinimum, true);
   for(const [id,value] of plan){
-    assertEquals(output.get(id)?.containerCounts,value.containerCounts);
-    assertEquals(output.get(id)?.rationale,value.rationale);
+    assertEquals(value.minSections, Object.values(mix[beats.findIndex((beat) => beat.id === id)]).reduce((a,b)=>a+b,0));
+    assertEquals(value.rationale, `Unique action in ${id}`);
+    assertEquals(output.get(id)?.minSections! >= value.minSections, true);
   }
   assertEquals(buildPrompt(req,output as any).system.includes("Do not manufacture extra sections solely to hit a numeric target"),true);
 });
@@ -1706,7 +1710,7 @@ Deno.test("valid 118,100-word 29-section model allocation passes through unchang
   assertEquals(Array.from(fitted.values()).reduce((n, plan) => n + plan.minSections, 0), 29);
 });
 
-Deno.test("never invent chapters for an otherwise valid short outline",()=>{
+Deno.test("fresh short outlines grow to the word floor",()=>{
   const beats=Array.from({length:10},(_,i)=>({id:`beat-${i}`}));
   const allocation=new Map(beats.map((b,i)=>{
     const n=i<6?3:2;
@@ -1717,15 +1721,15 @@ Deno.test("never invent chapters for an otherwise valid short outline",()=>{
   const req={...sparseRequest,requestedFormat:"novel",
     arcTemplate:{...sparseRequest.arcTemplate,beats},existingSections:[]} as any;
   const fitted=fitAllocationToNovelBudget(allocation as any,req);
-  assertEquals(Array.from(fitted.values()).reduce((n,p)=>n+p.minSections,0),26);
-  assertEquals(evaluateNovelScale(Array.from({length:26},()=>({container:"chapter"}))).projectedWords,109200);
+  assertEquals(Array.from(fitted.values()).reduce((n,p)=>n+p.minSections,0),28);
+  assertEquals(evaluateNovelScale(Array.from({length:28},()=>({container:"chapter"}))).meetsMinimum, true);
   const short=new Map([["short",{minSections:1,rationale:"One authored event",
     containerCounts:{scene:1,developedScene:0,setPiece:0,sceneSequence:0,chapter:0}}]]);
   const output=fitAllocationToNovelBudget(short as any,req);
-  assertEquals(output.get("short")?.minSections,1);
-  assertEquals(output.get("short")?.containerCounts?.scene,1);
+  assertEquals(output.get("short")?.minSections,20);
+  assertEquals(output.get("short")?.containerCounts?.chapter,19);
   const legacy=new Map([["legacy",{minSections:1,rationale:"Legacy event"}]]);
-  assertEquals(fitAllocationToNovelBudget(legacy as any,req).get("legacy")?.minSections,1);
+  assertEquals(fitAllocationToNovelBudget(legacy as any,req).get("legacy")?.minSections,20);
 });
 
 Deno.test("final required climax reserves the set-piece container",()=>{

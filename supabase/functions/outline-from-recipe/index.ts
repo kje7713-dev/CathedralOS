@@ -3677,12 +3677,37 @@ export function fitAllocationToNovelBudget(
     selected.plan.minSections--;
   }
 
-  // Preserve model-authored section count, dramatic assignments, and section
-  // types. A word-count shortfall is internal QA, not license to synthesize
-  // another empty narrative slot. The planning model must provide enough
-  // distinct dramatic substance in its FIRST allocation response; downstream
-  // fitting may recover legacy malformed container mixes but never pad a valid
-  // first-pass outline with additional sections.
+  // A fresh novel must still reach the product's hard 115,000-word floor.
+  // The allocation model is responsible for the story, but a short numeric
+  // response is not a valid complete-book plan. Add capacity only to beats it
+  // already developed, and let the outline provider fill each added slot with
+  // a distinct event from that beat's rationale. Accepted sections are never
+  // expanded here, and the nominal ceiling remains enforced above.
+  const desiredTotalWords = Math.min(NOVEL_PREFERRED_MIN_WORDS, NOVEL_MAX_WORDS);
+  const startingCounts = new Map(Array.from(normalized.entries()).map(([id, plan]) => [id, plan.minSections]));
+  const addedCounts = new Map<string, number>();
+  while ((req.existingSections?.length ?? 0) === 0 &&
+    existingWords + plannedWords() < desiredTotalWords &&
+    sectionCount() < MAX_PLANNED_SECTIONS &&
+    (missingMixBeatIDs.length === 0 || existingWords + plannedWords() < NOVEL_PREFERRED_MIN_WORDS)) {
+    const availableWords = nominalRemainingWords - plannedWords();
+    const container = (["chapter", "sceneSequence", "setPiece", "developedScene", "scene"] as const)
+      .find((type) => NOVEL_CONTAINER_WORD_TARGETS[type] <= availableWords);
+    if (!container) break;
+    const eligible = Array.from(normalized.entries())
+      .filter(([, plan]) => plan.minSections > 0 && plan.minSections < 20)
+      .sort(([a, ap], [b, bp]) => {
+        const aBase = Math.max(1, startingCounts.get(a) ?? 1);
+        const bBase = Math.max(1, startingCounts.get(b) ?? 1);
+        return ((addedCounts.get(a) ?? 0) + 1) / aBase -
+          ((addedCounts.get(b) ?? 0) + 1) / bBase || bp.minSections - ap.minSections;
+      });
+    if (!eligible.length) break;
+    const [beatID, plan] = eligible[0];
+    plan.containerCounts![container]++;
+    plan.minSections++;
+    addedCounts.set(beatID, (addedCounts.get(beatID) ?? 0) + 1);
+  }
 
   // The returned plan remains recoverable even for impossible one-beat/fully
   // accepted corner cases; never introduce a new terminal failure condition.
