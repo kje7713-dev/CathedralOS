@@ -40,8 +40,6 @@ import {
   buildExpansionPrompt,
   isRetryableInsufficientCreditFailure,
   fitAllocationToNovelBudget,
-  ensureRequiredFunctionCapacity,
-  fallbackSectionAllocation,
   maximumBudgetedNewSections,
   maximumContainerPlannedNewSections,
   NOVEL_MIXED_SECTION_ESTIMATE_TOKENS,
@@ -104,7 +102,6 @@ import {
   validateStoryMaterialEnrichment,
   validatePremiseComponents,
   preserveAuthoredPremiseComponents,
-  tryPreserveAuthoredPremiseComponents,
   storyMaterialSufficiency,
   recipeProvenance,
   attachRecipeProvenance,
@@ -1098,74 +1095,6 @@ Deno.test("compact novel schemas reserve mandatory dramatic functions without pe
     assertEquals(legacy.properties.beats.properties.decisive.type, "array");
     assertEquals(legacy.properties.beats.properties.decisive.items.properties.container !== undefined, true);
   }
-});
-
-Deno.test("allocator reconciliation reserves uncovered required dramatic functions", () => {
-  const req = {
-    ...sparseRequest,
-    requestedFormat: "novel",
-    arcTemplate: {
-      ...sparseRequest.arcTemplate,
-      name: "Save the Cat!",
-      beats: [{ id: "decisive", role: "climax", label: "Climax" }],
-    },
-    existingSections: [],
-  } as any;
-  const allocation = new Map([[
-    "decisive",
-    { minSections: 0, allocationMinimum: 0, coverageMinimum: 0, rationale: "the decisive turn" },
-  ]]);
-
-  const reconciled = ensureRequiredFunctionCapacity(allocation, req);
-  assertEquals(reconciled.get("decisive")?.minSections, 1);
-  assertEquals(reconciled.get("decisive")?.allocationMinimum, 1);
-  assertEquals(reconciled.get("decisive")?.coverageMinimum, 1);
-  assertEquals(allocation.get("decisive")?.minSections, 0, "reconciliation must not mutate the provider result");
-
-  const schema: any = buildSuggestionResponseSchema(
-    req.arcTemplate.beats,
-    fitAllocationToNovelBudget(reconciled, req),
-    [],
-    req.arcTemplate.name,
-    "novel",
-  );
-  assertEquals(schema.properties.beats.properties.decisive.type, "object");
-  assertEquals(schema.properties.beats.properties.decisive.properties.required.properties.climax.properties.dramaticFunction.enum, ["climax"]);
-});
-
-Deno.test("allocator reconciliation respects already accepted required functions", () => {
-  const req = {
-    ...sparseRequest,
-    requestedFormat: "novel",
-    arcTemplate: {
-      ...sparseRequest.arcTemplate,
-      name: "Save the Cat!",
-      beats: [{ id: "decisive", role: "climax", label: "Climax" }],
-    },
-    existingSections: [{ storyArcBeatID: "decisive", dramaticFunction: "climax" }],
-  } as any;
-  const allocation = new Map([[
-    "decisive",
-    { minSections: 0, allocationMinimum: 0, coverageMinimum: 0, rationale: "already covered" },
-  ]]);
-  assertEquals(ensureRequiredFunctionCapacity(allocation, req).get("decisive")?.minSections, 0);
-});
-
-Deno.test("allocation fallback keeps every uncovered beat generatable", () => {
-  const req = {
-    ...sparseRequest,
-    requestedFormat: "shortStory",
-    arcTemplate: {
-      ...sparseRequest.arcTemplate,
-      name: "Worker Arc",
-      beats: [{ id: "beat-1", role: "setup" }, { id: "beat-2", role: "resolution" }],
-    },
-    existingSections: [{ storyArcBeatID: "beat-1", dramaticFunction: "setup" }],
-  } as any;
-  const fallback = fallbackSectionAllocation(req);
-  assertEquals(fallback.get("beat-1")?.minSections, 0);
-  assertEquals(fallback.get("beat-2")?.minSections, 1);
-  assertEquals(fallback.get("beat-2")?.rationale.includes("safety fallback"), true);
 });
 
 Deno.test("required slots preserve climax, resolution, section order and planned scale", () => {
@@ -6561,11 +6490,6 @@ Deno.test("malformed paid enrichment can continue with an authored-only canonica
   assertEquals(source.includes('providerMaterialFallback: "canonical_recipe"'), true);
 });
 
-Deno.test("unrepresentable authored summaries cannot escape paid enrichment recovery", () => {
-  const summary = "A".repeat(12_000);
-  assertEquals(tryPreserveAuthoredPremiseComponents(undefined, summary), undefined);
-});
-
 Deno.test("premise extraction rejects invented source claims and omitted large promises", () => {
   const summary = "The friends become notorious. Their unintended influence shakes the entire country. Their unpredictable choices will one day determine whether humanity survives.";
   assertThrows(() => validatePremiseComponents([
@@ -6793,17 +6717,12 @@ Deno.test("allocation retry stops after one correction instead of rebilling inde
 
   await run();
   assertEquals(actions, ["outline-causal-architecture", "outline-plan", "outline-plan-retry"]);
-  assertEquals(db.row.status, "pending");
-  assertEquals(db.row.planning_state.nextAction, "outline-suggestions");
-  assertEquals(db.row.diagnostics.allocationFallback, true);
-
-  await run();
-  assertEquals(actions, ["outline-causal-architecture", "outline-plan", "outline-plan-retry", "outline-suggestions"]);
+  assertEquals(db.row.status, "failed");
   assertEquals(db.row.error_code, "server_error");
   assertEquals(db.row.planning_state.allocationRetryAttempts, 1);
 
   await run();
-  assertEquals(actions, ["outline-causal-architecture", "outline-plan", "outline-plan-retry", "outline-suggestions"]);
+  assertEquals(actions, ["outline-causal-architecture", "outline-plan", "outline-plan-retry"]);
 });
 
 Deno.test("empty arc evidence is no claim and still reaches semantic verification", async () => {
