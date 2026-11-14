@@ -3691,6 +3691,63 @@ export function fitAllocationToNovelBudget(
   return normalized;
 }
 
+/**
+ * The allocator's numeric plan is advisory, but an uncovered authored
+ * dramatic function is not optional.  A model can legally return zero for a
+ * beat while the response contract still requires (for example) a climax.
+ * Reconcile that contradiction deterministically before constructing the
+ * paid outline response schema; otherwise schema construction throws a 500
+ * before the provider can produce the required section.
+ */
+export function ensureRequiredFunctionCapacity(
+  allocation: Map<string, Allocation>,
+  req: OutlineFromRecipeRequest,
+): Map<string, Allocation> {
+  const requiredByBeat = outstandingRequiredFunctionsByBeat(
+    req.arcTemplate.beats,
+    req.arcTemplate.name,
+    req.existingSections ?? [],
+  );
+  return new Map(Array.from(allocation.entries()).map(([beatID, plan]) => {
+    const required = requiredByBeat.get(beatID)?.length ?? 0;
+    if (required <= plan.minSections) return [beatID, plan];
+    return [beatID, {
+      ...plan,
+      minSections: required,
+      coverageMinimum: Math.max(plan.coverageMinimum ?? 0, required),
+      allocationMinimum: Math.max(plan.allocationMinimum ?? 0, required),
+    }];
+  }));
+}
+
+/**
+ * Last-resort allocation after both bounded planner attempts fail.  This is
+ * intentionally conservative: reserve one new section for every beat that
+ * has no accepted coverage, plus any still-uncovered required functions.
+ * It keeps the outline usable without inventing a plot or charging another
+ * planning retry.
+ */
+export function fallbackSectionAllocation(
+  req: OutlineFromRecipeRequest,
+): Map<string, Allocation> {
+  const requiredByBeat = outstandingRequiredFunctionsByBeat(
+    req.arcTemplate.beats,
+    req.arcTemplate.name,
+    req.existingSections ?? [],
+  );
+  return new Map(req.arcTemplate.beats.map((beat) => {
+    const hasAcceptedCoverage = (req.existingSections ?? []).some((section) => section.storyArcBeatID === beat.id);
+    const required = requiredByBeat.get(beat.id)?.length ?? 0;
+    const minimum = Math.max(required, hasAcceptedCoverage ? 0 : 1);
+    return [beat.id, {
+      minSections: minimum,
+      coverageMinimum: minimum,
+      allocationMinimum: minimum,
+      rationale: "Deterministic safety fallback after bounded allocation-planner retry exhaustion.",
+    }];
+  }));
+}
+
 export class AllocationRetryRequired extends Error {
   constructor(public readonly reason: string) {
     super(`allocation planner requires one bounded retry: ${reason}`);
@@ -4181,7 +4238,8 @@ export async function planSectionAllocation(
   for (const correction of corrections) {
     try {
       const parsed = parseAndValidateAllocation(await call(correction), req.arcTemplate.beats);
-      return fitAllocationToNovelBudget(parsed, req);
+      const reconciled = ensureRequiredFunctionCapacity(parsed, req);
+      return fitAllocationToNovelBudget(reconciled, req);
     } catch (error) {
       if (error instanceof SuggestionWorkerYield) throw error;
       if (error instanceof OutlineOutputExhaustedError) throw error;
@@ -6885,17 +6943,29 @@ export async function runSuggestionJob(
     } else {
       const retryOnly = planningState.nextAction === "outline-plan-retry";
       const allocationRetryAttempts = Number(planningState.allocationRetryAttempts ?? 0);
-      if (retryOnly && allocationRetryAttempts >= 1) {
-        throw new Error(
-          "allocation planner exhausted its single bounded correction retry; refusing to bill another allocation attempt",
-        );
-      }
-      if (retryOnly) {
+      const retryExhausted = retryOnly && allocationRetryAttempts >= 1;
+      if (retryOnly && !retryExhausted) {
         planningState = { ...planningState, allocationRetryAttempts: allocationRetryAttempts + 1 };
         await updateRun({ planning_state: planningState });
       }
-      diagnostics = { ...diagnostics, stage: "allocation_generation" };
-      try {
+      diagnostics = { ...diagnostics, stage: retryExhausted ? "allocation_fallback" : "allocation_generation" };
+      if (retryExhausted) {
+        allocation = fallbackSectionAllocation(body);
+        planningState = {
+          ...planningState,
+          phase: "allocation_complete",
+          nextAction: "outline-suggestions",
+          allocationEntries: Array.from(allocation.entries()),
+          storyArchitecture,
+          allocationRetryReason: undefined,
+        };
+        diagnostics = {
+          ...diagnostics,
+          allocationFallback: true,
+          allocationFallbackReason: "allocation planner exhausted its bounded correction retry",
+        };
+        await updateRun({ planning_state: planningState, diagnostics });
+      } else try {
         allocation = await planSectionAllocation(
           body,
           openaiKey,
@@ -6914,24 +6984,50 @@ export async function runSuggestionJob(
           await updateRun({ planning_state: planningState, diagnostics: { ...diagnostics, stage: "allocation_retry_pending", allocationRetryReason: error.reason } });
           throw new SuggestionWorkerYield();
         }
-        throw error;
+        // The bounded correction attempt is the last planner call.  A
+        // malformed/contradictory planner response must not discard the
+        // outline run; continue with a conservative deterministic allocation.
+        // Provider billing outages remain real external blockers and are not
+        // hidden by pretending the paid stage completed.
+        if (retryOnly && !isProviderBillingUnavailable(error)) {
+          allocation = fallbackSectionAllocation(body);
+          planningState = {
+            ...planningState,
+            phase: "allocation_complete",
+            nextAction: "outline-suggestions",
+            allocationEntries: Array.from(allocation.entries()),
+            storyArchitecture,
+            allocationRetryReason: undefined,
+          };
+          diagnostics = {
+            ...diagnostics,
+            stage: "allocation_fallback",
+            allocationFallback: true,
+            allocationFallbackReason: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+          };
+          await updateRun({ planning_state: planningState, diagnostics });
+        } else {
+          throw error;
+        }
       }
-      planningState = {
-        ...planningState,
-        phase: "allocation_complete",
-        nextAction: "outline-suggestions",
-        allocationEntries: Array.from(allocation.entries()),
-        storyArchitecture,
-        allocationRetryReason: undefined,
-      };
-      diagnostics = markCompletedStage(
-        markMeaningfulProgress(
-          { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
-          `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
-        ),
-        "allocation",
-      );
-      await updateRun({ planning_state: planningState, diagnostics });
+      if (diagnostics.stage !== "allocation_fallback") {
+        planningState = {
+          ...planningState,
+          phase: "allocation_complete",
+          nextAction: "outline-suggestions",
+          allocationEntries: Array.from(allocation.entries()),
+          storyArchitecture,
+          allocationRetryReason: undefined,
+        };
+        diagnostics = markCompletedStage(
+          markMeaningfulProgress(
+            { ...diagnostics, stage: "allocation_complete", plannerAllocationValidatedCountsByBeat: Object.fromEntries(Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections])) },
+            `allocation_validated:${stableJSONStringify(Array.from(allocation.entries()))}`,
+          ),
+          "allocation",
+        );
+        await updateRun({ planning_state: planningState, diagnostics });
+      }
     }
     const allocationCountsByBeat = Object.fromEntries(
       Array.from(allocation.entries()).map(([beatID, plan]) => [beatID, plan.minSections]),
