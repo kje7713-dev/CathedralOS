@@ -488,6 +488,23 @@ Deno.test("novel container planning avoids 29-chapter word-budget shortcut witho
   assertStringIncludes(allocation, "125,000");
 });
 
+Deno.test("novel response options stop at chapter", () => {
+  const schema: any = buildSuggestionResponseSchema(
+    [{ id: "beat-1" }],
+    new Map([["beat-1", { minSections: 1, rationale: "coverage" }]]),
+    [],
+    "",
+    "novel",
+  );
+  assertEquals(schema.properties.beats.properties["beat-1"].items.properties.container.enum, [
+    "scene",
+    "developedScene",
+    "setPiece",
+    "sceneSequence",
+    "chapter",
+  ]);
+});
+
 Deno.test("existing accepted sections satisfy obligation coverage", () => {
   const obligations = deriveRecipeObligations({ ...sparseRequest.recipe, selectedStorySpark: { text: "R2" } } as any);
   const existing = [{ storyArcBeatID: "beat-1", recipeRequirementIDs: ["R1"] }];
