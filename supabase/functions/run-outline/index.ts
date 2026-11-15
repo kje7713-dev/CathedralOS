@@ -482,7 +482,8 @@ async function handleKickoff(req: Request): Promise<Response> {
   if (
     existing &&
     (existing.status === "queued" || existing.status === "running" ||
-      existing.status === "paused_insufficient_credits")
+      existing.status === "paused_insufficient_credits" ||
+      existing.status === "paused")
   ) {
     // A prior worker may have died before claiming a lease (or while the app
     // was offline). Keep the idempotency response, but also use this retry as
@@ -510,7 +511,7 @@ async function handleKickoff(req: Request): Promise<Response> {
     .select("id, status, sections, credits_actual, updated_at")
     .eq("user_id", userId)
     .eq("outline_id", body.outline_id)
-    .in("status", ["failed", "paused_insufficient_credits"])
+    .in("status", ["failed", "paused_insufficient_credits", "paused"])
     .order("updated_at", { ascending: false })
     .limit(20);
   const completedCount = (candidate: Record<string, unknown>) =>
@@ -530,6 +531,7 @@ async function handleKickoff(req: Request): Promise<Response> {
       const hasSettledSpend = Number(candidate.credits_actual ?? 0) > 0;
       return hasIncompleteSection &&
         (candidate.status === "paused_insufficient_credits" ||
+          candidate.status === "paused" ||
           hasSettledSpend);
     })
     .sort((left, right) => completedCount(right) - completedCount(left))[0];
@@ -907,7 +909,7 @@ async function handleStatus(req: Request, url: URL): Promise<Response> {
     // user's original paid checkpoint.
     const result = await runQuery
       .eq("outline_id", outlineID)
-      .in("status", ["failed", "paused_insufficient_credits"])
+      .in("status", ["failed", "paused_insufficient_credits", "paused"])
       .order("updated_at", { ascending: false })
       .limit(20);
     runErr = result.error;
@@ -1371,6 +1373,15 @@ async function runOutline(
         });
         return;
       }
+      if (err instanceof PausedGenerationError) {
+        await pauseRunTransientGenerationFailure(
+          adminClient,
+          runId,
+          section,
+          err,
+        );
+        return;
+      }
       if (err instanceof RetryableGenerationError) {
         await handleRetryableGenerationFailure({
           adminClient,
@@ -1437,7 +1448,7 @@ async function handleResume(
     .eq("id", runId)
     .eq("user_id", userId).maybeSingle();
   if (!run) return errorResponse("not_found", "run not found", 404);
-  if (run.status === "failed") {
+  if (run.status === "failed" || run.status === "paused") {
     const sections = Array.isArray(run.sections)
       ? run.sections as Array<Record<string, unknown>>
       : [];
@@ -1480,7 +1491,7 @@ async function handleResume(
       })
       .eq("id", runId)
       .eq("user_id", userId)
-      .eq("status", "failed")
+      .eq("status", run.status)
       .select("id, status")
       .maybeSingle();
     if (resumeError) return errorResponse("db_error", resumeError.message, 500);
@@ -2275,7 +2286,7 @@ async function reconcileActualCredits(
     : [];
   const actual = await loadActualCredits(adminClient, sections);
   await adminClient.from("chapter_runs").update({ credits_actual: actual })
-    .eq("id", runId).in("status", ["running", "paused_insufficient_credits"]);
+    .eq("id", runId).in("status", ["running", "paused_insufficient_credits", "paused"]);
 }
 
 async function pauseRunInsufficientCredits(
@@ -2318,6 +2329,47 @@ async function pauseRunInsufficientCredits(
   );
 }
 
+async function pauseRunTransientGenerationFailure(
+  adminClient: ReturnType<typeof createClient>,
+  runId: string,
+  section: Record<string, unknown>,
+  error: unknown,
+): Promise<void> {
+  const friendlyMessage =
+    "Generation paused after a temporary timeout. Resume to retry the unfinished section.";
+  await updateSectionStatus(adminClient, runId, {
+    ...section,
+    status: "pending",
+    error: friendlyMessage,
+    completed_at: null,
+    output_id: null,
+    cost: 0,
+  });
+  const { data: run } = await adminClient.from("chapter_runs")
+    .select("sections").eq("id", runId).maybeSingle();
+  const sections = Array.isArray(run?.sections)
+    ? run.sections as Array<Record<string, unknown>>
+    : [];
+  const actual = await loadActualCredits(adminClient, sections);
+  const { error: pauseError } = await adminClient.from("chapter_runs")
+    .update({
+      status: "paused",
+      error: friendlyMessage,
+      credits_actual: actual,
+      credits_reserved: 0,
+      worker_lease_until: null,
+      next_retry_at: null,
+      completed_at: null,
+    })
+    .eq("id", runId).eq("status", "running");
+  if (pauseError) {
+    throw new Error(`could not pause run ${runId}: ${pauseError.message}`);
+  }
+  console.warn(
+    `[run-outline] run_id=${runId} paused after transient generation timeout: ${String(error)}`,
+  );
+}
+
 class RetryableMemoryError extends Error {
   constructor(message: string) {
     super(message);
@@ -2333,6 +2385,20 @@ class RetryableGenerationError extends Error {
     this.name = "RetryableGenerationError";
     this.retryAfterSeconds = retryAfterSeconds;
   }
+}
+
+class PausedGenerationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PausedGenerationError";
+  }
+}
+
+export function isPauseworthyGenerationResponse(
+  status: number,
+  body: string,
+): boolean {
+  return status === 504 && /IDLE_TIMEOUT|idle timeout/i.test(body);
 }
 
 /**
@@ -2412,6 +2478,11 @@ async function callGenerateStory(
           message: upstreamMessage,
           status: response.status,
         },
+      );
+    }
+    if (isPauseworthyGenerationResponse(response.status, errBody)) {
+      throw new PausedGenerationError(
+        `generate-story returned ${response.status}: ${errBody.slice(0, 200)}`,
       );
     }
     if (isRetryableGenerationResponse(response.status, errBody)) {

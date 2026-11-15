@@ -13,6 +13,7 @@ import {
   generationReadinessFailures,
   handleProviderBillingUnavailableTerminal,
   handleRetryableGenerationFailure,
+  isPauseworthyGenerationResponse,
   isRetryableGenerationResponse,
   isInsufficientCreditsError,
   loadRunOutline,
@@ -437,7 +438,7 @@ Deno.test("failed Run All checkpoints resume the same run and preserve completed
     start,
     source.indexOf("async function releaseRunLease(", start),
   );
-  assertStringIncludes(resume, 'if (run.status === "failed")');
+  assertStringIncludes(resume, 'if (run.status === "failed" || run.status === "paused")');
   assertStringIncludes(resume, 'section.status === "failed"');
   assertStringIncludes(resume, 'status: "pending"');
   assertStringIncludes(resume, 'sections: resumedSections');
@@ -507,6 +508,15 @@ Deno.test("Cloudflare 520 responses are retryable generation failures", () => {
     isRetryableGenerationResponse(503, "WORKER_RESOURCE_LIMIT"),
     true,
   );
+});
+
+Deno.test("idle timeout pauses the durable run instead of auto-retrying", () => {
+  assertEquals(
+    isPauseworthyGenerationResponse(504, '{"code":"IDLE_TIMEOUT"}'),
+    true,
+  );
+  assertEquals(isPauseworthyGenerationResponse(503, "IDLE_TIMEOUT"), false);
+  assertEquals(isRetryableGenerationResponse(504, "IDLE_TIMEOUT"), false);
 });
 
 Deno.test("fractional generation request charges use a numeric database column", async () => {
@@ -599,7 +609,7 @@ Deno.test("uncached project launch discovers the most complete resumable checkpo
     Deno.readTextFile("./CathedralOSApp/Services/DataDurabilityCoordinator.swift"),
   ]);
   assertStringIncludes(backend, 'if (!runId && !outlineID)');
-  assertStringIncludes(backend, '.in("status", ["failed", "paused_insufficient_credits"])');
+  assertStringIncludes(backend, '.in("status", ["failed", "paused_insufficient_credits", "paused"])');
   assertStringIncludes(backend, "completed(right) - completed(left)");
   assertStringIncludes(service, 'URLQueryItem(name: "outline_id", value: outlineID)');
   assertStringIncludes(service, "func recoverableStatus(outlineID: String)");
@@ -785,7 +795,10 @@ Deno.test("credit shortage pauses a resumable run and preserves the exact prose 
   const pauseStart = source.indexOf(
     "async function pauseRunInsufficientCredits(",
   );
-  const pauseEnd = source.indexOf("class RetryableMemoryError", pauseStart);
+  const pauseEnd = source.indexOf(
+    "async function pauseRunTransientGenerationFailure(",
+    pauseStart,
+  );
   const pause = source.slice(pauseStart, pauseEnd);
   assertStringIncludes(pause, 'status: "paused_insufficient_credits"');
   assertStringIncludes(pause, 'status: "pending"');
@@ -794,6 +807,7 @@ Deno.test("credit shortage pauses a resumable run and preserves the exact prose 
   assertStringIncludes(source, "outputID: result.output_id");
   assertStringIncludes(source, "Resume skips whole-run estimate/preflight");
   assertStringIncludes(source, 'run.status === "paused_insufficient_credits"');
+  assertStringIncludes(source, 'run.status === "failed" || run.status === "paused"');
   assertStringIncludes(source, "queueContinuation(runId)");
   assertEquals(pause.includes('status: "failed"'), false);
 });
@@ -834,6 +848,20 @@ Deno.test("paused status is included only in the new forward migration", async (
     "supabase/migrations/20260901120000_durable_run_outline_estimate_preflight.sql",
   );
   assertEquals(historical.includes("paused_insufficient_credits"), false);
+});
+
+Deno.test("transient timeout pause is a resumable non-red state", async () => {
+  const source = await Deno.readTextFile("supabase/functions/run-outline/index.ts");
+  const migration = await Deno.readTextFile(
+    "supabase/migrations/20261115224227_pause_run_on_transient_timeout.sql",
+  );
+  assertStringIncludes(source, 'status: "paused"');
+  assertStringIncludes(source, "pauseRunTransientGenerationFailure");
+  assertStringIncludes(migration, "'paused'))");
+  const service = await Deno.readTextFile("CathedralOSApp/Services/RunOutlineService.swift");
+  const banner = await Deno.readTextFile("CathedralOSApp/Features/Projects/OutlineSectionsRegionView.swift");
+  assertStringIncludes(service, 'status == "paused"');
+  assertStringIncludes(banner, "status.isPaused");
 });
 
 Deno.test("Run All iOS presentation treats paused as resumable and shows actual spend", async () => {

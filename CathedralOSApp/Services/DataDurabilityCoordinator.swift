@@ -1700,8 +1700,8 @@ final class DataDurabilityCoordinator: ObservableObject {
                     coordinator.activeRunProjectLineageID = projectLineageID
                     coordinator.persistRunStatus(status, for: projectLineageID)
                     DiagnosticLog.write("poll: status=\(status.status) done=\(status.sections_done ?? 0)/\(status.sections_total ?? 0)")
-                    if status.status == "paused_insufficient_credits" {
-                        DiagnosticLog.write("poll: run paused for insufficient credits; preserving status without terminal reconciliation")
+                    if status.status == "paused_insufficient_credits" || status.status == "paused" {
+                        DiagnosticLog.write("poll: run paused; preserving status without terminal reconciliation")
                         coordinator.pollingTask = nil
                         break
                     }

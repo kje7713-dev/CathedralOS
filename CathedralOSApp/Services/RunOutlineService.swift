@@ -117,11 +117,19 @@ extension RunOutlineStatus {
         status == "paused_insufficient_credits"
     }
 
+    var isPausedForTransientFailure: Bool {
+        status == "paused"
+    }
+
+    var isPaused: Bool {
+        isPausedForInsufficientCredits || isPausedForTransientFailure
+    }
+
     /// Failed Run All checkpoints can be resumed without creating a new run.
     /// The backend preserves completed section outputs and reopens only the
     /// incomplete queue entries.
     var isResumable: Bool {
-        isPausedForInsufficientCredits ||
+        isPaused ||
             (status == "failed" && (sections_failed ?? 0) > 0)
     }
 
@@ -144,6 +152,9 @@ extension RunOutlineStatus {
         if normalized.contains("insufficient credit") ||
             normalized.contains("more credits") {
             return "More credits are needed to continue."
+        }
+        if normalized.contains("paused") || normalized.contains("timeout") {
+            return "Generation paused after a temporary timeout. Resume to try again."
         }
         return "Generation failed. Please try again."
     }
