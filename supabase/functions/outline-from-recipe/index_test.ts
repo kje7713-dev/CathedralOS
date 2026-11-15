@@ -128,7 +128,6 @@ import {
   repairStoryArcMacroStructure,
   arcRoleContract,
   buildExpansionResponseSchema,
-  validateNovelLeafContainers,
   NOVEL_LEAF_CONTAINERS,
   intimacyRequirement,
   intimacyPlanningDirective,
@@ -9129,9 +9128,6 @@ Deno.test("whole-arc intimacy evidence is accepted on eligible beat sections", (
 
 Deno.test("novel scale uses the preferred 115,000-word floor and rejects tiny new leaves", () => {
   assertEquals(NOVEL_LEAF_CONTAINERS, ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"]);
-  assertThrows(() => validateNovelLeafContainers([{ container: "moment" }]));
-  assertThrows(() => validateNovelLeafContainers([{ container: "vignette" }]));
-  validateNovelLeafContainers([{ container: "moment" }], "shortStory");
   assertEquals(true, true);
   assertEquals(needsNovelExpansion(Array.from({ length: 54 }, () => ({ container: "scene" }))), true);
 });

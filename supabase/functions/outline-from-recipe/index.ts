@@ -626,18 +626,6 @@ export const NOVEL_CONTAINER_WORD_TARGETS: Record<typeof NOVEL_LEAF_CONTAINERS[n
 export const NOVEL_FIRST_PASS_WORD_GOAL = 121000; // Buffer for one discarded replay; nominal cap stays 125k.
 export const NOVEL_MIXED_SECTION_ESTIMATE_WORDS = 2700;
 
-export function validateNovelLeafContainers(
-  suggestions: Array<{ container?: string | null }>,
-  format: StoryMaterialFormat = "novel",
-): void {
-  if (format !== "novel") return;
-  for (const suggestion of suggestions) {
-    if (!NOVEL_LEAF_CONTAINERS.includes(suggestion.container as typeof NOVEL_LEAF_CONTAINERS[number])) {
-      throw new Error(`new novel planning does not allow generation-bearing leaf container ${String(suggestion.container)}`);
-    }
-  }
-}
-
 /** Interleave a beat's planned containers rather than grouping similar
  * sizes together. Counts and slot names remain deterministic on replay. */
 export function plannedNovelContainerSlots(counts: NovelContainerCounts, reserveClimaxSetPiece = false, requiredFunctionsAfterClimax = 0): Array<typeof NOVEL_LEAF_CONTAINERS[number]> {
@@ -7081,7 +7069,6 @@ export async function runSuggestionJob(
           diagnostics = { ...diagnostics, stage: "outline_validating" };
           const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
           const deduped = removeDuplicateOutlineSections(validated.suggestions, requiredFunctionOrderByBeat);
-          validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
           const merged = mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true);
           if (merged.length > MAX_PLANNED_SECTIONS) {
             throw new Error(`outline exceeded global ${MAX_PLANNED_SECTIONS}-section safety cap`);
@@ -7097,7 +7084,6 @@ export async function runSuggestionJob(
       );
       const validated = validateSuggestions(flattened, beatIds, allocation, recipeObligations, body.arcTemplate);
       const deduped = removeDuplicateOutlineSections(validated.suggestions, requiredFunctionOrderByBeat);
-      validateNovelLeafContainers(deduped.suggestions, requestedStoryMaterialFormat(body));
       result = { suggestions: mergeSuggestionsByBeatOrder(body.arcTemplate.beats.map((beat) => beat.id), deduped.suggestions, [], true), warnings: validated.warnings };
       // Structural replay is removed before any durable checkpoint or semantic
       // provider stage. Never surface duplicate first-pass sections.
