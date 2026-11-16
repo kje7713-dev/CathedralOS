@@ -20,8 +20,11 @@ import {
   parseEmbedSectionError,
   providerBillingTerminalState,
   requireRunOutlineRecipe,
+  resetResumableRunSections,
   RunOutlineOutlineError,
   runOutlineSectionLifecycle,
+  markTransientTimeoutSection,
+  TRANSIENT_TIMEOUT_MESSAGE,
 } from "./index.ts";
 import {
   buildGenerateStoryRequest,
@@ -439,8 +442,8 @@ Deno.test("failed Run All checkpoints resume the same run and preserve completed
     source.indexOf("async function releaseRunLease(", start),
   );
   assertStringIncludes(resume, 'if (run.status === "failed" || run.status === "paused")');
-  assertStringIncludes(resume, 'section.status === "failed"');
-  assertStringIncludes(resume, 'status: "pending"');
+  assertStringIncludes(resume, "resetResumableRunSections(sections)");
+  assertStringIncludes(resume, 'status: "running"');
   assertStringIncludes(resume, 'sections: resumedSections');
   assertStringIncludes(resume, "queueContinuation(runId)");
   assertEquals(resume.includes("runOutline(runId, adminClient)"), false);
@@ -975,6 +978,94 @@ Deno.test("Run All executable lifecycle pauses after prose settlement and resume
   assertEquals(state.creditsActual, 2.75);
   assertEquals(providerCalls, 1);
   assertEquals(proseBillingCalls, 1);
+  assertEquals(memoryCalls, 2);
+});
+
+Deno.test("Run All 504 recovery reuses late output, clears stale errors, and reconciles ledger charges", async () => {
+  const completedOutput = "output-completed";
+  const lateOutput = "output-late";
+  const remainingOutput = "output-remaining";
+  const state = {
+    runStatus: "running",
+    sections: [
+      { id: "section-completed", status: "completed", output_id: completedOutput, error: null },
+      { id: "section-late", status: "pending", output_id: null, error: null },
+      { id: "section-remaining", status: "pending", output_id: null, error: null },
+    ] as Array<Record<string, unknown>>,
+    persistedOutputs: new Map([[completedOutput, "complete"]]),
+    ledgerCharges: new Map([[completedOutput, 1.25]]),
+  };
+  let providerCalls = 0;
+  let memoryCalls = 0;
+
+  // The provider times out after persistence and settlement have completed;
+  // this is the real failure boundary that loses the response to run-outline.
+  assertEquals(isPauseworthyGenerationResponse(504, '{"code":"IDLE_TIMEOUT"}'), true);
+  try {
+    await runOutlineSectionLifecycle({
+      generate: async () => {
+        providerCalls++;
+        state.persistedOutputs.set(lateOutput, "complete");
+        state.ledgerCharges.set(lateOutput, 2.75);
+        throw new Error("generate-story returned 504: IDLE_TIMEOUT");
+      },
+      persistPendingOutput: async () => {},
+      ensureMemory: async () => {},
+      persistCompleted: async () => {},
+      isInsufficientCredits: () => false,
+    });
+  } catch (error) {
+    assertStringIncludes(String(error), "504");
+  }
+  state.sections[1] = markTransientTimeoutSection(state.sections[1]);
+  state.runStatus = "paused";
+  assertEquals(state.sections[1].error, TRANSIENT_TIMEOUT_MESSAGE);
+
+  // Resume clears the stale timeout message on every unfinished section and
+  // keeps completed section/output/billing state byte-for-byte intact.
+  state.sections = resetResumableRunSections(state.sections);
+  state.runStatus = "running";
+  assertEquals(state.sections[0].status, "completed");
+  assertEquals(state.sections[0].output_id, completedOutput);
+  assertEquals(state.sections[1].error, null);
+  assertEquals(state.sections[2].error, null);
+
+  const finishSection = async (section: Record<string, unknown>, outputID: string) => {
+    const persisted = state.persistedOutputs.has(outputID);
+    const result = await runOutlineSectionLifecycle({
+      existingOutputID: persisted ? outputID : null,
+      generate: async () => {
+        providerCalls++;
+        state.persistedOutputs.set(outputID, "complete");
+        state.ledgerCharges.set(outputID, 2.75);
+        return { outputID, status: "complete", wasTruncated: false };
+      },
+      persistPendingOutput: async () => {},
+      ensureMemory: async (id) => {
+        memoryCalls++;
+        assertEquals(state.persistedOutputs.get(id), "complete");
+      },
+      persistCompleted: async (id) => {
+        section.status = "completed";
+        section.output_id = id;
+        section.error = null;
+      },
+      isInsufficientCredits: () => false,
+    });
+    assertEquals(result.outputID, outputID);
+  };
+
+  await finishSection(state.sections[1], lateOutput);
+  await finishSection(state.sections[2], remainingOutput);
+  state.runStatus = "completed";
+  const actual = [...state.ledgerCharges.values()].reduce((sum, charge) => sum + charge, 0);
+
+  assertEquals(state.runStatus, "completed");
+  assertEquals(state.sections.every((section) => section.status === "completed"), true);
+  assertEquals(state.sections.some((section) => section.error), false);
+  assertEquals(actual, 6.75);
+  assertEquals(providerCalls, 2); // timed-out late output + remaining section only
+  assertEquals(new Set(state.sections.map((section) => section.output_id)).size, 3);
   assertEquals(memoryCalls, 2);
 });
 

@@ -1038,6 +1038,45 @@ export async function runOutlineSectionLifecycle(input: {
   return { status: "completed", outputID };
 }
 
+export const TRANSIENT_TIMEOUT_MESSAGE =
+  "Generation paused after a temporary timeout. Resume to retry the unfinished section.";
+
+/**
+ * Reopen only unfinished sections while clearing stale worker errors. Completed
+ * sections are deliberately returned unchanged so their output and billing
+ * lineage cannot be disturbed by a resume request.
+ */
+export function resetResumableRunSections(
+  sections: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  return sections.map((section) => {
+    if (section.status === "completed") return section;
+    return {
+      ...section,
+      status: "pending",
+      error: null,
+      started_at: null,
+      completed_at: null,
+      cost: section.status === "failed" ? 0 : section.cost,
+    };
+  });
+}
+
+/**
+ * Mark a timed-out section resumable without discarding a late-persisted
+ * output reference or its associated billing metadata.
+ */
+export function markTransientTimeoutSection(
+  section: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...section,
+    status: "pending",
+    error: TRANSIENT_TIMEOUT_MESSAGE,
+    completed_at: null,
+  };
+}
+
 // ---- outline-walker + per-section loop (Day 2) -------------------------
 async function runOutline(
   runId: string,
@@ -1466,19 +1505,7 @@ async function handleResume(
     // A failed Run All is a resumable checkpoint. Preserve every completed
     // output and reopen only failed/incomplete queue entries; do not create a
     // replacement chapter_runs row or charge completed sections again.
-    const resumedSections = sections.map((section) =>
-      section.status === "failed"
-        ? {
-          ...section,
-          status: "pending",
-          error: null,
-          started_at: null,
-          completed_at: null,
-          output_id: null,
-          cost: 0,
-        }
-        : section
-    );
+    const resumedSections = resetResumableRunSections(sections);
     const { data: resumed, error: resumeError } = await adminClient
       .from("chapter_runs")
       .update({
@@ -2335,16 +2362,12 @@ async function pauseRunTransientGenerationFailure(
   section: Record<string, unknown>,
   error: unknown,
 ): Promise<void> {
-  const friendlyMessage =
-    "Generation paused after a temporary timeout. Resume to retry the unfinished section.";
-  await updateSectionStatus(adminClient, runId, {
-    ...section,
-    status: "pending",
-    error: friendlyMessage,
-    completed_at: null,
-    output_id: null,
-    cost: 0,
-  });
+  const friendlyMessage = TRANSIENT_TIMEOUT_MESSAGE;
+  await updateSectionStatus(
+    adminClient,
+    runId,
+    markTransientTimeoutSection(section),
+  );
   const { data: run } = await adminClient.from("chapter_runs")
     .select("sections").eq("id", runId).maybeSingle();
   const sections = Array.isArray(run?.sections)
