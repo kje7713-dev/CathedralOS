@@ -8,7 +8,11 @@ import {
 import type { ProjectOutline } from "../export-epub/_section_walker.ts";
 import { ProviderError } from "../generate-story/_provider.ts";
 import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
-import { buildSynopsisMemoryContext } from "./_memory_context.ts";
+import {
+  buildStandaloneSynopsisSource,
+  buildSynopsisMemoryContext,
+  MAX_SYNOPSIS_CONTEXT_CHARS,
+} from "./_memory_context.ts";
 
 const TEST_REQUEST = {
   action: "generate" as const,
@@ -26,9 +30,12 @@ function validSynopsis(): string {
 function makeSynopsisDependencies(options: {
   availableCredits: number;
   providerError?: Error;
+  settlementFailures?: number;
+  providerDelayMs?: number;
 }) {
   let operationRow: Record<string, unknown> | null = null;
   let providerCalls = 0;
+  let settlementFailures = options.settlementFailures ?? 0;
   const model = {
     id: "model-id",
     provider: "openai",
@@ -148,23 +155,31 @@ function makeSynopsisDependencies(options: {
         };
       }
       if (table === "epub_synopsis_operations") {
-        const chain = {
-          eq: () => chain,
-          maybeSingle: () =>
-            Promise.resolve({ data: operationRow, error: null }),
-        };
         return {
-          select: () => chain,
-          upsert: (row: Record<string, unknown>) => {
-            operationRow = { ...operationRow, ...row };
-            return Promise.resolve({ error: null });
-          },
           update: (row: Record<string, unknown>) => ({
             eq: () => ({
-              eq: () => {
-                operationRow = { ...operationRow, ...row };
-                return Promise.resolve({ error: null });
-              },
+              eq: () => ({
+                eq: () => ({
+                  eq: () => {
+                    operationRow = { ...operationRow, ...row };
+                    return Promise.resolve({ error: null });
+                  },
+                }),
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === "generation_usage_events") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({ data: null, error: null }),
+                }),
+              }),
             }),
           }),
         };
@@ -185,7 +200,46 @@ function makeSynopsisDependencies(options: {
       return { insert: () => Promise.resolve({ data: null, error: null }) };
     },
     rpc(name: string) {
+      if (name === "claim_epub_synopsis_operation") {
+        if (operationRow?.status === "complete") {
+          return Promise.resolve({
+            data: [{
+              claim_status: "complete",
+              synopsis: operationRow.synopsis,
+            }],
+            error: null,
+          });
+        }
+        if (operationRow?.synopsis) {
+          return Promise.resolve({
+            data: [{
+              claim_status: "ready",
+              claim_token: "claim",
+              synopsis: operationRow.synopsis,
+            }],
+            error: null,
+          });
+        }
+        if (operationRow?.status === "pending") {
+          return Promise.resolve({
+            data: [{ claim_status: "in_progress" }],
+            error: null,
+          });
+        }
+        operationRow = { status: "pending", claim_token: "claim" };
+        return Promise.resolve({
+          data: [{ claim_status: "claimed", claim_token: "claim" }],
+          error: null,
+        });
+      }
       if (name === "settle_billable_usage") {
+        if (settlementFailures > 0) {
+          settlementFailures--;
+          return Promise.resolve({
+            data: null,
+            error: { message: "temporary settlement interruption" },
+          });
+        }
         return Promise.resolve({
           data: [{
             settlement_status: "settled",
@@ -200,20 +254,26 @@ function makeSynopsisDependencies(options: {
     },
   };
   const provider = {
-    complete:
-      () => (providerCalls++,
-        options.providerError
-          ? Promise.reject(options.providerError)
-          : Promise.resolve({
-            content: validSynopsis(),
-            modelName: "gpt-test",
-            inputTokens: 100,
-            outputTokens: 100,
-            cachedInputTokens: 0,
-            cacheWriteInputTokens: 0,
-            finishReason: "stop",
-            toolCostUsd: 0,
-          })),
+    complete: async () => {
+      providerCalls++;
+      if (options.providerDelayMs) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, options.providerDelayMs)
+        );
+      }
+      return options.providerError
+        ? Promise.reject(options.providerError)
+        : Promise.resolve({
+          content: validSynopsis(),
+          modelName: "gpt-test",
+          inputTokens: 100,
+          outputTokens: 100,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          finishReason: "stop",
+          toolCostUsd: 0,
+        });
+    },
   };
   const creditStore = {
     loadOrDefault: () =>
@@ -378,6 +438,176 @@ Deno.test("memory context rejects stale or unrelated memory", () => {
   }
 });
 
+Deno.test("standalone output has a bounded source without requiring embeddings", () => {
+  const outline: ProjectOutline = {
+    id: "standalone-output",
+    title: "Standalone Story",
+    chapters: [{
+      id: "standalone-output",
+      title: "Standalone Story",
+      position: 0,
+      sections: [{
+        id: "standalone-output",
+        generation_output_id: "standalone-output",
+        title: "Standalone Story",
+        container: "chapter",
+        pov: null,
+        body: `${"BEGINNING ".repeat(5000)}${"MIDDLE ".repeat(5000)}${
+          "ENDING ".repeat(5000)
+        }`,
+        position: 0,
+        parent_id: null,
+        story_arc_beat_id: null,
+        story_arc_role: null,
+      }],
+    }],
+    parts: [],
+  };
+  const source = buildStandaloneSynopsisSource(outline);
+  if (source.length > MAX_SYNOPSIS_CONTEXT_CHARS) {
+    throw new Error("standalone context exceeded budget");
+  }
+  if (
+    !source.includes("BEGINNING") || !source.includes("MIDDLE") ||
+    !source.includes("ENDING")
+  ) {
+    throw new Error(
+      "standalone source lost beginning, middle, or ending coverage",
+    );
+  }
+});
+
+Deno.test("lifecycle aggregation removes resolved hooks and superseded facts", () => {
+  const sections = [0, 1].map((index) => ({
+    id: `life-section-${index}`,
+    generation_output_id: `life-output-${index}`,
+    title: `Life ${index}`,
+    container: "scene" as const,
+    pov: null,
+    body: `body-${index}`,
+    position: index,
+    parent_id: null,
+    story_arc_beat_id: null,
+    story_arc_role: null,
+  }));
+  const context = buildSynopsisMemoryContext({
+    id: "life-outline",
+    title: "Lifecycle Story",
+    chapters: [{ id: "chapter", title: "Chapter", position: 0, sections }],
+    parts: [],
+  }, [
+    {
+      outline_section_id: sections[0].id,
+      generation_output_id: sections[0].generation_output_id,
+      memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
+      extracted_summary: "The mystery opens.",
+      character_deltas: [],
+      plot_thread_deltas: [{
+        reference: "thread:mystery",
+        thread_name: "Mystery",
+        status: "introduced",
+        description: "A hidden signal.",
+      }],
+      continuity_facts: [{
+        reference: "fact:key",
+        fact: "The key is hidden.",
+        active: true,
+      }],
+      open_loops: [{
+        reference: "loop:signal",
+        description: "Who sent the signal?",
+        status: "open",
+      }],
+      scene_ending_state: null,
+    },
+    {
+      outline_section_id: sections[1].id,
+      generation_output_id: sections[1].generation_output_id,
+      memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
+      extracted_summary: "The mystery is resolved.",
+      character_deltas: [],
+      plot_thread_deltas: [{
+        reference: "thread:mystery",
+        thread_name: "Mystery",
+        status: "resolved",
+        description: "The signal is explained.",
+      }],
+      continuity_facts: [{
+        reference: "fact:key",
+        fact: "The key is destroyed.",
+        active: false,
+      }],
+      open_loops: [{
+        reference: "loop:signal",
+        description: "Who sent the signal?",
+        status: "resolved",
+      }],
+      scene_ending_state: null,
+    },
+  ]);
+  if (!context.includes("Mystery (resolved)")) {
+    throw new Error("final thread state missing");
+  }
+  if (context.includes("Open narrative loops: Who sent the signal?")) {
+    throw new Error("resolved loop remained open");
+  }
+  if (context.includes("Active consequential facts: The key is destroyed.")) {
+    throw new Error("superseded fact was treated as active");
+  }
+});
+
+for (const count of [100, 150, 200]) {
+  Deno.test(`scene memory context remains bounded for ${count} sections`, () => {
+    const sections = Array.from({ length: count }, (_, index) => ({
+      id: `section-${index}`,
+      generation_output_id: `output-${index}`,
+      title: `Section ${index}`,
+      container: "scene" as const,
+      pov: null,
+      body: `body-${index}`,
+      position: index,
+      parent_id: null,
+      story_arc_beat_id: null,
+      story_arc_role: null,
+    }));
+    const context = buildSynopsisMemoryContext(
+      {
+        id: "large-outline",
+        title: "Large Story",
+        chapters: [{ id: "chapter", title: "Chapter", position: 0, sections }],
+        parts: [],
+      },
+      sections.map((section, index) => ({
+        outline_section_id: section.id,
+        generation_output_id: section.generation_output_id!,
+        memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
+        extracted_summary: `${
+          index === 0
+            ? "BEGINNING"
+            : index === Math.floor(count / 2)
+            ? "MIDDLE"
+            : index === count - 1
+            ? "ENDING"
+            : "Scene"
+        } event ${index} `.repeat(20),
+        character_deltas: [],
+        plot_thread_deltas: [],
+        continuity_facts: [],
+        open_loops: [],
+        scene_ending_state: null,
+      })),
+    );
+    if (context.length > MAX_SYNOPSIS_CONTEXT_CHARS) {
+      throw new Error(`context exceeded budget for ${count}`);
+    }
+    for (const marker of ["BEGINNING", "MIDDLE", "ENDING"]) {
+      if (!context.includes(marker)) {
+        throw new Error(`${marker} coverage missing for ${count}`);
+      }
+    }
+  });
+}
+
 Deno.test("synopsis validation matches the prompt's 80–180 word contract", () => {
   const valid = Array.from({ length: 80 }, (_, index) => `word${index}`).join(
     " ",
@@ -455,7 +685,10 @@ Deno.test("handler maps provider failure without settling credits", async () => 
 
 Deno.test("handler settles a successful synopsis through shared billing", async () => {
   let settlementCalls = 0;
-  const deps = makeSynopsisDependencies({ availableCredits: 100 });
+  const deps = makeSynopsisDependencies({
+    availableCredits: 100,
+    providerDelayMs: 10,
+  });
   const originalRPC = deps.adminClient.rpc;
   deps.adminClient.rpc = (name: string, params: unknown) => {
     if (name === "settle_billable_usage") settlementCalls++;
@@ -490,5 +723,60 @@ Deno.test("completed operation returns its persisted synopsis without provider d
   }
   if ((await second.json()).synopsis !== validSynopsis()) {
     throw new Error("replay did not return persisted synopsis");
+  }
+});
+
+Deno.test("concurrent operation claims allow only one provider dispatch", async () => {
+  const deps = makeSynopsisDependencies({
+    availableCredits: 100,
+    providerDelayMs: 10,
+  });
+  const [first, second] = await Promise.all([
+    handleSynopsis("user", TEST_REQUEST, deps),
+    handleSynopsis("user", TEST_REQUEST, deps),
+  ]);
+  if (![first.status, second.status].includes(409)) {
+    throw new Error(
+      `expected one concurrent request to be rejected, got ${first.status}/${second.status}`,
+    );
+  }
+  if (deps.providerCalls() !== 1) {
+    throw new Error("concurrent claim dispatched provider twice");
+  }
+});
+
+Deno.test("settlement interruption recovers persisted synopsis without provider redispatch", async () => {
+  const deps = makeSynopsisDependencies({
+    availableCredits: 100,
+    settlementFailures: 1,
+  });
+  const first = await handleSynopsis("user", TEST_REQUEST, deps);
+  if (first.status !== 502) {
+    throw new Error(
+      `expected interrupted settlement failure, got ${first.status}`,
+    );
+  }
+  const second = await handleSynopsis("user", TEST_REQUEST, deps);
+  if (second.status !== 200) {
+    throw new Error(`expected recovery success, got ${second.status}`);
+  }
+  if (deps.providerCalls() !== 1) {
+    throw new Error("recovery redispatched provider");
+  }
+});
+
+Deno.test("different operation IDs remain independent regeneration requests", async () => {
+  const firstDeps = makeSynopsisDependencies({ availableCredits: 100 });
+  const secondDeps = makeSynopsisDependencies({ availableCredits: 100 });
+  const first = await handleSynopsis("user", TEST_REQUEST, firstDeps);
+  const second = await handleSynopsis("user", {
+    ...TEST_REQUEST,
+    operation_id: "operation-b",
+  }, secondDeps);
+  if (first.status !== 200 || second.status !== 200) {
+    throw new Error("regeneration operation failed");
+  }
+  if (firstDeps.providerCalls() !== 1 || secondDeps.providerCalls() !== 1) {
+    throw new Error("regeneration did not dispatch independently");
   }
 });

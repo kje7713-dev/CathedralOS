@@ -27,6 +27,7 @@ import {
   walkSections,
 } from "../export-epub/_section_walker.ts";
 import {
+  buildStandaloneSynopsisSource,
   buildSynopsisMemoryContext,
   SynopsisMemoryError,
   type SynopsisMemoryRow,
@@ -142,56 +143,74 @@ async function sourceFingerprint(
   ).join("");
 }
 
-async function loadCompletedSynopsis(
+type SynopsisOperationClaim = {
+  claim_status: "claimed" | "complete" | "ready" | "in_progress";
+  claim_token: string | null;
+  synopsis: string | null;
+  provider_model: string | null;
+  provider_input_tokens: number | null;
+  provider_output_tokens: number | null;
+  provider_cached_input_tokens: number | null;
+  provider_cache_write_input_tokens: number | null;
+  provider_tool_cost_usd: number | null;
+};
+
+async function claimSynopsisOperation(
   userID: string,
   request: SynopsisRequest,
   fingerprint: string,
   deps: SynopsisDependencies,
-): Promise<string | null> {
-  const { data, error } = await deps.adminClient
-    .from("epub_synopsis_operations")
-    .select("project_id, title, source_fingerprint, synopsis, status")
-    .eq("user_id", userID)
-    .eq("operation_id", request.operation_id)
-    .maybeSingle();
+): Promise<SynopsisOperationClaim> {
+  const { data, error } = await deps.adminClient.rpc(
+    "claim_epub_synopsis_operation",
+    {
+      p_user_id: userID,
+      p_operation_id: request.operation_id,
+      p_project_id: request.project_id,
+      p_title: request.title,
+      p_source_fingerprint: fingerprint,
+    },
+  );
   if (error) {
-    throw new Error(`synopsis operation lookup failed: ${error.message}`);
+    throw new Error(`synopsis operation claim failed: ${error.message}`);
   }
-  if (!data || data.status !== "complete") return null;
-  if (
-    data.project_id !== request.project_id || data.title !== request.title ||
-    data.source_fingerprint !== fingerprint
-  ) {
-    throw new Error(
-      "synopsis operation identity was reused for different source",
-    );
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | SynopsisOperationClaim
+    | null;
+  if (!row?.claim_status) {
+    throw new Error("synopsis operation claim returned no status");
   }
-  return typeof data.synopsis === "string" ? data.synopsis : null;
+  return row;
 }
 
 async function checkpointSynopsis(
   userID: string,
   request: SynopsisRequest,
   fingerprint: string,
+  claimToken: string,
+  providerResult: BillableProviderResult,
   synopsis: string,
   deps: SynopsisDependencies,
 ): Promise<void> {
   const { error } = await deps.adminClient.from("epub_synopsis_operations")
-    .upsert({
-      user_id: userID,
-      operation_id: request.operation_id,
-      project_id: request.project_id,
-      title: request.title,
+    .update({
       source_fingerprint: fingerprint,
       synopsis,
-      status: "pending",
-    }, { onConflict: "user_id,operation_id" });
+      provider_model: providerResult.modelName,
+      provider_input_tokens: providerResult.inputTokens,
+      provider_output_tokens: providerResult.outputTokens,
+      provider_cached_input_tokens: providerResult.cachedInputTokens,
+      provider_cache_write_input_tokens: providerResult.cacheWriteInputTokens,
+      provider_tool_cost_usd: providerResult.toolCostUsd,
+    }).eq("user_id", userID).eq("operation_id", request.operation_id)
+    .eq("claim_token", claimToken).eq("status", "pending");
   if (error) throw new Error(`synopsis checkpoint failed: ${error.message}`);
 }
 
 async function completeSynopsis(
   userID: string,
   operationID: string,
+  claimToken: string,
   synopsis: string,
   deps: SynopsisDependencies,
 ): Promise<void> {
@@ -202,8 +221,41 @@ async function completeSynopsis(
       completed_at: new Date().toISOString(),
     })
     .eq("user_id", userID)
-    .eq("operation_id", operationID);
+    .eq("operation_id", operationID)
+    .eq("claim_token", claimToken)
+    .eq("status", "pending");
   if (error) throw new Error(`synopsis completion failed: ${error.message}`);
+}
+
+async function releaseSynopsisClaim(
+  userID: string,
+  operationID: string,
+  claimToken: string | null | undefined,
+  deps: SynopsisDependencies,
+): Promise<void> {
+  if (!claimToken) return;
+  await deps.adminClient.from("epub_synopsis_operations").update({
+    claim_token: null,
+    claimed_at: null,
+  }).eq("user_id", userID).eq("operation_id", operationID)
+    .eq("claim_token", claimToken).eq("status", "pending");
+}
+
+async function loadSettledSynopsis(
+  userID: string,
+  key: string,
+  deps: SynopsisDependencies,
+): Promise<boolean> {
+  const { data, error } = await deps.adminClient.from("generation_usage_events")
+    .select("status")
+    .eq("user_id", userID)
+    .eq("idempotency_key", key)
+    .eq("purpose", "epub-synopsis")
+    .maybeSingle();
+  if (error) {
+    throw new Error(`synopsis billing lookup failed: ${error.message}`);
+  }
+  return data?.status === "complete";
 }
 
 async function resolveExportOutline(
@@ -237,6 +289,7 @@ async function resolveExportOutline(
 }
 
 async function resolveSynopsisSource(
+  request: SynopsisRequest,
   outline: ProjectOutline,
   deps: SynopsisDependencies,
 ): Promise<string> {
@@ -257,6 +310,13 @@ async function resolveSynopsisSource(
     )
     .in("generation_output_id", outputIDs);
   if (error) throw new SynopsisMemoryError("memory_missing", error.message);
+  if (
+    request.generation_output_id &&
+    outputIDs.length === 1 &&
+    (!data || data.length === 0)
+  ) {
+    return buildStandaloneSynopsisSource(outline);
+  }
   return buildSynopsisMemoryContext(
     outline,
     (data ?? []) as SynopsisMemoryRow[],
@@ -294,7 +354,7 @@ export async function handleSynopsis(
   let sourceText: string;
   try {
     outline = await resolveExportOutline(request, userID, deps);
-    sourceText = await resolveSynopsisSource(outline, deps);
+    sourceText = await resolveSynopsisSource(request, outline, deps);
   } catch (error) {
     if (error instanceof StandaloneOutputSourceError) {
       return errorResponse(error.code, error.message, 404);
@@ -327,20 +387,26 @@ export async function handleSynopsis(
     );
   }
   const fingerprint = await sourceFingerprint(sourceText, request);
+  const key = await idempotencyKey(userID, request);
+  let claim: SynopsisOperationClaim | null = null;
   try {
-    const completed = await loadCompletedSynopsis(
-      userID,
-      request,
-      fingerprint,
-      deps,
-    );
-    if (completed !== null && request.action === "generate") {
-      return new Response(JSON.stringify({ synopsis: completed }), {
+    if (request.action === "generate") {
+      claim = await claimSynopsisOperation(userID, request, fingerprint, deps);
+    }
+    if (claim?.claim_status === "complete" && claim.synopsis) {
+      return new Response(JSON.stringify({ synopsis: claim.synopsis }), {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Content-Type": "application/json",
         },
       });
+    }
+    if (claim?.claim_status === "in_progress") {
+      return errorResponse(
+        "synopsis_in_progress",
+        "This synopsis request is already being completed.",
+        409,
+      );
     }
   } catch (error) {
     if (
@@ -356,6 +422,12 @@ export async function handleSynopsis(
   }
   const model = await resolveModel(deps);
   if (!model || !isBillableGenerationModel(model)) {
+    await releaseSynopsisClaim(
+      userID,
+      request.operation_id,
+      claim?.claim_token,
+      deps,
+    );
     return errorResponse(
       "model_unavailable_or_unpriced",
       "The synopsis model is unavailable or has unverified pricing.",
@@ -366,6 +438,12 @@ export async function handleSynopsis(
   const estimatedInputTokens = estimateTokensFromMessages(messages);
   const inputLimit = inputTokenLimitDetails(estimatedInputTokens);
   if (inputLimit) {
+    await releaseSynopsisClaim(
+      userID,
+      request.operation_id,
+      claim?.claim_token,
+      deps,
+    );
     return errorResponse(
       "input_token_limit_exceeded",
       `Estimated input is ${inputLimit.estimatedInputTokens} tokens; Cathedral's hard limit is ${inputLimit.limit} tokens`,
@@ -398,6 +476,12 @@ export async function handleSynopsis(
     );
   }
   if (!creditCheck.allowed) {
+    await releaseSynopsisClaim(
+      userID,
+      request.operation_id,
+      claim?.claim_token,
+      deps,
+    );
     return errorResponse(
       "insufficient_credits",
       "Not enough credits for a story synopsis.",
@@ -405,7 +489,44 @@ export async function handleSynopsis(
     );
   }
 
-  const key = await idempotencyKey(userID, request);
+  if (
+    claim?.claim_status === "ready" &&
+    await loadSettledSynopsis(userID, key, deps)
+  ) {
+    if (claim.synopsis && claim.claim_token) {
+      await completeSynopsis(
+        userID,
+        request.operation_id,
+        claim.claim_token,
+        claim.synopsis,
+        deps,
+      );
+      return new Response(JSON.stringify({ synopsis: claim.synopsis }), {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Content-Type": "application/json",
+        },
+      });
+    }
+  }
+  const recovery = claim?.claim_status === "ready" && Boolean(claim.synopsis);
+  const recoveryResult = recovery
+    ? {
+      content: claim!.synopsis!,
+      modelName: claim!.provider_model ?? model.provider_model,
+      inputTokens: claim!.provider_input_tokens ?? estimatedInputTokens,
+      outputTokens: claim!.provider_output_tokens ?? MAX_OUTPUT_TOKENS,
+      cachedInputTokens: claim!.provider_cached_input_tokens ?? 0,
+      cacheWriteInputTokens: claim!.provider_cache_write_input_tokens ?? 0,
+      finishReason: "stop" as const,
+      toolCostUsd: claim!.provider_tool_cost_usd ?? 0,
+    }
+    : null;
+  const billingProvider = recoveryResult
+    ? {
+      complete: async () => recoveryResult,
+    }
+    : deps.provider;
   try {
     const result = await runBillableLLM<{ synopsis: string }>({
       userID,
@@ -421,32 +542,46 @@ export async function handleSynopsis(
         idempotencyKey: key,
       },
       preflightUsageOverride: {
-        uncachedInputTokens: estimatedInputTokens,
-        cachedInputTokens: 0,
-        cacheWriteInputTokens: 0,
-        outputTokens: MAX_OUTPUT_TOKENS,
-        toolCostUsd: 0,
+        uncachedInputTokens: recoveryResult
+          ? Math.max(
+            0,
+            recoveryResult.inputTokens - recoveryResult.cachedInputTokens -
+              recoveryResult.cacheWriteInputTokens,
+          )
+          : estimatedInputTokens,
+        cachedInputTokens: recoveryResult?.cachedInputTokens ?? 0,
+        cacheWriteInputTokens: recoveryResult?.cacheWriteInputTokens ?? 0,
+        outputTokens: recoveryResult?.outputTokens ?? MAX_OUTPUT_TOKENS,
+        toolCostUsd: recoveryResult?.toolCostUsd ?? 0,
       },
       onProviderSuccess: async (providerResult: BillableProviderResult) => {
-        return { synopsis: validateSynopsisContent(providerResult.content) };
+        return {
+          synopsis: recoveryResult?.content ??
+            validateSynopsisContent(providerResult.content),
+        };
       },
-      beforeSettlement: async (featureResult) => {
-        await checkpointSynopsis(
-          userID,
-          request,
-          fingerprint,
-          featureResult.synopsis,
-          deps,
-        );
-      },
+      beforeSettlement: recovery
+        ? undefined
+        : async (featureResult, providerResult) => {
+          await checkpointSynopsis(
+            userID,
+            request,
+            fingerprint,
+            claim!.claim_token!,
+            providerResult,
+            featureResult.synopsis,
+            deps,
+          );
+        },
     }, {
       adminClient: deps.adminClient,
-      provider: deps.provider,
+      provider: billingProvider,
       creditStore: deps.creditStore,
     });
     await completeSynopsis(
       userID,
       request.operation_id,
+      claim!.claim_token!,
       result.featureResult.synopsis,
       deps,
     );
@@ -457,6 +592,18 @@ export async function handleSynopsis(
       },
     });
   } catch (error) {
+    if (claim?.claim_status === "claimed") {
+      try {
+        await releaseSynopsisClaim(
+          userID,
+          request.operation_id,
+          claim.claim_token,
+          deps,
+        );
+      } catch (releaseError) {
+        console.error(`synopsis claim release failed: ${String(releaseError)}`);
+      }
+    }
     if (
       error instanceof BillableLLMError && error.code === "insufficient_credits"
     ) return errorResponse("insufficient_credits", error.message, 402);

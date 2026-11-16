@@ -4,6 +4,8 @@ import type {
 } from "../export-epub/_section_walker.ts";
 import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
 
+export const MAX_SYNOPSIS_CONTEXT_CHARS = 48_000;
+
 export type SynopsisMemoryRow = {
   outline_section_id: string;
   generation_output_id: string | null;
@@ -47,7 +49,12 @@ function compactItems(
   ) => item.slice(0, limit));
 }
 
-function sectionMemory(section: Section, row: SynopsisMemoryRow): string {
+function sectionMemory(
+  section: Section,
+  row: SynopsisMemoryRow,
+  summaryLimit: number,
+  includeDetails = true,
+): string {
   const characters = compactItems(row.character_deltas, 220, (item) => {
     const name = clean(item.character_name, 70);
     const changes = [
@@ -82,15 +89,180 @@ function sectionMemory(section: Section, row: SynopsisMemoryRow): string {
   const pressure = clean(ending.immediate_pressure, 200);
   const parts = [
     `Section ${section.title || section.id}: ${
-      clean(row.extracted_summary, 520)
+      clean(row.extracted_summary, summaryLimit)
     }`,
-    characters.length ? `Character changes: ${characters.join(" | ")}` : "",
-    threads.length ? `Plot threads: ${threads.join(" | ")}` : "",
-    facts.length ? `Consequences: ${facts.join(" | ")}` : "",
-    loops.length ? `Open hooks: ${loops.join(" | ")}` : "",
-    pressure ? `Ending pressure: ${pressure}` : "",
+    includeDetails && characters.length
+      ? `Changes: ${characters.map((item) => item.slice(0, 100)).join(" | ")}`
+      : "",
+    includeDetails && threads.length
+      ? `Threads: ${threads.map((item) => item.slice(0, 110)).join(" | ")}`
+      : "",
+    includeDetails && facts.length
+      ? `Consequences: ${facts.map((item) => item.slice(0, 100)).join(" | ")}`
+      : "",
+    pressure ? `Pressure: ${pressure}` : "",
   ];
   return parts.filter(Boolean).join("\n");
+}
+
+type Aggregate = {
+  characters: Map<string, Record<string, string>>;
+  threads: Map<string, Record<string, string>>;
+  facts: Map<string, Record<string, string | boolean>>;
+  loops: Map<string, Record<string, string>>;
+};
+
+function itemText(item: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = clean(item[key], 300);
+    if (value) return value;
+  }
+  return "";
+}
+
+function itemKey(item: Record<string, unknown>, fallback: string): string {
+  return (itemText(
+    item,
+    "reference",
+    "id",
+    "thread_name",
+    "description",
+    "fact",
+  ) || fallback)
+    .toLocaleLowerCase();
+}
+
+function aggregateMemory(rows: SynopsisMemoryRow[]): Aggregate {
+  const aggregate: Aggregate = {
+    characters: new Map(),
+    threads: new Map(),
+    facts: new Map(),
+    loops: new Map(),
+  };
+  for (const row of rows) {
+    for (
+      const raw of Array.isArray(row.character_deltas)
+        ? row.character_deltas
+        : []
+    ) {
+      const item = record(raw);
+      const name = itemText(item, "character_name");
+      if (!name) continue;
+      const key = name.toLocaleLowerCase();
+      const prior = aggregate.characters.get(key) ?? { name };
+      for (
+        const field of [
+          "location",
+          "knowledge_delta",
+          "relationship_delta",
+          "injuries",
+          "goals",
+          "possessions",
+          "emotional_stance",
+        ]
+      ) {
+        const value = clean(item[field], 220);
+        if (value) prior[field] = value;
+      }
+      aggregate.characters.set(key, prior);
+    }
+    for (
+      const raw of Array.isArray(row.plot_thread_deltas)
+        ? row.plot_thread_deltas
+        : []
+    ) {
+      const item = record(raw);
+      const key = itemKey(item, "thread");
+      const prior = aggregate.threads.get(key) ?? {};
+      for (const field of ["thread_name", "status", "description"]) {
+        const value = clean(item[field], 260);
+        if (value) prior[field] = value;
+      }
+      aggregate.threads.set(key, prior);
+    }
+    for (
+      const raw of Array.isArray(row.continuity_facts)
+        ? row.continuity_facts
+        : []
+    ) {
+      const item = record(raw);
+      const key = itemKey(item, "fact");
+      const prior = aggregate.facts.get(key) ?? {};
+      const fact = itemText(item, "fact", "description");
+      if (fact) prior.fact = fact;
+      prior.active = item.active !== false;
+      aggregate.facts.set(key, prior);
+    }
+    for (const raw of Array.isArray(row.open_loops) ? row.open_loops : []) {
+      const item = record(raw);
+      const key = itemKey(item, "loop");
+      const prior = aggregate.loops.get(key) ?? {};
+      const description = itemText(item, "description");
+      if (description) prior.description = description;
+      prior.status = clean(item.status, 20) || "open";
+      aggregate.loops.set(key, prior);
+    }
+  }
+  return aggregate;
+}
+
+function aggregateContext(rows: SynopsisMemoryRow[]): string {
+  const aggregate = aggregateMemory(rows);
+  const characters = [...aggregate.characters.values()].map((item) =>
+    `${item.name}: ${
+      [
+        item.relationship_delta,
+        item.knowledge_delta,
+        item.goals,
+        item.location,
+        item.emotional_stance,
+      ].filter(Boolean).join("; ")
+    }`
+  );
+  const threads = [...aggregate.threads.values()].map((item) =>
+    `${item.thread_name ?? "Thread"} (${item.status ?? "unknown"}): ${
+      item.description ?? ""
+    }`
+  );
+  const facts = [...aggregate.facts.values()].filter((item) =>
+    item.active !== false
+  ).map((item) => String(item.fact ?? ""));
+  const loops = [...aggregate.loops.values()].filter((item) =>
+    item.status !== "resolved"
+  ).map((item) => String(item.description ?? ""));
+  return [
+    "Current reconciled story state:",
+    characters.length ? `Characters: ${characters.join(" | ")}` : "",
+    threads.length ? `Plot threads: ${threads.join(" | ")}` : "",
+    facts.length ? `Active consequential facts: ${facts.join(" | ")}` : "",
+    loops.length ? `Open narrative loops: ${loops.join(" | ")}` : "",
+  ].filter(Boolean).join("\n").slice(0, 12_000);
+}
+
+function balancedExcerpt(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const each = Math.floor((limit - 80) / 3);
+  return `${text.slice(0, each)}\n[...middle excerpt omitted...]\n${
+    text.slice(
+      Math.floor(text.length / 2) - Math.floor(each / 2),
+      Math.floor(text.length / 2) + Math.ceil(each / 2),
+    )
+  }\n[...]
+${text.slice(-each)}`;
+}
+
+export function buildStandaloneSynopsisSource(outline: ProjectOutline): string {
+  const prose = outline.chapters.flatMap((chapter) => chapter.sections).map((
+    section,
+  ) => section.body.trim()).filter(Boolean).join("\n\n");
+  return [
+    `Title: ${outline.title}`,
+    outline.storyBrief?.projectSummary
+      ? `Story metadata: ${outline.storyBrief.projectSummary}`
+      : "",
+    "Standalone generated story excerpt:",
+    balancedExcerpt(prose, MAX_SYNOPSIS_CONTEXT_CHARS - 1_000),
+  ].filter(Boolean).join("\n\n");
 }
 
 export function buildSynopsisMemoryContext(
@@ -151,13 +323,32 @@ export function buildSynopsisMemoryContext(
       `${key}: ${clean(value, 700)}`
     ).filter(Boolean).join("\n")
     : "";
-  const narrative = orderedRows.map(({ section, row }) =>
-    sectionMemory(section, row)
-  ).join("\n\n");
-  return [
+  const aggregate = aggregateContext(orderedRows.map(({ row }) => row));
+  const fixed = [
     `Title: ${outline.title}`,
     brief ? `Story metadata (supporting context only):\n${brief}` : "",
     "Completed scene memory in canonical EPUB order:",
-    narrative,
   ].filter(Boolean).join("\n\n");
+  const available = Math.max(
+    1_000,
+    MAX_SYNOPSIS_CONTEXT_CHARS - fixed.length - aggregate.length - 4,
+  );
+  const summaryLimit = Math.max(
+    120,
+    Math.floor(available / Math.max(1, orderedRows.length)),
+  );
+  const narrative = orderedRows.map(({ section, row }) =>
+    sectionMemory(section, row, Math.min(420, summaryLimit))
+  ).join("\n\n");
+  const boundedNarrative = narrative.length <= available
+    ? narrative
+    : orderedRows.map(({ section, row }) =>
+      sectionMemory(
+        section,
+        row,
+        Math.max(120, Math.floor(available / orderedRows.length) - 100),
+        false,
+      )
+    ).join("\n\n");
+  return [fixed, boundedNarrative, aggregate].filter(Boolean).join("\n\n");
 }
