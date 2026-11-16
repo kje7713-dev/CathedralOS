@@ -9,7 +9,6 @@ import type { ProjectOutline } from "../export-epub/_section_walker.ts";
 import { ProviderError } from "../generate-story/_provider.ts";
 import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
 import {
-  buildStandaloneSynopsisSource,
   buildSynopsisMemoryContext,
   MAX_SYNOPSIS_CONTEXT_CHARS,
 } from "./_memory_context.ts";
@@ -155,19 +154,23 @@ function makeSynopsisDependencies(options: {
         };
       }
       if (table === "epub_synopsis_operations") {
+        let pendingUpdate: Record<string, unknown> = {};
+        const builder: any = {
+          eq: () => builder,
+          select: () => builder,
+          maybeSingle: () => {
+            operationRow = { ...operationRow, ...pendingUpdate };
+            return Promise.resolve({
+              data: { operation_id: "operation" },
+              error: null,
+            });
+          },
+        };
         return {
-          update: (row: Record<string, unknown>) => ({
-            eq: () => ({
-              eq: () => ({
-                eq: () => ({
-                  eq: () => {
-                    operationRow = { ...operationRow, ...row };
-                    return Promise.resolve({ error: null });
-                  },
-                }),
-              }),
-            }),
-          }),
+          update: (row: Record<string, unknown>) => {
+            pendingUpdate = row;
+            return builder;
+          },
         };
       }
       if (table === "generation_usage_events") {
@@ -438,45 +441,6 @@ Deno.test("memory context rejects stale or unrelated memory", () => {
   }
 });
 
-Deno.test("standalone output has a bounded source without requiring embeddings", () => {
-  const outline: ProjectOutline = {
-    id: "standalone-output",
-    title: "Standalone Story",
-    chapters: [{
-      id: "standalone-output",
-      title: "Standalone Story",
-      position: 0,
-      sections: [{
-        id: "standalone-output",
-        generation_output_id: "standalone-output",
-        title: "Standalone Story",
-        container: "chapter",
-        pov: null,
-        body: `${"BEGINNING ".repeat(5000)}${"MIDDLE ".repeat(5000)}${
-          "ENDING ".repeat(5000)
-        }`,
-        position: 0,
-        parent_id: null,
-        story_arc_beat_id: null,
-        story_arc_role: null,
-      }],
-    }],
-    parts: [],
-  };
-  const source = buildStandaloneSynopsisSource(outline);
-  if (source.length > MAX_SYNOPSIS_CONTEXT_CHARS) {
-    throw new Error("standalone context exceeded budget");
-  }
-  if (
-    !source.includes("BEGINNING") || !source.includes("MIDDLE") ||
-    !source.includes("ENDING")
-  ) {
-    throw new Error(
-      "standalone source lost beginning, middle, or ending coverage",
-    );
-  }
-});
-
 Deno.test("lifecycle aggregation removes resolved hooks and superseded facts", () => {
   const sections = [0, 1].map((index) => ({
     id: `life-section-${index}`,
@@ -590,11 +554,37 @@ for (const count of [100, 150, 200]) {
             ? "ENDING"
             : "Scene"
         } event ${index} `.repeat(20),
-        character_deltas: [],
-        plot_thread_deltas: [],
-        continuity_facts: [],
-        open_loops: [],
-        scene_ending_state: null,
+        character_deltas: [{
+          character_name: `Character ${index}`,
+          relationship_delta: "relationship change ".repeat(40),
+          knowledge_delta: "new knowledge ".repeat(40),
+          goals: "urgent goal ".repeat(40),
+          emotional_stance: "volatile stance ".repeat(40),
+        }],
+        plot_thread_deltas: [{
+          reference: `thread-${index}`,
+          thread_name: `Conflict ${index}`,
+          status: index === count - 1 ? "resolved" : "advanced",
+          description: "conflict progression ".repeat(60),
+        }],
+        continuity_facts: [{
+          reference: `fact-${index}`,
+          fact: "consequential event ".repeat(60),
+          active: index % 3 !== 0,
+        }],
+        open_loops: [{
+          reference: `loop-${index}`,
+          description: "narrative hook ".repeat(60),
+          status: index % 4 === 0 ? "resolved" : "open",
+        }],
+        scene_ending_state: {
+          immediate_pressure: "ending pressure ".repeat(60),
+          character_positions: [{
+            character: `Character ${index}`,
+            location: "location ".repeat(40),
+            immediate_state: "state ".repeat(40),
+          }],
+        },
       })),
     );
     if (context.length > MAX_SYNOPSIS_CONTEXT_CHARS) {
@@ -723,6 +713,33 @@ Deno.test("completed operation returns its persisted synopsis without provider d
   }
   if ((await second.json()).synopsis !== validSynopsis()) {
     throw new Error("replay did not return persisted synopsis");
+  }
+});
+
+Deno.test("already-paid replay bypasses credit preflight", async () => {
+  const deps = makeSynopsisDependencies({ availableCredits: 100 });
+  const first = await handleSynopsis("user", TEST_REQUEST, deps);
+  if (first.status !== 200) {
+    throw new Error(`expected initial success, got ${first.status}`);
+  }
+  deps.creditStore.loadOrDefault = () =>
+    Promise.resolve({
+      user_id: "user",
+      plan_name: "free",
+      is_pro: false,
+      monthly_credit_allowance: 0,
+      purchased_credit_balance: 0,
+      current_period_start: null,
+      current_period_end: null,
+      entitlement_source: "test",
+      updated_at: "2026-01-01",
+    });
+  const replay = await handleSynopsis("user", TEST_REQUEST, deps);
+  if (replay.status !== 200) {
+    throw new Error(`paid replay was preflight-rejected: ${replay.status}`);
+  }
+  if (deps.providerCalls() !== 1) {
+    throw new Error("paid replay dispatched provider");
   }
 });
 

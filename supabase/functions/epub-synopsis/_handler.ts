@@ -27,11 +27,12 @@ import {
   walkSections,
 } from "../export-epub/_section_walker.ts";
 import {
-  buildStandaloneSynopsisSource,
   buildSynopsisMemoryContext,
   SynopsisMemoryError,
   type SynopsisMemoryRow,
 } from "./_memory_context.ts";
+import { processEmbedSection } from "../_shared/section-embedding.ts";
+import { isCurrentMemoryPipelineVersion } from "../_shared/memory-pipeline.ts";
 
 export interface SynopsisRequest {
   action?: "estimate" | "generate";
@@ -192,7 +193,9 @@ async function checkpointSynopsis(
   synopsis: string,
   deps: SynopsisDependencies,
 ): Promise<void> {
-  const { error } = await deps.adminClient.from("epub_synopsis_operations")
+  const { data, error } = await deps.adminClient.from(
+    "epub_synopsis_operations",
+  )
     .update({
       source_fingerprint: fingerprint,
       synopsis,
@@ -203,8 +206,10 @@ async function checkpointSynopsis(
       provider_cache_write_input_tokens: providerResult.cacheWriteInputTokens,
       provider_tool_cost_usd: providerResult.toolCostUsd,
     }).eq("user_id", userID).eq("operation_id", request.operation_id)
-    .eq("claim_token", claimToken).eq("status", "pending");
+    .eq("claim_token", claimToken).eq("status", "pending")
+    .select("operation_id").maybeSingle();
   if (error) throw new Error(`synopsis checkpoint failed: ${error.message}`);
+  if (!data) throw new Error("synopsis checkpoint lost operation ownership");
 }
 
 async function completeSynopsis(
@@ -214,7 +219,9 @@ async function completeSynopsis(
   synopsis: string,
   deps: SynopsisDependencies,
 ): Promise<void> {
-  const { error } = await deps.adminClient.from("epub_synopsis_operations")
+  const { data, error } = await deps.adminClient.from(
+    "epub_synopsis_operations",
+  )
     .update({
       synopsis,
       status: "complete",
@@ -223,8 +230,10 @@ async function completeSynopsis(
     .eq("user_id", userID)
     .eq("operation_id", operationID)
     .eq("claim_token", claimToken)
-    .eq("status", "pending");
+    .eq("status", "pending")
+    .select("operation_id").maybeSingle();
   if (error) throw new Error(`synopsis completion failed: ${error.message}`);
+  if (!data) throw new Error("synopsis completion lost operation ownership");
 }
 
 async function releaseSynopsisClaim(
@@ -290,6 +299,7 @@ async function resolveExportOutline(
 
 async function resolveSynopsisSource(
   request: SynopsisRequest,
+  userID: string,
   outline: ProjectOutline,
   deps: SynopsisDependencies,
 ): Promise<string> {
@@ -313,9 +323,54 @@ async function resolveSynopsisSource(
   if (
     request.generation_output_id &&
     outputIDs.length === 1 &&
-    (!data || data.length === 0)
+    ((data?.length ?? 0) === 0 ||
+      (data ?? []).some((row: SynopsisMemoryRow) =>
+        !isCurrentMemoryPipelineVersion(row.memory_pipeline_version)
+      ))
   ) {
-    return buildStandaloneSynopsisSource(outline);
+    if (request.action === "estimate") {
+      throw new SynopsisMemoryError(
+        "memory_missing",
+        "standalone scene memory must be extracted before estimating synopsis generation",
+      );
+    }
+    const openaiKey = Deno.env.get("OPENAI_API_KEY");
+    if (!openaiKey) {
+      throw new SynopsisMemoryError(
+        "memory_missing",
+        "standalone scene memory extraction is unavailable",
+      );
+    }
+    await processEmbedSection(
+      {
+        outline_section_id: request.generation_output_id,
+        outline_id: request.generation_output_id,
+        project_id: request.project_id,
+        position: 0,
+        title: outline.title,
+        container: "chapter",
+        raw_text: outline.chapters[0]?.sections[0]?.body ?? "",
+        output_id: request.generation_output_id,
+        forceExtract: (data?.length ?? 0) > 0,
+      },
+      userID,
+      deps.adminClient,
+      openaiKey,
+    );
+    const refreshed = await deps.adminClient.from("section_embeddings")
+      .select(
+        "outline_section_id, generation_output_id, memory_pipeline_version, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state",
+      ).in("generation_output_id", outputIDs);
+    if (refreshed.error || !refreshed.data?.length) {
+      throw new SynopsisMemoryError(
+        "memory_missing",
+        "standalone scene memory was not persisted",
+      );
+    }
+    return buildSynopsisMemoryContext(
+      outline,
+      refreshed.data as SynopsisMemoryRow[],
+    );
   }
   return buildSynopsisMemoryContext(
     outline,
@@ -345,6 +400,15 @@ function errorResponse(
   });
 }
 
+function synopsisResponse(synopsis: string): Response {
+  return new Response(JSON.stringify({ synopsis }), {
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Content-Type": "application/json",
+    },
+  });
+}
+
 export async function handleSynopsis(
   userID: string,
   request: SynopsisRequest,
@@ -354,7 +418,7 @@ export async function handleSynopsis(
   let sourceText: string;
   try {
     outline = await resolveExportOutline(request, userID, deps);
-    sourceText = await resolveSynopsisSource(request, outline, deps);
+    sourceText = await resolveSynopsisSource(request, userID, outline, deps);
   } catch (error) {
     if (error instanceof StandaloneOutputSourceError) {
       return errorResponse(error.code, error.message, 404);
@@ -394,12 +458,7 @@ export async function handleSynopsis(
       claim = await claimSynopsisOperation(userID, request, fingerprint, deps);
     }
     if (claim?.claim_status === "complete" && claim.synopsis) {
-      return new Response(JSON.stringify({ synopsis: claim.synopsis }), {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Content-Type": "application/json",
-        },
-      });
+      return synopsisResponse(claim.synopsis);
     }
     if (claim?.claim_status === "in_progress") {
       return errorResponse(
@@ -407,6 +466,20 @@ export async function handleSynopsis(
         "This synopsis request is already being completed.",
         409,
       );
+    }
+    if (
+      claim?.claim_status === "ready" && claim.synopsis && claim.claim_token
+    ) {
+      if (await loadSettledSynopsis(userID, key, deps)) {
+        await completeSynopsis(
+          userID,
+          request.operation_id,
+          claim.claim_token,
+          claim.synopsis,
+          deps,
+        );
+        return synopsisResponse(claim.synopsis);
+      }
     }
   } catch (error) {
     if (
@@ -489,26 +562,6 @@ export async function handleSynopsis(
     );
   }
 
-  if (
-    claim?.claim_status === "ready" &&
-    await loadSettledSynopsis(userID, key, deps)
-  ) {
-    if (claim.synopsis && claim.claim_token) {
-      await completeSynopsis(
-        userID,
-        request.operation_id,
-        claim.claim_token,
-        claim.synopsis,
-        deps,
-      );
-      return new Response(JSON.stringify({ synopsis: claim.synopsis }), {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Content-Type": "application/json",
-        },
-      });
-    }
-  }
   const recovery = claim?.claim_status === "ready" && Boolean(claim.synopsis);
   const recoveryResult = recovery
     ? {

@@ -327,3 +327,8 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/shared_epub_publication.test.sql
+      # PR #860: atomic paid-synopsis claim, recovery, and shared settlement.
+      - name: Run EPUB synopsis operation recovery pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/epub_synopsis_operations.test.sql

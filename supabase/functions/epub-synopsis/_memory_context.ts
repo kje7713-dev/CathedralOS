@@ -100,7 +100,7 @@ function sectionMemory(
     includeDetails && facts.length
       ? `Consequences: ${facts.map((item) => item.slice(0, 100)).join(" | ")}`
       : "",
-    pressure ? `Pressure: ${pressure}` : "",
+    includeDetails && pressure ? `Pressure: ${pressure}` : "",
   ];
   return parts.filter(Boolean).join("\n");
 }
@@ -239,30 +239,19 @@ function aggregateContext(rows: SynopsisMemoryRow[]): string {
   ].filter(Boolean).join("\n").slice(0, 12_000);
 }
 
-function balancedExcerpt(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  const each = Math.floor((limit - 80) / 3);
-  return `${text.slice(0, each)}\n[...middle excerpt omitted...]\n${
-    text.slice(
-      Math.floor(text.length / 2) - Math.floor(each / 2),
-      Math.floor(text.length / 2) + Math.ceil(each / 2),
-    )
-  }\n[...]
-${text.slice(-each)}`;
-}
-
-export function buildStandaloneSynopsisSource(outline: ProjectOutline): string {
-  const prose = outline.chapters.flatMap((chapter) => chapter.sections).map((
-    section,
-  ) => section.body.trim()).filter(Boolean).join("\n\n");
-  return [
-    `Title: ${outline.title}`,
-    outline.storyBrief?.projectSummary
-      ? `Story metadata: ${outline.storyBrief.projectSummary}`
-      : "",
-    "Standalone generated story excerpt:",
-    balancedExcerpt(prose, MAX_SYNOPSIS_CONTEXT_CHARS - 1_000),
-  ].filter(Boolean).join("\n\n");
+function fitNarrative(
+  orderedRows: Array<{ section: Section; row: SynopsisMemoryRow }>,
+  budget: number,
+): string {
+  if (!orderedRows.length) return "";
+  const perSection = Math.max(
+    60,
+    Math.floor((budget - (orderedRows.length - 1) * 2) / orderedRows.length),
+  );
+  return orderedRows.map(({ section, row }) =>
+    sectionMemory(section, row, Math.max(40, perSection - 40), false)
+      .slice(0, perSection)
+  ).join("\n\n");
 }
 
 export function buildSynopsisMemoryContext(
@@ -342,13 +331,16 @@ export function buildSynopsisMemoryContext(
   ).join("\n\n");
   const boundedNarrative = narrative.length <= available
     ? narrative
-    : orderedRows.map(({ section, row }) =>
-      sectionMemory(
-        section,
-        row,
-        Math.max(120, Math.floor(available / orderedRows.length) - 100),
-        false,
-      )
-    ).join("\n\n");
-  return [fixed, boundedNarrative, aggregate].filter(Boolean).join("\n\n");
+    : fitNarrative(orderedRows, available);
+  const prefix = [fixed, boundedNarrative].filter(Boolean).join("\n\n");
+  const aggregateBudget = Math.max(
+    0,
+    MAX_SYNOPSIS_CONTEXT_CHARS - prefix.length - 2,
+  );
+  return aggregateBudget > 0
+    ? `${prefix}\n\n${aggregate.slice(0, aggregateBudget)}`.slice(
+      0,
+      MAX_SYNOPSIS_CONTEXT_CHARS,
+    )
+    : prefix.slice(0, MAX_SYNOPSIS_CONTEXT_CHARS);
 }
