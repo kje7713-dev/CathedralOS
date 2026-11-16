@@ -138,6 +138,10 @@ struct KindleExportView: View {
     @State private var showAICoverCreditConfirmation = false
     @State private var aiCoverEstimatedCharge: Int?
     @State private var isEstimatingAICover = false
+    @State private var synopsisEstimatedCharge: Int?
+    @State private var isEstimatingSynopsis = false
+    @State private var isGeneratingSynopsis = false
+    @State private var synopsisError: String?
 
     // Job state
     @State private var jobState: JobState = .idle
@@ -244,6 +248,21 @@ struct KindleExportView: View {
             } message: { msg in
                 Text(msg)
             }
+            .alert("Generate synopsis?", isPresented: Binding(
+                get: { synopsisEstimatedCharge != nil },
+                set: { if !$0 { synopsisEstimatedCharge = nil } }
+            )) {
+                Button("Generate") { Task { await generateSynopsis() } }
+                Button("Cancel", role: .cancel) { synopsisEstimatedCharge = nil }
+            } message: {
+                Text("This optional feature uses \(synopsisEstimatedCharge ?? 0) credits and writes an editable back-cover synopsis into the EPUB description.")
+            }
+            .alert("Synopsis", isPresented: Binding(
+                get: { synopsisError != nil },
+                set: { if !$0 { synopsisError = nil } }
+            )) {
+                Button("OK", role: .cancel) { synopsisError = nil }
+            } message: { Text(synopsisError ?? "") }
             .alert(
                 "Export Complete",
                 isPresented: successAlertBinding,
@@ -318,6 +337,22 @@ struct KindleExportView: View {
         return candidates
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
+    }
+
+    private var synopsisSourceText: String {
+        if let sourceOutput,
+           !sourceOutput.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return String(sourceOutput.outputText.prefix(100_000))
+        }
+        return String(project.generations
+            .filter {
+                $0.status == GenerationStatus.complete.rawValue &&
+                    !$0.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            .sorted { $0.createdAt < $1.createdAt }
+            .map { "\($0.title)\n\($0.outputText)" }
+            .joined(separator: "\n\n")
+            .prefix(100_000))
     }
 
     private var coverImageSection: some View {
@@ -439,6 +474,17 @@ struct KindleExportView: View {
                 .lineLimit(1...3)
             TextField("Synopsis", text: $bookDescription, axis: .vertical)
                 .lineLimit(2...5)
+            Button {
+                Task { await prepareSynopsisGeneration() }
+            } label: {
+                HStack {
+                    if isEstimatingSynopsis || isGeneratingSynopsis { ProgressView() }
+                    else { Image(systemName: "sparkles") }
+                    Text(isGeneratingSynopsis ? "Generating synopsis…" : "Generate story synopsis")
+                    Spacer()
+                }
+            }
+            .disabled(isEstimatingSynopsis || isGeneratingSynopsis || synopsisSourceText.isEmpty)
             if let suggestedSynopsis,
                bookDescription.trimmingCharacters(in: .whitespacesAndNewlines) != suggestedSynopsis {
                 Button("Use story synopsis") {
@@ -483,7 +529,7 @@ struct KindleExportView: View {
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             } else {
                 ForEach(previousExports) { export in
-                    HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 10) {
                         Button {
                             Task {
                                 await prepareOpen(
@@ -492,42 +538,43 @@ struct KindleExportView: View {
                                 )
                             }
                         } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(export.book_title.isEmpty ? "Untitled EPUB" : export.book_title)
-                                        .foregroundStyle(CathedralTheme.Colors.primaryText)
-                                    Text(export.author_name)
-                                        .font(CathedralTheme.Typography.caption())
-                                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                                }
-                                Spacer()
-                                if export.is_current {
-                                    Text("Current")
-                                        .font(CathedralTheme.Typography.caption())
-                                        .foregroundStyle(CathedralTheme.Colors.accent)
-                                }
-                                Image(systemName: "arrow.up.forward.app")
-                                    .foregroundStyle(CathedralTheme.Colors.accent)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(export.book_title.isEmpty ? "Untitled EPUB" : export.book_title)
+                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                Text(export.author_name)
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                                    .lineLimit(1)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(.plain)
 
-                        Button {
-                            Task {
-                                await prepareShare(
-                                    exportMetadataId: export.id,
-                                    title: export.book_title,
-                                )
+                        HStack(spacing: 8) {
+                            if export.is_current {
+                                Text("Current")
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.accent)
                             }
-                        } label: {
-                            Image(systemName: "square.and.arrow.up")
-                                .foregroundStyle(CathedralTheme.Colors.accent)
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityLabel("Share EPUB")
-                        .disabled(jobState.isInFlight)
+                            Spacer(minLength: 0)
+                            Button {
+                                Task {
+                                    await prepareShare(
+                                        exportMetadataId: export.id,
+                                        title: export.book_title,
+                                    )
+                                }
+                            } label: {
+                                Image(systemName: "square.and.arrow.up")
+                                    .foregroundStyle(CathedralTheme.Colors.accent)
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel("Share EPUB")
+                            .disabled(jobState.isInFlight)
 
-                        if PublicSharingServiceConfiguration.isEnabled {
+                            if PublicSharingServiceConfiguration.isEnabled {
                             Button {
                                 Task { await togglePublicPublication(export) }
                             } label: {
@@ -537,7 +584,7 @@ struct KindleExportView: View {
                         .buttonStyle(.bordered)
                             .accessibilityLabel(export.is_publicly_shared ? "Unpublish EPUB" : "Share EPUB publicly")
                             .disabled(jobState.isInFlight || publishingExportID != nil)
-                        }
+                            }
 
                         if !export.isStandaloneGenerationOutput {
                             Button {
@@ -563,6 +610,7 @@ struct KindleExportView: View {
                         .buttonStyle(.bordered)
                         .accessibilityLabel("Delete EPUB")
                         .disabled(jobState.isInFlight)
+                        }
                     }
                 }
             }
@@ -869,6 +917,56 @@ struct KindleExportView: View {
             Task { @MainActor in
                 await performKickoffExport()
             }
+        }
+    }
+
+    private func prepareSynopsisGeneration() async {
+        guard !synopsisSourceText.isEmpty else { return }
+        guard let service else {
+            synopsisError = "Backend export service is not configured."
+            return
+        }
+        guard let token = await currentAccessToken() else {
+            synopsisError = KindleExportError.notAuthenticated.errorDescription
+            return
+        }
+        isEstimatingSynopsis = true
+        defer { isEstimatingSynopsis = false }
+        do {
+            let estimate = try await service.estimateStorySynopsis(
+                projectID: project.id.uuidString,
+                title: bookTitle,
+                sourceText: synopsisSourceText,
+                userAccessToken: token,
+            )
+            guard estimate.allowed else {
+                synopsisError = "Not enough credits. Need \(estimate.estimatedCredits.formatted(.number.precision(.fractionLength(0...2)))) but have \(estimate.availableCredits.formatted(.number.precision(.fractionLength(0...2))))."
+                return
+            }
+            synopsisEstimatedCharge = Int(ceil(estimate.estimatedCredits))
+        } catch {
+            synopsisError = error.localizedDescription
+        }
+    }
+
+    private func generateSynopsis() async {
+        synopsisEstimatedCharge = nil
+        guard let service else { return }
+        guard let token = await currentAccessToken() else {
+            synopsisError = KindleExportError.notAuthenticated.errorDescription
+            return
+        }
+        isGeneratingSynopsis = true
+        defer { isGeneratingSynopsis = false }
+        do {
+            bookDescription = try await service.generateStorySynopsis(
+                projectID: project.id.uuidString,
+                title: bookTitle,
+                sourceText: synopsisSourceText,
+                userAccessToken: token,
+            )
+        } catch {
+            synopsisError = error.localizedDescription
         }
     }
 
