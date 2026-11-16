@@ -26,6 +26,11 @@ import {
   type ProjectOutline,
   walkSections,
 } from "../export-epub/_section_walker.ts";
+import {
+  buildSynopsisMemoryContext,
+  SynopsisMemoryError,
+  type SynopsisMemoryRow,
+} from "./_memory_context.ts";
 
 export interface SynopsisRequest {
   action?: "estimate" | "generate";
@@ -77,35 +82,6 @@ export function validateSynopsisRequest(body: unknown): SynopsisRequest {
   };
 }
 
-export function buildSynopsisSource(outline: ProjectOutline): string {
-  const brief = outline.storyBrief
-    ? Object.entries(outline.storyBrief)
-      .filter(([, value]) => Boolean(value?.trim()))
-      .map(([key, value]) => `${key}: ${value}`)
-      .join("\n")
-    : "";
-  const chapters = [...outline.chapters]
-    .sort((a, b) => a.position - b.position)
-    .map((chapter) => {
-      const sections = [...chapter.sections]
-        .sort((a, b) => a.position - b.position)
-        .map((section) => {
-          const summary = section.title ? `Section: ${section.title}\n` : "";
-          return `${summary}${section.body.trim()}`.trim();
-        })
-        .filter(Boolean)
-        .join("\n\n");
-      return `Chapter: ${chapter.title}\n${sections}`.trim();
-    })
-    .filter(Boolean)
-    .join("\n\n");
-  return [
-    `Title: ${outline.title}`,
-    brief ? `Story metadata:\n${brief}` : "",
-    chapters ? `Canonical exported narrative:\n${chapters}` : "",
-  ].filter(Boolean).join("\n\n");
-}
-
 function buildMessages(
   request: SynopsisRequest,
   sourceText: string,
@@ -151,6 +127,85 @@ async function idempotencyKey(
   ).join("");
 }
 
+async function sourceFingerprint(
+  sourceText: string,
+  request: SynopsisRequest,
+): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(
+      `${request.project_id}|${request.title}|${sourceText}`,
+    ),
+  );
+  return Array.from(new Uint8Array(digest)).map((byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+}
+
+async function loadCompletedSynopsis(
+  userID: string,
+  request: SynopsisRequest,
+  fingerprint: string,
+  deps: SynopsisDependencies,
+): Promise<string | null> {
+  const { data, error } = await deps.adminClient
+    .from("epub_synopsis_operations")
+    .select("project_id, title, source_fingerprint, synopsis, status")
+    .eq("user_id", userID)
+    .eq("operation_id", request.operation_id)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`synopsis operation lookup failed: ${error.message}`);
+  }
+  if (!data || data.status !== "complete") return null;
+  if (
+    data.project_id !== request.project_id || data.title !== request.title ||
+    data.source_fingerprint !== fingerprint
+  ) {
+    throw new Error(
+      "synopsis operation identity was reused for different source",
+    );
+  }
+  return typeof data.synopsis === "string" ? data.synopsis : null;
+}
+
+async function checkpointSynopsis(
+  userID: string,
+  request: SynopsisRequest,
+  fingerprint: string,
+  synopsis: string,
+  deps: SynopsisDependencies,
+): Promise<void> {
+  const { error } = await deps.adminClient.from("epub_synopsis_operations")
+    .upsert({
+      user_id: userID,
+      operation_id: request.operation_id,
+      project_id: request.project_id,
+      title: request.title,
+      source_fingerprint: fingerprint,
+      synopsis,
+      status: "pending",
+    }, { onConflict: "user_id,operation_id" });
+  if (error) throw new Error(`synopsis checkpoint failed: ${error.message}`);
+}
+
+async function completeSynopsis(
+  userID: string,
+  operationID: string,
+  synopsis: string,
+  deps: SynopsisDependencies,
+): Promise<void> {
+  const { error } = await deps.adminClient.from("epub_synopsis_operations")
+    .update({
+      synopsis,
+      status: "complete",
+      completed_at: new Date().toISOString(),
+    })
+    .eq("user_id", userID)
+    .eq("operation_id", operationID);
+  if (error) throw new Error(`synopsis completion failed: ${error.message}`);
+}
+
 async function resolveExportOutline(
   request: SynopsisRequest,
   userID: string,
@@ -181,6 +236,33 @@ async function resolveExportOutline(
   );
 }
 
+async function resolveSynopsisSource(
+  outline: ProjectOutline,
+  deps: SynopsisDependencies,
+): Promise<string> {
+  const outputIDs = outline.chapters.flatMap((chapter) => chapter.sections)
+    .filter((section) => section.body.trim())
+    .map((section) => section.generation_output_id)
+    .filter((id): id is string => Boolean(id));
+  if (!outputIDs.length) {
+    throw new SynopsisMemoryError(
+      "memory_missing",
+      "export has no generated output lineage",
+    );
+  }
+  const { data, error } = await deps.adminClient
+    .from("section_embeddings")
+    .select(
+      "outline_section_id, generation_output_id, memory_pipeline_version, extracted_summary, character_deltas, plot_thread_deltas, continuity_facts, open_loops, scene_ending_state",
+    )
+    .in("generation_output_id", outputIDs);
+  if (error) throw new SynopsisMemoryError("memory_missing", error.message);
+  return buildSynopsisMemoryContext(
+    outline,
+    (data ?? []) as SynopsisMemoryRow[],
+  );
+}
+
 async function resolveModel(
   deps: SynopsisDependencies,
 ): Promise<GenerationModel | null> {
@@ -208,18 +290,11 @@ export async function handleSynopsis(
   request: SynopsisRequest,
   deps: SynopsisDependencies,
 ): Promise<Response> {
-  const model = await resolveModel(deps);
-  if (!model || !isBillableGenerationModel(model)) {
-    return errorResponse(
-      "model_unavailable_or_unpriced",
-      "The synopsis model is unavailable or has unverified pricing.",
-      400,
-    );
-  }
-
   let outline: ProjectOutline;
+  let sourceText: string;
   try {
     outline = await resolveExportOutline(request, userID, deps);
+    sourceText = await resolveSynopsisSource(outline, deps);
   } catch (error) {
     if (error instanceof StandaloneOutputSourceError) {
       return errorResponse(error.code, error.message, 404);
@@ -231,18 +306,60 @@ export async function handleSynopsis(
         404,
       );
     }
+    if (error instanceof SynopsisMemoryError) {
+      return errorResponse(
+        error.code,
+        "Structured scene memory for the exported story is unavailable or stale. Regenerate the affected story sections before creating a synopsis.",
+        422,
+      );
+    }
     return errorResponse(
       "source_selection_failed",
       "The exported story content could not be selected.",
       422,
     );
   }
-  const sourceText = buildSynopsisSource(outline);
   if (!sourceText.trim()) {
     return errorResponse(
       "source_selection_failed",
       "The exported story has no generated content.",
       422,
+    );
+  }
+  const fingerprint = await sourceFingerprint(sourceText, request);
+  try {
+    const completed = await loadCompletedSynopsis(
+      userID,
+      request,
+      fingerprint,
+      deps,
+    );
+    if (completed !== null && request.action === "generate") {
+      return new Response(JSON.stringify({ synopsis: completed }), {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Content-Type": "application/json",
+        },
+      });
+    }
+  } catch (error) {
+    if (
+      error instanceof Error && error.message.includes("identity was reused")
+    ) {
+      return errorResponse("operation_conflict", error.message, 409);
+    }
+    return errorResponse(
+      "source_selection_failed",
+      "The synopsis operation could not be loaded.",
+      422,
+    );
+  }
+  const model = await resolveModel(deps);
+  if (!model || !isBillableGenerationModel(model)) {
+    return errorResponse(
+      "model_unavailable_or_unpriced",
+      "The synopsis model is unavailable or has unverified pricing.",
+      400,
     );
   }
   const messages = buildMessages(request, sourceText);
@@ -313,11 +430,26 @@ export async function handleSynopsis(
       onProviderSuccess: async (providerResult: BillableProviderResult) => {
         return { synopsis: validateSynopsisContent(providerResult.content) };
       },
+      beforeSettlement: async (featureResult) => {
+        await checkpointSynopsis(
+          userID,
+          request,
+          fingerprint,
+          featureResult.synopsis,
+          deps,
+        );
+      },
     }, {
       adminClient: deps.adminClient,
       provider: deps.provider,
       creditStore: deps.creditStore,
     });
+    await completeSynopsis(
+      userID,
+      request.operation_id,
+      result.featureResult.synopsis,
+      deps,
+    );
     return new Response(JSON.stringify(result.featureResult), {
       headers: {
         "Access-Control-Allow-Origin": "*",

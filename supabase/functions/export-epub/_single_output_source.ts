@@ -100,6 +100,7 @@ export function makeStandaloneOutputOutline(
   const body = String(output.output_text ?? "");
   const section: Section = {
     id: output.id,
+    generation_output_id: output.id,
     title: selectedTitle,
     container: "chapter",
     pov: null,

@@ -1085,6 +1085,7 @@ Deno.test("walker: maps out.output_text to section.body in the in-memory EPUB mo
     }] },
   }]);
   mock.setResponse("generation_outputs", [{
+    id: "output-1",
     outline_section_id: secId.toLowerCase(),
     output_text: "the actual generated body content for the EPUB",
     created_at: "2026-08-25T12:00:00Z",
@@ -1094,6 +1095,9 @@ Deno.test("walker: maps out.output_text to section.body in the in-memory EPUB mo
   const sec = outline.chapters[0].sections[0];
   if (sec.body !== "the actual generated body content for the EPUB") {
     throw new Error(`expected body from output_text, got: ${sec.body}`);
+  }
+  if (sec.generation_output_id !== "output-1") {
+    throw new Error(`expected selected generation output lineage, got: ${sec.generation_output_id}`);
   }
 });
 

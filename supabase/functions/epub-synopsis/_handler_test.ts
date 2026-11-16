@@ -1,6 +1,5 @@
 import {
   buildMessages,
-  buildSynopsisSource,
   handleSynopsis,
   idempotencyKey,
   validateSynopsisContent,
@@ -8,6 +7,8 @@ import {
 } from "./_handler.ts";
 import type { ProjectOutline } from "../export-epub/_section_walker.ts";
 import { ProviderError } from "../generate-story/_provider.ts";
+import { CURRENT_MEMORY_PIPELINE_VERSION } from "../_shared/memory-pipeline.ts";
+import { buildSynopsisMemoryContext } from "./_memory_context.ts";
 
 const TEST_REQUEST = {
   action: "generate" as const,
@@ -26,6 +27,8 @@ function makeSynopsisDependencies(options: {
   availableCredits: number;
   providerError?: Error;
 }) {
+  let operationRow: Record<string, unknown> | null = null;
+  let providerCalls = 0;
   const model = {
     id: "model-id",
     provider: "openai",
@@ -96,12 +99,72 @@ function makeSynopsisDependencies(options: {
               order: () =>
                 Promise.resolve({
                   data: [{
+                    id: "output-section",
                     outline_section_id: "section",
                     output_text: "Canonical prose",
                     created_at: "2026-01-01",
                   }],
                   error: null,
                 }),
+            }),
+          }),
+        };
+      }
+      if (table === "section_embeddings") {
+        return {
+          select: () => ({
+            in: () =>
+              Promise.resolve({
+                data: [{
+                  outline_section_id: "section",
+                  generation_output_id: "output-section",
+                  memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
+                  extracted_summary:
+                    "The orchard keeper discovers the secret and chooses to protect it.",
+                  character_deltas: [{
+                    character_name: "Mara",
+                    relationship_delta: "trusts the heir",
+                  }],
+                  plot_thread_deltas: [{
+                    thread_name: "The orchard secret",
+                    status: "advanced",
+                    description: "The hidden inheritance draws danger.",
+                  }],
+                  continuity_facts: [{
+                    fact: "The hidden key belongs to Mara.",
+                    active: true,
+                  }],
+                  open_loops: [{
+                    description: "Who sent the warning?",
+                    status: "open",
+                  }],
+                  scene_ending_state: {
+                    immediate_pressure: "Rivals arrive at the gate.",
+                  },
+                }],
+                error: null,
+              }),
+          }),
+        };
+      }
+      if (table === "epub_synopsis_operations") {
+        const chain = {
+          eq: () => chain,
+          maybeSingle: () =>
+            Promise.resolve({ data: operationRow, error: null }),
+        };
+        return {
+          select: () => chain,
+          upsert: (row: Record<string, unknown>) => {
+            operationRow = { ...operationRow, ...row };
+            return Promise.resolve({ error: null });
+          },
+          update: (row: Record<string, unknown>) => ({
+            eq: () => ({
+              eq: () => {
+                operationRow = { ...operationRow, ...row };
+                return Promise.resolve({ error: null });
+              },
             }),
           }),
         };
@@ -137,19 +200,20 @@ function makeSynopsisDependencies(options: {
     },
   };
   const provider = {
-    complete: () =>
-      options.providerError
-        ? Promise.reject(options.providerError)
-        : Promise.resolve({
-          content: validSynopsis(),
-          modelName: "gpt-test",
-          inputTokens: 100,
-          outputTokens: 100,
-          cachedInputTokens: 0,
-          cacheWriteInputTokens: 0,
-          finishReason: "stop",
-          toolCostUsd: 0,
-        }),
+    complete:
+      () => (providerCalls++,
+        options.providerError
+          ? Promise.reject(options.providerError)
+          : Promise.resolve({
+            content: validSynopsis(),
+            modelName: "gpt-test",
+            inputTokens: 100,
+            outputTokens: 100,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            finishReason: "stop",
+            toolCostUsd: 0,
+          })),
   };
   const creditStore = {
     loadOrDefault: () =>
@@ -171,6 +235,7 @@ function makeSynopsisDependencies(options: {
     provider,
     creditStore,
     defaultModel: "gpt-test",
+    providerCalls: () => providerCalls,
   } as any;
 }
 
@@ -207,60 +272,109 @@ Deno.test("synopsis prompt requests bounded, spoiler-free back-cover copy", () =
   }
 });
 
-Deno.test("canonical synopsis source preserves complete ordered export content", () => {
+Deno.test("memory context follows export lineage and preserves lifecycle fields", () => {
   const outline: ProjectOutline = {
     id: "outline",
-    title: "The Glass Orchard",
-    storyBrief: {
-      projectSummary: "An orchard keeper inherits a dangerous secret.",
-    },
-    parts: [],
-    chapters: [
-      {
-        id: "chapter-2",
-        title: "Second",
-        position: 1,
-        sections: [{
-          id: "section-2",
-          title: "Aftermath",
-          container: "scene",
-          pov: null,
-          body: "THE SECOND HALF OF THE STORY",
-          position: 0,
-          parent_id: null,
-          story_arc_beat_id: null,
-          story_arc_role: null,
-        }],
-      },
-      {
-        id: "chapter-1",
-        title: "First",
+    title: "Memory Orchard",
+    chapters: [{
+      id: "chapter",
+      title: "Chapter",
+      position: 0,
+      sections: [{
+        id: "section",
+        generation_output_id: "output-a",
+        title: "Climax",
+        container: "scene",
+        pov: null,
+        body: "selected prose",
         position: 0,
-        sections: [{
-          id: "section-1",
-          title: "Beginning",
-          container: "scene",
-          pov: null,
-          body: "THE COMPLETE OPENING AND CENTRAL CONFLICT",
-          position: 0,
-          parent_id: null,
-          story_arc_beat_id: null,
-          story_arc_role: null,
-        }],
-      },
-    ],
+        parent_id: null,
+        story_arc_beat_id: null,
+        story_arc_role: null,
+      }],
+    }],
+    parts: [],
+    storyBrief: { setting: "A glass orchard" },
   };
-  const source = buildSynopsisSource(outline);
-  if (
-    source.indexOf("THE COMPLETE OPENING") > source.indexOf("THE SECOND HALF")
+  const context = buildSynopsisMemoryContext(outline, [{
+    outline_section_id: "section",
+    generation_output_id: "output-a",
+    memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
+    extracted_summary: "The selected section changes the central conflict.",
+    character_deltas: [{
+      character_name: "Mara",
+      relationship_delta: "chooses trust",
+    }],
+    plot_thread_deltas: [{
+      thread_name: "The secret",
+      status: "resolved",
+      description: "The secret is revealed.",
+    }],
+    continuity_facts: [{ fact: "The key is destroyed.", active: true }],
+    open_loops: [{ description: "An unresolved warning", status: "open" }],
+    scene_ending_state: { immediate_pressure: "The gate breaks." },
+  }]);
+  if (!context.includes("The selected section changes")) {
+    throw new Error("summary missing");
+  }
+  if (!context.includes("resolved") || !context.includes("The gate breaks")) {
+    throw new Error("structured memory missing");
+  }
+});
+
+Deno.test("memory context rejects stale or unrelated memory", () => {
+  const outline: ProjectOutline = {
+    id: "outline",
+    title: "Memory Orchard",
+    chapters: [{
+      id: "chapter",
+      title: "Chapter",
+      position: 0,
+      sections: [{
+        id: "section",
+        generation_output_id: "output-a",
+        title: "Opening",
+        container: "scene",
+        pov: null,
+        body: "selected prose",
+        position: 0,
+        parent_id: null,
+        story_arc_beat_id: null,
+        story_arc_role: null,
+      }],
+    }],
+    parts: [],
+  };
+  for (
+    const row of [
+      {
+        generation_output_id: "other",
+        memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
+      },
+      {
+        generation_output_id: "output-a",
+        memory_pipeline_version: "legacy-v1",
+      },
+    ]
   ) {
-    throw new Error("chapters were not ordered canonically");
-  }
-  if (!source.includes("THE SECOND HALF OF THE STORY")) {
-    throw new Error("later canonical content was omitted");
-  }
-  if (!source.includes("An orchard keeper inherits")) {
-    throw new Error("story metadata was omitted");
+    try {
+      buildSynopsisMemoryContext(outline, [{
+        outline_section_id: "section",
+        generation_output_id: row.generation_output_id,
+        memory_pipeline_version: row.memory_pipeline_version,
+        extracted_summary: "old",
+        character_deltas: [],
+        plot_thread_deltas: [],
+        continuity_facts: [],
+        open_loops: [],
+        scene_ending_state: null,
+      }]);
+      throw new Error("expected memory rejection");
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("memory")) {
+        throw error;
+      }
+    }
   }
 });
 
@@ -357,5 +471,24 @@ Deno.test("handler settles a successful synopsis through shared billing", async 
   const body = await response.json();
   if (body.synopsis !== validSynopsis()) {
     throw new Error("synopsis content was not returned");
+  }
+});
+
+Deno.test("completed operation returns its persisted synopsis without provider dispatch", async () => {
+  const deps = makeSynopsisDependencies({ availableCredits: 100 });
+  const first = await handleSynopsis("user", TEST_REQUEST, deps);
+  if (first.status !== 200) {
+    throw new Error(`expected first success, got ${first.status}`);
+  }
+  const callsAfterFirst = deps.providerCalls();
+  const second = await handleSynopsis("user", TEST_REQUEST, deps);
+  if (second.status !== 200) {
+    throw new Error(`expected replay success, got ${second.status}`);
+  }
+  if (deps.providerCalls() !== callsAfterFirst) {
+    throw new Error("completed replay dispatched provider");
+  }
+  if ((await second.json()).synopsis !== validSynopsis()) {
+    throw new Error("replay did not return persisted synopsis");
   }
 });
