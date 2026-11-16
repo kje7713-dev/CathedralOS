@@ -2327,8 +2327,12 @@ struct ActiveRunBanner: View {
                     ProgressView()
                         .controlSize(.small)
                 } else {
-                    Image(systemName: isCompleted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                        .foregroundStyle(isCompleted ? Color.green : Color.red)
+                    Image(systemName: isCompleted
+                        ? "checkmark.circle.fill"
+                        : isPaused
+                        ? "pause.circle.fill"
+                        : "exclamationmark.circle.fill")
+                        .foregroundStyle(isCompleted ? Color.green : isPaused ? CathedralTheme.Colors.accent : Color.red)
                         .font(.title3)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -2372,7 +2376,7 @@ struct ActiveRunBanner: View {
     }
 
     private var isPaused: Bool {
-        status.isPausedForInsufficientCredits
+        status.isPaused
     }
 
     private var isFailed: Bool {
@@ -2399,7 +2403,12 @@ struct ActiveRunBanner: View {
         let done = status.sections_done ?? 0
         let total = status.sections_total ?? 0
         let spend = status.actualCreditsText
-        if isPaused { return "\(done) of \(total) sections · \(spend) credits used · More credits needed" }
+        if isPaused {
+            let reason = status.isPausedForInsufficientCredits
+                ? "More credits needed"
+                : "Paused after a temporary timeout"
+            return "\(done) of \(total) sections · \(spend) credits used · \(reason)"
+        }
         if isCompleted { return "\(done) sections generated · Final cost: \(spend) credits" }
         if isFailed {
             let message = status.userFacingError ?? "Generation failed. Please try again."

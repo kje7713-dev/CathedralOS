@@ -125,7 +125,6 @@ import {
   repairStoryArcMacroStructure,
   arcRoleContract,
   buildExpansionResponseSchema,
-  validateNovelLeafContainers,
   NOVEL_LEAF_CONTAINERS,
   intimacyRequirement,
   intimacyPlanningDirective,
@@ -483,6 +482,23 @@ Deno.test("novel container planning avoids 29-chapter word-budget shortcut witho
   assertEquals(outlining.includes("For a new novel, prefer the chapter container"), false);
   assertStringIncludes(allocation, "115,000");
   assertStringIncludes(allocation, "125,000");
+});
+
+Deno.test("novel response options stop at chapter", () => {
+  const schema: any = buildSuggestionResponseSchema(
+    [{ id: "beat-1" }],
+    new Map([["beat-1", { minSections: 1, rationale: "coverage" }]]),
+    [],
+    "",
+    "novel",
+  );
+  assertEquals(schema.properties.beats.properties["beat-1"].items.properties.container.enum, [
+    "scene",
+    "developedScene",
+    "setPiece",
+    "sceneSequence",
+    "chapter",
+  ]);
 });
 
 Deno.test("existing accepted sections satisfy obligation coverage", () => {
@@ -9031,9 +9047,6 @@ Deno.test("whole-arc intimacy evidence is accepted on eligible beat sections", (
 
 Deno.test("novel scale uses the preferred 115,000-word floor and rejects tiny new leaves", () => {
   assertEquals(NOVEL_LEAF_CONTAINERS, ["scene", "developedScene", "setPiece", "sceneSequence", "chapter"]);
-  assertThrows(() => validateNovelLeafContainers([{ container: "moment" }]));
-  assertThrows(() => validateNovelLeafContainers([{ container: "vignette" }]));
-  validateNovelLeafContainers([{ container: "moment" }], "shortStory");
   assertEquals(true, true);
   assertEquals(needsNovelExpansion(Array.from({ length: 54 }, () => ({ container: "scene" }))), true);
 });

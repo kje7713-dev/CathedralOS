@@ -13,14 +13,18 @@ import {
   generationReadinessFailures,
   handleProviderBillingUnavailableTerminal,
   handleRetryableGenerationFailure,
+  isPauseworthyGenerationResponse,
   isRetryableGenerationResponse,
   isInsufficientCreditsError,
   loadRunOutline,
   parseEmbedSectionError,
   providerBillingTerminalState,
   requireRunOutlineRecipe,
+  resetResumableRunSections,
   RunOutlineOutlineError,
   runOutlineSectionLifecycle,
+  markTransientTimeoutSection,
+  TRANSIENT_TIMEOUT_MESSAGE,
 } from "./index.ts";
 import {
   buildGenerateStoryRequest,
@@ -437,9 +441,9 @@ Deno.test("failed Run All checkpoints resume the same run and preserve completed
     start,
     source.indexOf("async function releaseRunLease(", start),
   );
-  assertStringIncludes(resume, 'if (run.status === "failed")');
-  assertStringIncludes(resume, 'section.status === "failed"');
-  assertStringIncludes(resume, 'status: "pending"');
+  assertStringIncludes(resume, 'if (run.status === "failed" || run.status === "paused")');
+  assertStringIncludes(resume, "resetResumableRunSections(sections)");
+  assertStringIncludes(resume, 'status: "running"');
   assertStringIncludes(resume, 'sections: resumedSections');
   assertStringIncludes(resume, "queueContinuation(runId)");
   assertEquals(resume.includes("runOutline(runId, adminClient)"), false);
@@ -507,6 +511,15 @@ Deno.test("Cloudflare 520 responses are retryable generation failures", () => {
     isRetryableGenerationResponse(503, "WORKER_RESOURCE_LIMIT"),
     true,
   );
+});
+
+Deno.test("idle timeout pauses the durable run instead of auto-retrying", () => {
+  assertEquals(
+    isPauseworthyGenerationResponse(504, '{"code":"IDLE_TIMEOUT"}'),
+    true,
+  );
+  assertEquals(isPauseworthyGenerationResponse(503, "IDLE_TIMEOUT"), false);
+  assertEquals(isRetryableGenerationResponse(504, "IDLE_TIMEOUT"), false);
 });
 
 Deno.test("fractional generation request charges use a numeric database column", async () => {
@@ -599,7 +612,7 @@ Deno.test("uncached project launch discovers the most complete resumable checkpo
     Deno.readTextFile("./CathedralOSApp/Services/DataDurabilityCoordinator.swift"),
   ]);
   assertStringIncludes(backend, 'if (!runId && !outlineID)');
-  assertStringIncludes(backend, '.in("status", ["failed", "paused_insufficient_credits"])');
+  assertStringIncludes(backend, '.in("status", ["failed", "paused_insufficient_credits", "paused"])');
   assertStringIncludes(backend, "completed(right) - completed(left)");
   assertStringIncludes(service, 'URLQueryItem(name: "outline_id", value: outlineID)');
   assertStringIncludes(service, "func recoverableStatus(outlineID: String)");
@@ -785,7 +798,10 @@ Deno.test("credit shortage pauses a resumable run and preserves the exact prose 
   const pauseStart = source.indexOf(
     "async function pauseRunInsufficientCredits(",
   );
-  const pauseEnd = source.indexOf("class RetryableMemoryError", pauseStart);
+  const pauseEnd = source.indexOf(
+    "async function pauseRunTransientGenerationFailure(",
+    pauseStart,
+  );
   const pause = source.slice(pauseStart, pauseEnd);
   assertStringIncludes(pause, 'status: "paused_insufficient_credits"');
   assertStringIncludes(pause, 'status: "pending"');
@@ -794,6 +810,7 @@ Deno.test("credit shortage pauses a resumable run and preserves the exact prose 
   assertStringIncludes(source, "outputID: result.output_id");
   assertStringIncludes(source, "Resume skips whole-run estimate/preflight");
   assertStringIncludes(source, 'run.status === "paused_insufficient_credits"');
+  assertStringIncludes(source, 'run.status === "failed" || run.status === "paused"');
   assertStringIncludes(source, "queueContinuation(runId)");
   assertEquals(pause.includes('status: "failed"'), false);
 });
@@ -834,6 +851,20 @@ Deno.test("paused status is included only in the new forward migration", async (
     "supabase/migrations/20260901120000_durable_run_outline_estimate_preflight.sql",
   );
   assertEquals(historical.includes("paused_insufficient_credits"), false);
+});
+
+Deno.test("transient timeout pause is a resumable non-red state", async () => {
+  const source = await Deno.readTextFile("supabase/functions/run-outline/index.ts");
+  const migration = await Deno.readTextFile(
+    "supabase/migrations/20261115224227_pause_run_on_transient_timeout.sql",
+  );
+  assertStringIncludes(source, 'status: "paused"');
+  assertStringIncludes(source, "pauseRunTransientGenerationFailure");
+  assertStringIncludes(migration, "'paused'))");
+  const service = await Deno.readTextFile("CathedralOSApp/Services/RunOutlineService.swift");
+  const banner = await Deno.readTextFile("CathedralOSApp/Features/Projects/OutlineSectionsRegionView.swift");
+  assertStringIncludes(service, 'status == "paused"');
+  assertStringIncludes(banner, "status.isPaused");
 });
 
 Deno.test("Run All iOS presentation treats paused as resumable and shows actual spend", async () => {
@@ -947,6 +978,94 @@ Deno.test("Run All executable lifecycle pauses after prose settlement and resume
   assertEquals(state.creditsActual, 2.75);
   assertEquals(providerCalls, 1);
   assertEquals(proseBillingCalls, 1);
+  assertEquals(memoryCalls, 2);
+});
+
+Deno.test("Run All 504 recovery reuses late output, clears stale errors, and reconciles ledger charges", async () => {
+  const completedOutput = "output-completed";
+  const lateOutput = "output-late";
+  const remainingOutput = "output-remaining";
+  const state = {
+    runStatus: "running",
+    sections: [
+      { id: "section-completed", status: "completed", output_id: completedOutput, error: null },
+      { id: "section-late", status: "pending", output_id: null, error: null },
+      { id: "section-remaining", status: "pending", output_id: null, error: null },
+    ] as Array<Record<string, unknown>>,
+    persistedOutputs: new Map([[completedOutput, "complete"]]),
+    ledgerCharges: new Map([[completedOutput, 1.25]]),
+  };
+  let providerCalls = 0;
+  let memoryCalls = 0;
+
+  // The provider times out after persistence and settlement have completed;
+  // this is the real failure boundary that loses the response to run-outline.
+  assertEquals(isPauseworthyGenerationResponse(504, '{"code":"IDLE_TIMEOUT"}'), true);
+  try {
+    await runOutlineSectionLifecycle({
+      generate: async () => {
+        providerCalls++;
+        state.persistedOutputs.set(lateOutput, "complete");
+        state.ledgerCharges.set(lateOutput, 2.75);
+        throw new Error("generate-story returned 504: IDLE_TIMEOUT");
+      },
+      persistPendingOutput: async () => {},
+      ensureMemory: async () => {},
+      persistCompleted: async () => {},
+      isInsufficientCredits: () => false,
+    });
+  } catch (error) {
+    assertStringIncludes(String(error), "504");
+  }
+  state.sections[1] = markTransientTimeoutSection(state.sections[1]);
+  state.runStatus = "paused";
+  assertEquals(state.sections[1].error, TRANSIENT_TIMEOUT_MESSAGE);
+
+  // Resume clears the stale timeout message on every unfinished section and
+  // keeps completed section/output/billing state byte-for-byte intact.
+  state.sections = resetResumableRunSections(state.sections);
+  state.runStatus = "running";
+  assertEquals(state.sections[0].status, "completed");
+  assertEquals(state.sections[0].output_id, completedOutput);
+  assertEquals(state.sections[1].error, null);
+  assertEquals(state.sections[2].error, null);
+
+  const finishSection = async (section: Record<string, unknown>, outputID: string) => {
+    const persisted = state.persistedOutputs.has(outputID);
+    const result = await runOutlineSectionLifecycle({
+      existingOutputID: persisted ? outputID : null,
+      generate: async () => {
+        providerCalls++;
+        state.persistedOutputs.set(outputID, "complete");
+        state.ledgerCharges.set(outputID, 2.75);
+        return { outputID, status: "complete", wasTruncated: false };
+      },
+      persistPendingOutput: async () => {},
+      ensureMemory: async (id) => {
+        memoryCalls++;
+        assertEquals(state.persistedOutputs.get(id), "complete");
+      },
+      persistCompleted: async (id) => {
+        section.status = "completed";
+        section.output_id = id;
+        section.error = null;
+      },
+      isInsufficientCredits: () => false,
+    });
+    assertEquals(result.outputID, outputID);
+  };
+
+  await finishSection(state.sections[1], lateOutput);
+  await finishSection(state.sections[2], remainingOutput);
+  state.runStatus = "completed";
+  const actual = [...state.ledgerCharges.values()].reduce((sum, charge) => sum + charge, 0);
+
+  assertEquals(state.runStatus, "completed");
+  assertEquals(state.sections.every((section) => section.status === "completed"), true);
+  assertEquals(state.sections.some((section) => section.error), false);
+  assertEquals(actual, 6.75);
+  assertEquals(providerCalls, 2); // timed-out late output + remaining section only
+  assertEquals(new Set(state.sections.map((section) => section.output_id)).size, 3);
   assertEquals(memoryCalls, 2);
 });
 

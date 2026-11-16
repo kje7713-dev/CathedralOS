@@ -115,7 +115,7 @@ Deno.test("embed-section adapter maps typed shared results and errors", async ()
   );
   assertEquals(source.includes("SectionEmbeddingError"), true);
   assertEquals(source.includes("JSON.stringify(result)"), true);
-  assertEquals(source.includes("errorResponse(err.code, err.message"), true);
+  assertEquals(source.includes("errorResponse(error.code, error.message"), true);
 });
 
 const BEAT_A = "cca975fc-e13a-4ade-8344-2470a8c2b3a0";
