@@ -1097,6 +1097,58 @@ Deno.test("walker: maps out.output_text to section.body in the in-memory EPUB mo
   }
 });
 
+Deno.test("walker: ignores newer draft output and keeps the latest completed prose", async () => {
+  const mock = new MockSupabase();
+  const snapshotProjectId = "00000000-0000-0000-0000-000000000000";
+  mock.setResponse("project_snapshots", [{
+    snapshot_json: {
+      outlines: [{
+        id: "o",
+        name: "n",
+        localProjectID: "ios-uuid-1",
+        lineageID: "l",
+        sections: [{
+          id: "s1",
+          title: "Chapter 1",
+          status: "accepted",
+          container: "chapter",
+          position: 0,
+          parentID: null,
+        }],
+      }],
+    },
+  }]);
+  mock.setResponse("generation_outputs", [
+    {
+      outline_section_id: "s1",
+      output_text: "new draft that must not export",
+      status: "draft",
+      created_at: "2026-08-26T12:00:00Z",
+    },
+    {
+      outline_section_id: "s1",
+      output_text: "latest completed prose",
+      status: "complete",
+      created_at: "2026-08-25T12:00:00Z",
+    },
+    {
+      outline_section_id: "unrelated",
+      output_text: "unrelated output",
+      status: "complete",
+      created_at: "2026-08-27T12:00:00Z",
+    },
+  ]);
+  const outline = await walkSections(
+    mock as any,
+    "user-1",
+    "ios-uuid-1",
+    snapshotProjectId,
+  );
+  if (outline.chapters[0].sections[0].body !== "latest completed prose") {
+    throw new Error("walker selected a draft or unrelated output");
+  }
+});
+
 Deno.test("walker: rejects outline with no section-linked generated content", async () => {
   const mock = new MockSupabase();
   const snapshotProjectId = "00000000-0000-0000-0000-000000000000";

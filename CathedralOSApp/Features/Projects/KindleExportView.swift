@@ -142,6 +142,9 @@ struct KindleExportView: View {
     @State private var isEstimatingSynopsis = false
     @State private var isGeneratingSynopsis = false
     @State private var synopsisError: String?
+    @State private var synopsisOperationID: String?
+    @State private var synopsisOperationTitle = ""
+    @State private var synopsisOperationOutputID: String?
 
     // Job state
     @State private var jobState: JobState = .idle
@@ -339,22 +342,6 @@ struct KindleExportView: View {
             .first { !$0.isEmpty }
     }
 
-    private var synopsisSourceText: String {
-        if let sourceOutput,
-           !sourceOutput.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return String(sourceOutput.outputText.prefix(100_000))
-        }
-        return String(project.generations
-            .filter {
-                $0.status == GenerationStatus.complete.rawValue &&
-                    !$0.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }
-            .sorted { $0.createdAt < $1.createdAt }
-            .map { "\($0.title)\n\($0.outputText)" }
-            .joined(separator: "\n\n")
-            .prefix(100_000))
-    }
-
     private var coverImageSection: some View {
         Section("Cover image") {
             Picker("Cover", selection: $coverChoice) {
@@ -484,7 +471,7 @@ struct KindleExportView: View {
                     Spacer()
                 }
             }
-            .disabled(isEstimatingSynopsis || isGeneratingSynopsis || synopsisSourceText.isEmpty)
+            .disabled(isEstimatingSynopsis || isGeneratingSynopsis)
             if let suggestedSynopsis,
                bookDescription.trimmingCharacters(in: .whitespacesAndNewlines) != suggestedSynopsis {
                 Button("Use story synopsis") {
@@ -921,7 +908,6 @@ struct KindleExportView: View {
     }
 
     private func prepareSynopsisGeneration() async {
-        guard !synopsisSourceText.isEmpty else { return }
         guard let service else {
             synopsisError = "Backend export service is not configured."
             return
@@ -933,10 +919,17 @@ struct KindleExportView: View {
         isEstimatingSynopsis = true
         defer { isEstimatingSynopsis = false }
         do {
+            try await ProjectCloudSyncService.shared.syncProject(project, modelContext: modelContext)
+            let sourceID = try await syncStandaloneSourceIfNeeded()
+            let operationID = UUID().uuidString
+            synopsisOperationID = operationID
+            synopsisOperationTitle = bookTitle
+            synopsisOperationOutputID = sourceID
             let estimate = try await service.estimateStorySynopsis(
                 projectID: project.id.uuidString,
                 title: bookTitle,
-                sourceText: synopsisSourceText,
+                operationID: operationID,
+                generationOutputID: sourceID,
                 userAccessToken: token,
             )
             guard estimate.allowed else {
@@ -961,10 +954,12 @@ struct KindleExportView: View {
         do {
             bookDescription = try await service.generateStorySynopsis(
                 projectID: project.id.uuidString,
-                title: bookTitle,
-                sourceText: synopsisSourceText,
+                title: synopsisOperationTitle,
+                operationID: synopsisOperationID ?? UUID().uuidString,
+                generationOutputID: synopsisOperationOutputID,
                 userAccessToken: token,
             )
+            synopsisOperationID = nil
         } catch {
             synopsisError = error.localizedDescription
         }

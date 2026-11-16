@@ -267,7 +267,8 @@ private struct StorySynopsisRequest: Codable {
     let action: String
     let project_id: String
     let title: String
-    let source_text: String
+    let operation_id: String
+    let generation_output_id: String?
 }
 
 private struct StorySynopsisResponse: Codable {
@@ -541,11 +542,18 @@ final class KindleExportService {
     func estimateStorySynopsis(
         projectID: String,
         title: String,
-        sourceText: String,
+        operationID: String,
+        generationOutputID: String? = nil,
         userAccessToken: String,
     ) async throws -> StorySynopsisCostEstimate {
         let response: StorySynopsisCostEstimate = try await requestSynopsis(
-            StorySynopsisRequest(action: "estimate", project_id: projectID, title: title, source_text: sourceText),
+            StorySynopsisRequest(
+                action: "estimate",
+                project_id: projectID,
+                title: title,
+                operation_id: operationID,
+                generation_output_id: generationOutputID,
+            ),
             userAccessToken: userAccessToken,
         )
         return response
@@ -554,11 +562,18 @@ final class KindleExportService {
     func generateStorySynopsis(
         projectID: String,
         title: String,
-        sourceText: String,
+        operationID: String,
+        generationOutputID: String? = nil,
         userAccessToken: String,
     ) async throws -> String {
         let response: StorySynopsisResponse = try await requestSynopsis(
-            StorySynopsisRequest(action: "generate", project_id: projectID, title: title, source_text: sourceText),
+            StorySynopsisRequest(
+                action: "generate",
+                project_id: projectID,
+                title: title,
+                operation_id: operationID,
+                generation_output_id: generationOutputID,
+            ),
             userAccessToken: userAccessToken,
         )
         guard !response.synopsis.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

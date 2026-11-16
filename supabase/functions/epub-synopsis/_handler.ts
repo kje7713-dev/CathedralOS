@@ -18,12 +18,21 @@ import {
   runBillableLLM,
 } from "../_shared/billable-llm.ts";
 import type { LLMMessage, LLMProvider } from "../generate-story/_provider.ts";
+import {
+  buildStandaloneOutputOutline,
+  StandaloneOutputSourceError,
+} from "../export-epub/_single_output_source.ts";
+import {
+  type ProjectOutline,
+  walkSections,
+} from "../export-epub/_section_walker.ts";
 
 export interface SynopsisRequest {
   action?: "estimate" | "generate";
   project_id: string;
   title: string;
-  source_text: string;
+  operation_id: string;
+  generation_output_id?: string;
 }
 
 export interface SynopsisDependencies {
@@ -33,7 +42,6 @@ export interface SynopsisDependencies {
   defaultModel: string;
 }
 
-const MAX_SOURCE_CHARS = 100_000;
 const MAX_OUTPUT_TOKENS = 320;
 
 export function validateSynopsisRequest(body: unknown): SynopsisRequest {
@@ -50,21 +58,58 @@ export function validateSynopsisRequest(body: unknown): SynopsisRequest {
   if (typeof value?.title !== "string" || !value.title.trim()) {
     throw new Error("title required");
   }
-  if (typeof value?.source_text !== "string" || !value.source_text.trim()) {
-    throw new Error("source_text required");
+  if (typeof value?.operation_id !== "string" || !value.operation_id.trim()) {
+    throw new Error("operation_id required");
   }
-  if (value.source_text.length > MAX_SOURCE_CHARS) {
-    throw new Error(`source_text exceeds ${MAX_SOURCE_CHARS} characters`);
+  if (
+    value.generation_output_id !== undefined &&
+    (typeof value.generation_output_id !== "string" ||
+      !value.generation_output_id.trim())
+  ) {
+    throw new Error("generation_output_id must be a non-empty string");
   }
   return {
     action: value.action ?? "generate",
     project_id: value.project_id.trim(),
     title: value.title.trim().slice(0, 300),
-    source_text: value.source_text.trim(),
+    operation_id: value.operation_id.trim().slice(0, 200),
+    generation_output_id: value.generation_output_id?.trim(),
   };
 }
 
-function buildMessages(request: SynopsisRequest): LLMMessage[] {
+export function buildSynopsisSource(outline: ProjectOutline): string {
+  const brief = outline.storyBrief
+    ? Object.entries(outline.storyBrief)
+      .filter(([, value]) => Boolean(value?.trim()))
+      .map(([key, value]) => `${key}: ${value}`)
+      .join("\n")
+    : "";
+  const chapters = [...outline.chapters]
+    .sort((a, b) => a.position - b.position)
+    .map((chapter) => {
+      const sections = [...chapter.sections]
+        .sort((a, b) => a.position - b.position)
+        .map((section) => {
+          const summary = section.title ? `Section: ${section.title}\n` : "";
+          return `${summary}${section.body.trim()}`.trim();
+        })
+        .filter(Boolean)
+        .join("\n\n");
+      return `Chapter: ${chapter.title}\n${sections}`.trim();
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  return [
+    `Title: ${outline.title}`,
+    brief ? `Story metadata:\n${brief}` : "",
+    chapters ? `Canonical exported narrative:\n${chapters}` : "",
+  ].filter(Boolean).join("\n\n");
+}
+
+function buildMessages(
+  request: SynopsisRequest,
+  sourceText: string,
+): LLMMessage[] {
   return [
     {
       role: "system",
@@ -78,18 +123,25 @@ function buildMessages(request: SynopsisRequest): LLMMessage[] {
     },
     {
       role: "user",
-      content:
-        `Title: ${request.title}\n\nStory source:\n${request.source_text}`,
+      content: `Title: ${request.title}\n\nStory source:\n${sourceText}`,
     },
   ];
+}
+
+export function validateSynopsisContent(content: string): string {
+  const synopsis = content.trim().replace(/^['"]|['"]$/g, "");
+  const words = synopsis.split(/\s+/).filter(Boolean).length;
+  if (words < 80 || words > 180) {
+    throw new Error("Synopsis must be between 80 and 180 words");
+  }
+  return synopsis;
 }
 
 async function idempotencyKey(
   userID: string,
   request: SynopsisRequest,
 ): Promise<string> {
-  const payload =
-    `${userID}|${request.project_id}|${request.title}|${request.source_text}`;
+  const payload = `${userID}|epub-synopsis|${request.operation_id}`;
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(payload),
@@ -97,6 +149,36 @@ async function idempotencyKey(
   return Array.from(new Uint8Array(digest)).map((byte) =>
     byte.toString(16).padStart(2, "0")
   ).join("");
+}
+
+async function resolveExportOutline(
+  request: SynopsisRequest,
+  userID: string,
+  deps: SynopsisDependencies,
+): Promise<ProjectOutline> {
+  const { data: project, error } = await deps.adminClient
+    .from("project_snapshots")
+    .select("id")
+    .eq("user_id", userID)
+    .eq("local_project_id", request.project_id)
+    .maybeSingle();
+  if (error || !project) throw new Error("project_not_found");
+  if (request.generation_output_id) {
+    return await buildStandaloneOutputOutline(
+      deps.adminClient,
+      userID,
+      request.project_id,
+      String(project.id),
+      request.generation_output_id,
+      request.title,
+    );
+  }
+  return await walkSections(
+    deps.adminClient,
+    userID,
+    request.project_id,
+    String(project.id),
+  );
 }
 
 async function resolveModel(
@@ -135,7 +217,35 @@ export async function handleSynopsis(
     );
   }
 
-  const messages = buildMessages(request);
+  let outline: ProjectOutline;
+  try {
+    outline = await resolveExportOutline(request, userID, deps);
+  } catch (error) {
+    if (error instanceof StandaloneOutputSourceError) {
+      return errorResponse(error.code, error.message, 404);
+    }
+    if (error instanceof Error && error.message === "project_not_found") {
+      return errorResponse(
+        "project_not_found",
+        "The story project could not be found.",
+        404,
+      );
+    }
+    return errorResponse(
+      "source_selection_failed",
+      "The exported story content could not be selected.",
+      422,
+    );
+  }
+  const sourceText = buildSynopsisSource(outline);
+  if (!sourceText.trim()) {
+    return errorResponse(
+      "source_selection_failed",
+      "The exported story has no generated content.",
+      422,
+    );
+  }
+  const messages = buildMessages(request, sourceText);
   const estimatedInputTokens = estimateTokensFromMessages(messages);
   const inputLimit = inputTokenLimitDetails(estimatedInputTokens);
   if (inputLimit) {
@@ -193,16 +303,15 @@ export async function handleSynopsis(
         outputBudget: MAX_OUTPUT_TOKENS,
         idempotencyKey: key,
       },
+      preflightUsageOverride: {
+        uncachedInputTokens: estimatedInputTokens,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: MAX_OUTPUT_TOKENS,
+        toolCostUsd: 0,
+      },
       onProviderSuccess: async (providerResult: BillableProviderResult) => {
-        const synopsis = providerResult.content.trim().replace(
-          /^['"]|['"]$/g,
-          "",
-        );
-        const words = synopsis.split(/\s+/).filter(Boolean).length;
-        if (words < 40 || words > 220) {
-          throw new Error("Synopsis length was outside the supported range");
-        }
-        return { synopsis };
+        return { synopsis: validateSynopsisContent(providerResult.content) };
       },
     }, {
       adminClient: deps.adminClient,
@@ -235,4 +344,4 @@ export async function handleSynopsis(
   }
 }
 
-export { buildMessages, MAX_OUTPUT_TOKENS };
+export { buildMessages, idempotencyKey, MAX_OUTPUT_TOKENS };

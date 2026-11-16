@@ -99,7 +99,7 @@ export async function walkSections(
   const sectionIds = snapshotSections.map((s) => String(s.id));
   const { data: outputs, error: outputsError } = await client
     .from("generation_outputs")
-    .select("outline_section_id, output_text, created_at")
+    .select("outline_section_id, output_text, status, created_at")
     .in("outline_section_id", sectionIds)
     .order("created_at", { ascending: false });
   if (outputsError) {
@@ -111,6 +111,11 @@ export async function walkSections(
   // case-insensitive in Postgres, but Map lookups are not.
   const latestBody = new Map<string, string>();
   for (const out of (outputs ?? []) as Array<Record<string, unknown>>) {
+    // A newer draft, failed retry, or in-flight row must not supersede the
+    // latest completed prose used by the EPUB exporter. Missing status is
+    // treated as complete for legacy rows predating the status column.
+    const status = String(out.status ?? "complete").toLowerCase();
+    if (status !== "complete") continue;
     const sid = String(out.outline_section_id).toLowerCase();
     if (!latestBody.has(sid)) {
       latestBody.set(sid, String(out.output_text ?? ""));
