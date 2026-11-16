@@ -104,7 +104,7 @@ export interface BillableProviderOptions {
 
 export interface BillableLLMRequest<T> {
   userID: string;
-  purpose: "generate" | "coherence-check" | "outline-suggestion";
+  purpose: "generate" | "coherence-check" | "outline-suggestion" | "epub-synopsis";
   action: string;
   model: GenerationModel;
   messages: LLMMessage[];
@@ -202,7 +202,7 @@ export class BillableLLMError extends Error {
 
 export interface FailedUsageEventInput {
   userID: string;
-  purpose: "generate" | "coherence-check" | "outline-suggestion";
+  purpose: "generate" | "coherence-check" | "outline-suggestion" | "epub-synopsis";
   action: string;
   modelName: string;
   generationLengthMode?: string | null;

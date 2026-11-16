@@ -12,6 +12,11 @@ on:
       - 'supabase/functions/outline-suggestion-watchdog/**'
       - 'supabase/functions/export-epub/**'
       - 'supabase/functions/export-epub-list/**'
+      - 'supabase/functions/epub-synopsis/**'
+      - 'supabase/migrations/20261115180000_allow_epub_synopsis_billing.sql'
+      - 'supabase/migrations/20261116140000_epub_synopsis_operation_results.sql'
+      - 'supabase/migrations/20261116150000_harden_epub_synopsis_operations.sql'
+      - 'supabase/tests/database/epub_synopsis_operations.test.sql'
       - 'supabase/migrations/20260924080000_epub_generation_output_source.sql'
       - 'supabase/tests/database/epub_generation_output_source.test.sql'
       - 'supabase/functions/sync-openai-model-catalog/**'
@@ -224,6 +229,14 @@ jobs:
           supabase/functions/export-epub-list/index_test.ts
           supabase/functions/export-epub-download/index_test.ts
 
+      - name: Type check and test paid story synopsis
+        run: >-
+          deno check
+          supabase/functions/epub-synopsis/_handler.ts
+          supabase/functions/epub-synopsis/index.ts
+          && deno test --no-check -A
+          supabase/functions/epub-synopsis/_handler_test.ts
+
   pricing-database-regression:
     name: Pricing observation pgTAP regression
     runs-on: ubuntu-latest
@@ -317,3 +330,8 @@ jobs:
         run: >-
           supabase db test --local
           supabase/tests/database/shared_epub_publication.test.sql
+      # PR #860: atomic paid-synopsis claim, recovery, and shared settlement.
+      - name: Run EPUB synopsis operation recovery pgTAP test
+        run: >-
+          supabase db test --local
+          supabase/tests/database/epub_synopsis_operations.test.sql

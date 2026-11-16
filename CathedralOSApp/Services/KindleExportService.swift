@@ -251,6 +251,30 @@ struct KindleExportRequest: Codable {
     let part_names: [String: String]?
 }
 
+struct StorySynopsisCostEstimate: Codable {
+    let estimatedCredits: Double
+    let availableCredits: Double
+    let allowed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case estimatedCredits = "estimated_credits"
+        case availableCredits = "available_credits"
+        case allowed
+    }
+}
+
+private struct StorySynopsisRequest: Codable {
+    let action: String
+    let project_id: String
+    let title: String
+    let operation_id: String
+    let generation_output_id: String?
+}
+
+private struct StorySynopsisResponse: Codable {
+    let synopsis: String
+}
+
 /// Response from POST /functions/v1/export-epub (HTTP 202).
 /// Server kicks off the export and returns a job_id for polling.
 struct KindleExportKickoffResponse: Codable {
@@ -512,6 +536,86 @@ final class KindleExportService {
         } catch {
             throw KindleExportError.invalidResponse(
                 "Could not decode AI-cover estimate: \(error.localizedDescription)")
+        }
+    }
+
+    func estimateStorySynopsis(
+        projectID: String,
+        title: String,
+        operationID: String,
+        generationOutputID: String? = nil,
+        userAccessToken: String,
+    ) async throws -> StorySynopsisCostEstimate {
+        let response: StorySynopsisCostEstimate = try await requestSynopsis(
+            StorySynopsisRequest(
+                action: "estimate",
+                project_id: projectID,
+                title: title,
+                operation_id: operationID,
+                generation_output_id: generationOutputID,
+            ),
+            userAccessToken: userAccessToken,
+        )
+        return response
+    }
+
+    func generateStorySynopsis(
+        projectID: String,
+        title: String,
+        operationID: String,
+        generationOutputID: String? = nil,
+        userAccessToken: String,
+    ) async throws -> String {
+        let response: StorySynopsisResponse = try await requestSynopsis(
+            StorySynopsisRequest(
+                action: "generate",
+                project_id: projectID,
+                title: title,
+                operation_id: operationID,
+                generation_output_id: generationOutputID,
+            ),
+            userAccessToken: userAccessToken,
+        )
+        guard !response.synopsis.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw KindleExportError.invalidResponse("Synopsis response was empty")
+        }
+        return response.synopsis
+    }
+
+    private func requestSynopsis<T: Decodable>(
+        _ body: StorySynopsisRequest,
+        userAccessToken: String,
+    ) async throws -> T {
+        let url = backend.edgeFunctionURL(path: "epub-synopsis")
+        var request = backend.authorizedRequest(for: url, userAccessToken: userAccessToken)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        do {
+            let (data, response) = try await performAuthenticatedRequest(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw KindleExportError.invalidResponse("Non-HTTP response")
+            }
+            guard (200...299).contains(http.statusCode) else {
+                if http.statusCode == 401 { throw KindleExportError.notAuthenticated }
+                throw KindleExportError.serverError(
+                    statusCode: http.statusCode,
+                    message: String(data: data, encoding: .utf8),
+                )
+            }
+            do {
+                return try JSONDecoder().decode(T.self, from: data)
+            } catch {
+                throw KindleExportError.invalidResponse("Could not decode synopsis response: \(error.localizedDescription)")
+            }
+        } catch let error as KindleExportError {
+            throw error
+        } catch let error as SupabaseSessionProviderError {
+            switch error {
+            case .notSignedIn, .sessionExpired: throw KindleExportError.notAuthenticated
+            }
+        } catch {
+            throw KindleExportError.networkError(error.localizedDescription)
         }
     }
 

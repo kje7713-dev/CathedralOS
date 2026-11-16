@@ -22,6 +22,7 @@ export type Container = "chapter" | "scene" | "beat" | "set-piece" | "summary";
 
 export interface Section {
   id: string;
+  generation_output_id?: string | null;
   title: string;
   container: Container;
   pov: string | null;
@@ -99,7 +100,7 @@ export async function walkSections(
   const sectionIds = snapshotSections.map((s) => String(s.id));
   const { data: outputs, error: outputsError } = await client
     .from("generation_outputs")
-    .select("outline_section_id, output_text, created_at")
+    .select("id, outline_section_id, output_text, status, created_at")
     .in("outline_section_id", sectionIds)
     .order("created_at", { ascending: false });
   if (outputsError) {
@@ -109,11 +110,19 @@ export async function walkSections(
   // UUID text may arrive with different casing between JSON snapshots and
   // PostgREST rows. Normalize IDs before joining; UUID equality is
   // case-insensitive in Postgres, but Map lookups are not.
-  const latestBody = new Map<string, string>();
+  const latestOutput = new Map<string, { id: string; body: string }>();
   for (const out of (outputs ?? []) as Array<Record<string, unknown>>) {
+    // A newer draft, failed retry, or in-flight row must not supersede the
+    // latest completed prose used by the EPUB exporter. Missing status is
+    // treated as complete for legacy rows predating the status column.
+    const status = String(out.status ?? "complete").toLowerCase();
+    if (status !== "complete") continue;
     const sid = String(out.outline_section_id).toLowerCase();
-    if (!latestBody.has(sid)) {
-      latestBody.set(sid, String(out.output_text ?? ""));
+    if (!latestOutput.has(sid)) {
+      latestOutput.set(sid, {
+        id: String(out.id ?? ""),
+        body: String(out.output_text ?? ""),
+      });
     }
   }
 
@@ -122,7 +131,7 @@ export async function walkSections(
   // outline_section_id; there is no safe way to infer which section they belong
   // to, so they must not be silently substituted for current section prose.
   const generatedSectionCount = snapshotSections.filter((section) =>
-    String(latestBody.get(String(section.id).toLowerCase()) ?? "").trim().length > 0
+    String(latestOutput.get(String(section.id).toLowerCase())?.body ?? "").trim().length > 0
   ).length;
   if (snapshotSections.length > 0 && generatedSectionCount === 0) {
     throw new Error(
@@ -137,10 +146,11 @@ export async function walkSections(
     const sid = String(s.id);
     const section: Section = {
       id: sid,
+      generation_output_id: latestOutput.get(sid.toLowerCase())?.id || null,
       title: String(s.title ?? ""),
       container: (String(s.container ?? "scene")) as Container,
       pov: s.pov ? String(s.pov) : null,
-      body: latestBody.get(sid.toLowerCase()) ?? "",
+      body: latestOutput.get(sid.toLowerCase())?.body ?? "",
       position: Number(s.position ?? 0),
       parent_id: s.parentID ? String(s.parentID) : null,
       story_arc_beat_id: s.storyArcBeatID ? String(s.storyArcBeatID) : null,
