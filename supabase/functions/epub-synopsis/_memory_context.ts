@@ -243,15 +243,34 @@ function fitNarrative(
   orderedRows: Array<{ section: Section; row: SynopsisMemoryRow }>,
   budget: number,
 ): string {
-  if (!orderedRows.length) return "";
-  const perSection = Math.max(
-    60,
-    Math.floor((budget - (orderedRows.length - 1) * 2) / orderedRows.length),
+  if (!orderedRows.length || budget <= 0) return "";
+  const contentBudget = Math.max(0, budget - (orderedRows.length - 1) * 2);
+  const anchorIndexes = new Set([
+    0,
+    Math.floor(orderedRows.length / 2),
+    Math.floor(orderedRows.length * 0.75),
+    orderedRows.length - 1,
+  ]);
+  const anchorBudget = Math.min(
+    160,
+    Math.floor(contentBudget / Math.max(1, anchorIndexes.size)),
   );
-  return orderedRows.map(({ section, row }) =>
-    sectionMemory(section, row, Math.max(40, perSection - 40), false)
-      .slice(0, perSection)
-  ).join("\n\n");
+  const regularBudget = Math.max(
+    0,
+    Math.floor(
+      (contentBudget - anchorBudget * anchorIndexes.size) /
+        Math.max(1, orderedRows.length - anchorIndexes.size),
+    ),
+  );
+  return orderedRows.map(({ section, row }, index) => {
+    const limit = anchorIndexes.has(index) ? anchorBudget : regularBudget;
+    return limit > 0
+      ? sectionMemory(section, row, Math.max(1, limit - 40), false).slice(
+        0,
+        limit,
+      )
+      : "";
+  }).filter(Boolean).join("\n\n");
 }
 
 export function buildSynopsisMemoryContext(
@@ -313,22 +332,33 @@ export function buildSynopsisMemoryContext(
     ).filter(Boolean).join("\n")
     : "";
   const aggregate = aggregateContext(orderedRows.map(({ row }) => row));
+  const titleContext = `Title: ${outline.title}`;
+  const fixedBudget = Math.max(
+    0,
+    MAX_SYNOPSIS_CONTEXT_CHARS - aggregate.length - 4,
+  );
+  const briefBudget = Math.max(0, fixedBudget - titleContext.length - 2);
+  const boundedBrief = brief.slice(0, briefBudget);
   const fixed = [
-    `Title: ${outline.title}`,
-    brief ? `Story metadata (supporting context only):\n${brief}` : "",
+    titleContext,
+    boundedBrief
+      ? `Story metadata (supporting context only):\n${boundedBrief}`
+      : "",
     "Completed scene memory in canonical EPUB order:",
   ].filter(Boolean).join("\n\n");
   const available = Math.max(
-    1_000,
+    0,
     MAX_SYNOPSIS_CONTEXT_CHARS - fixed.length - aggregate.length - 4,
   );
   const summaryLimit = Math.max(
     120,
     Math.floor(available / Math.max(1, orderedRows.length)),
   );
-  const narrative = orderedRows.map(({ section, row }) =>
-    sectionMemory(section, row, Math.min(420, summaryLimit))
-  ).join("\n\n");
+  const narrative = available > 0
+    ? orderedRows.map(({ section, row }) =>
+      sectionMemory(section, row, Math.min(420, summaryLimit))
+    ).join("\n\n")
+    : "";
   const boundedNarrative = narrative.length <= available
     ? narrative
     : fitNarrative(orderedRows, available);
@@ -338,9 +368,6 @@ export function buildSynopsisMemoryContext(
     MAX_SYNOPSIS_CONTEXT_CHARS - prefix.length - 2,
   );
   return aggregateBudget > 0
-    ? `${prefix}\n\n${aggregate.slice(0, aggregateBudget)}`.slice(
-      0,
-      MAX_SYNOPSIS_CONTEXT_CHARS,
-    )
-    : prefix.slice(0, MAX_SYNOPSIS_CONTEXT_CHARS);
+    ? `${prefix}\n\n${aggregate.slice(0, aggregateBudget)}`
+    : prefix;
 }

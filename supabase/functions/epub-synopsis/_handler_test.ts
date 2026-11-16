@@ -520,7 +520,7 @@ Deno.test("lifecycle aggregation removes resolved hooks and superseded facts", (
   }
 });
 
-for (const count of [100, 150, 200]) {
+for (const count of [100, 150, 200, 1000]) {
   Deno.test(`scene memory context remains bounded for ${count} sections`, () => {
     const sections = Array.from({ length: count }, (_, index) => ({
       id: `section-${index}`,
@@ -550,6 +550,8 @@ for (const count of [100, 150, 200]) {
             ? "BEGINNING"
             : index === Math.floor(count / 2)
             ? "MIDDLE"
+            : index === Math.floor(count * 0.75)
+            ? "CLIMAX"
             : index === count - 1
             ? "ENDING"
             : "Scene"
@@ -590,13 +592,53 @@ for (const count of [100, 150, 200]) {
     if (context.length > MAX_SYNOPSIS_CONTEXT_CHARS) {
       throw new Error(`context exceeded budget for ${count}`);
     }
-    for (const marker of ["BEGINNING", "MIDDLE", "ENDING"]) {
+    for (const marker of ["BEGINNING", "MIDDLE", "CLIMAX", "ENDING"]) {
       if (!context.includes(marker)) {
         throw new Error(`${marker} coverage missing for ${count}`);
       }
     }
   });
 }
+
+Deno.test("scene memory context bounds oversized story metadata", () => {
+  const section = {
+    id: "metadata-section",
+    generation_output_id: "metadata-output",
+    title: "Opening",
+    container: "scene" as const,
+    pov: null,
+    body: "generated prose",
+    position: 0,
+    parent_id: null,
+    story_arc_beat_id: null,
+    story_arc_role: null,
+  };
+  const context = buildSynopsisMemoryContext({
+    id: "metadata-outline",
+    title: "Metadata Story",
+    storyBrief: { summary: "x".repeat(70_000) },
+    chapters: [{
+      id: "chapter",
+      title: "Chapter",
+      position: 0,
+      sections: [section],
+    }],
+    parts: [],
+  } as any, [{
+    outline_section_id: section.id,
+    generation_output_id: section.generation_output_id,
+    memory_pipeline_version: CURRENT_MEMORY_PIPELINE_VERSION,
+    extracted_summary: "The story begins.",
+    character_deltas: [],
+    plot_thread_deltas: [],
+    continuity_facts: [],
+    open_loops: [],
+    scene_ending_state: null,
+  }]);
+  if (context.length > MAX_SYNOPSIS_CONTEXT_CHARS) {
+    throw new Error("oversized story metadata exceeded context budget");
+  }
+});
 
 Deno.test("synopsis validation matches the prompt's 80–180 word contract", () => {
   const valid = Array.from({ length: 80 }, (_, index) => `word${index}`).join(

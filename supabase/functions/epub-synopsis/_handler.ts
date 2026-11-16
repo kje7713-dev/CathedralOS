@@ -2,7 +2,9 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0
 import {
   computeMaxChargeCredits,
   estimateTokensFromMessages,
+  estimateTokensFromText,
   type GenerationModel,
+  getEnabledPricedModelByProviderModel,
   inputTokenLimitDetails,
   isBillableGenerationModel,
   snapshotPricing,
@@ -33,6 +35,7 @@ import {
 } from "./_memory_context.ts";
 import { processEmbedSection } from "../_shared/section-embedding.ts";
 import { isCurrentMemoryPipelineVersion } from "../_shared/memory-pipeline.ts";
+import { SCENE_MEMORY_GENERATION_INSTRUCTIONS } from "../_shared/scene-memory.ts";
 
 export interface SynopsisRequest {
   action?: "estimate" | "generate";
@@ -50,6 +53,46 @@ export interface SynopsisDependencies {
 }
 
 const MAX_OUTPUT_TOKENS = 320;
+
+async function estimateStandaloneMemoryCredits(
+  sourceText: string,
+  deps: SynopsisDependencies,
+): Promise<number | null> {
+  const extractionModelName = Deno.env.get("OPENAI_MODEL_DEFAULT") ??
+    "gpt-4o-mini";
+  const [extractionModel, embeddingModel] = await Promise.all([
+    getEnabledPricedModelByProviderModel(
+      deps.adminClient,
+      extractionModelName,
+      "text_generation",
+    ),
+    getEnabledPricedModelByProviderModel(
+      deps.adminClient,
+      "text-embedding-3-small",
+      "embedding",
+    ),
+  ]);
+  if (!extractionModel || !embeddingModel) return null;
+  const extractionInputTokens = estimateTokensFromMessages([
+    { content: SCENE_MEMORY_GENERATION_INSTRUCTIONS },
+    { content: sourceText },
+  ]);
+  const extractionCredits = computeMaxChargeCredits({
+    uncachedInputTokens: extractionInputTokens,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 8192,
+    toolCostUsd: 0,
+  }, snapshotPricing(extractionModel));
+  const embeddingCredits = computeMaxChargeCredits({
+    uncachedInputTokens: estimateTokensFromText(sourceText),
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 0,
+    toolCostUsd: 0,
+  }, snapshotPricing(embeddingModel));
+  return extractionCredits + embeddingCredits;
+}
 
 export function validateSynopsisRequest(body: unknown): SynopsisRequest {
   const value = body as Partial<SynopsisRequest> | null;
@@ -302,6 +345,7 @@ async function resolveSynopsisSource(
   userID: string,
   outline: ProjectOutline,
   deps: SynopsisDependencies,
+  extractStandalone = true,
 ): Promise<string> {
   const outputIDs = outline.chapters.flatMap((chapter) => chapter.sections)
     .filter((section) => section.body.trim())
@@ -328,7 +372,7 @@ async function resolveSynopsisSource(
         !isCurrentMemoryPipelineVersion(row.memory_pipeline_version)
       ))
   ) {
-    if (request.action === "estimate") {
+    if (request.action === "estimate" || !extractStandalone) {
       throw new SynopsisMemoryError(
         "memory_missing",
         "standalone scene memory must be extracted before estimating synopsis generation",
@@ -415,10 +459,11 @@ export async function handleSynopsis(
   deps: SynopsisDependencies,
 ): Promise<Response> {
   let outline: ProjectOutline;
-  let sourceText: string;
+  let sourceText = "";
+  let standaloneMemoryNeedsBillingEstimate = false;
+  let preResolvedSource = "";
   try {
     outline = await resolveExportOutline(request, userID, deps);
-    sourceText = await resolveSynopsisSource(request, userID, outline, deps);
   } catch (error) {
     if (error instanceof StandaloneOutputSourceError) {
       return errorResponse(error.code, error.message, 404);
@@ -443,14 +488,65 @@ export async function handleSynopsis(
       422,
     );
   }
-  if (!sourceText.trim()) {
+  const sourceIdentityText = outline.chapters.flatMap((chapter) =>
+    chapter.sections
+  ).map((section) => section.body).filter(Boolean).join("\n\n");
+  if (!sourceIdentityText.trim()) {
     return errorResponse(
       "source_selection_failed",
       "The exported story has no generated content.",
       422,
     );
   }
-  const fingerprint = await sourceFingerprint(sourceText, request);
+  if (request.generation_output_id) {
+    try {
+      preResolvedSource = await resolveSynopsisSource(
+        request,
+        userID,
+        outline,
+        deps,
+        false,
+      );
+    } catch (error) {
+      if (!(error instanceof SynopsisMemoryError)) {
+        return errorResponse(
+          "source_selection_failed",
+          "The exported story content could not be selected.",
+          422,
+        );
+      }
+    }
+  } else {
+    try {
+      preResolvedSource = await resolveSynopsisSource(
+        request,
+        userID,
+        outline,
+        deps,
+      );
+    } catch (error) {
+      if (error instanceof SynopsisMemoryError) {
+        return errorResponse(
+          error.code,
+          "Structured scene memory for the exported story is unavailable or stale. Regenerate the affected story sections before creating a synopsis.",
+          422,
+        );
+      }
+      return errorResponse(
+        "source_selection_failed",
+        "The exported story content could not be selected.",
+        422,
+      );
+    }
+  }
+  // First-use standalone requests claim against canonical generated prose so
+  // they own on-demand memory extraction before billable provider work. Once
+  // valid memory exists, retain the historical derived-context fingerprint so
+  // already-started operations remain retry-compatible.
+  const fingerprint = await sourceFingerprint(
+    preResolvedSource || sourceIdentityText,
+    request,
+  );
   const key = await idempotencyKey(userID, request);
   let claim: SynopsisOperationClaim | null = null;
   try {
@@ -483,6 +579,21 @@ export async function handleSynopsis(
     }
   } catch (error) {
     if (
+      claim?.claim_token &&
+      (claim.claim_status === "claimed" || claim.claim_status === "ready")
+    ) {
+      try {
+        await releaseSynopsisClaim(
+          userID,
+          request.operation_id,
+          claim.claim_token,
+          deps,
+        );
+      } catch (releaseError) {
+        console.error(`synopsis claim release failed: ${String(releaseError)}`);
+      }
+    }
+    if (
       error instanceof Error && error.message.includes("identity was reused")
     ) {
       return errorResponse("operation_conflict", error.message, 409);
@@ -490,6 +601,138 @@ export async function handleSynopsis(
     return errorResponse(
       "source_selection_failed",
       "The synopsis operation could not be loaded.",
+      422,
+    );
+  }
+  if (
+    request.action === "generate" && request.generation_output_id &&
+    !preResolvedSource
+  ) {
+    // First-use standalone extraction has its own direct-billed stages. Check
+    // the combined worst-case estimate before dispatching either provider so
+    // extraction cannot consume credits before synopsis entitlement fails.
+    const preflightModel = await resolveModel(deps);
+    if (!preflightModel || !isBillableGenerationModel(preflightModel)) {
+      await releaseSynopsisClaim(
+        userID,
+        request.operation_id,
+        claim?.claim_token,
+        deps,
+      );
+      return errorResponse(
+        "model_unavailable_or_unpriced",
+        "The synopsis model is unavailable or has unverified pricing.",
+        400,
+      );
+    }
+    const preflightInputTokens = estimateTokensFromMessages(
+      buildMessages(request, sourceIdentityText),
+    );
+    const preflightLimit = inputTokenLimitDetails(preflightInputTokens);
+    if (preflightLimit) {
+      await releaseSynopsisClaim(
+        userID,
+        request.operation_id,
+        claim?.claim_token,
+        deps,
+      );
+      return errorResponse(
+        "input_token_limit_exceeded",
+        `Estimated input is ${preflightLimit.estimatedInputTokens} tokens; Cathedral's hard limit is ${preflightLimit.limit} tokens`,
+        413,
+      );
+    }
+    const memoryCredits = await estimateStandaloneMemoryCredits(
+      sourceIdentityText,
+      deps,
+    );
+    if (memoryCredits === null) {
+      await releaseSynopsisClaim(
+        userID,
+        request.operation_id,
+        claim?.claim_token,
+        deps,
+      );
+      return errorResponse(
+        "model_unavailable_or_unpriced",
+        "Scene-memory extraction pricing is unavailable.",
+        400,
+      );
+    }
+    const preflightCredits = computeMaxChargeCredits({
+      uncachedInputTokens: preflightInputTokens,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      outputTokens: MAX_OUTPUT_TOKENS,
+      toolCostUsd: 0,
+    }, snapshotPricing(preflightModel)) + memoryCredits;
+    const preflightEntitlement = await deps.creditStore.loadOrDefault(userID);
+    if (!checkCredits(preflightEntitlement, preflightCredits).allowed) {
+      await releaseSynopsisClaim(
+        userID,
+        request.operation_id,
+        claim?.claim_token,
+        deps,
+      );
+      return errorResponse(
+        "insufficient_credits",
+        "Not enough credits for a story synopsis and its scene memory.",
+        402,
+      );
+    }
+  }
+  try {
+    sourceText = preResolvedSource ||
+      await resolveSynopsisSource(request, userID, outline, deps);
+  } catch (error) {
+    if (
+      request.action === "estimate" && request.generation_output_id &&
+      error instanceof SynopsisMemoryError
+    ) {
+      // Estimation must not dispatch extraction, but it must include the two
+      // direct-billed scene-memory stages that first-use generation will run.
+      sourceText = sourceIdentityText;
+      standaloneMemoryNeedsBillingEstimate = true;
+    } else {
+      await releaseSynopsisClaim(
+        userID,
+        request.operation_id,
+        claim?.claim_token,
+        deps,
+      );
+      if (
+        error instanceof Error && error.message.includes("insufficient_credits")
+      ) {
+        return errorResponse(
+          "insufficient_credits",
+          "Not enough credits for scene-memory extraction.",
+          402,
+        );
+      }
+      if (error instanceof SynopsisMemoryError) {
+        return errorResponse(
+          error.code,
+          "Structured scene memory for the exported story is unavailable or stale. Regenerate the affected story sections before creating a synopsis.",
+          422,
+        );
+      }
+      return errorResponse(
+        "source_selection_failed",
+        "The exported story content could not be selected.",
+        422,
+      );
+    }
+  }
+  if (!sourceText.trim()) {
+    await releaseSynopsisClaim(
+      userID,
+      request.operation_id,
+      claim?.claim_token,
+      deps,
+    );
+    return errorResponse(
+      "source_selection_failed",
+      "The exported story has no generated content.",
       422,
     );
   }
@@ -524,13 +767,27 @@ export async function handleSynopsis(
     );
   }
 
-  const estimatedCredits = computeMaxChargeCredits({
+  let estimatedCredits = computeMaxChargeCredits({
     uncachedInputTokens: estimatedInputTokens,
     cachedInputTokens: 0,
     cacheWriteInputTokens: 0,
     outputTokens: MAX_OUTPUT_TOKENS,
     toolCostUsd: 0,
   }, snapshotPricing(model));
+  if (standaloneMemoryNeedsBillingEstimate) {
+    const memoryCredits = await estimateStandaloneMemoryCredits(
+      sourceIdentityText,
+      deps,
+    );
+    if (memoryCredits === null) {
+      return errorResponse(
+        "model_unavailable_or_unpriced",
+        "Scene-memory extraction pricing is unavailable.",
+        400,
+      );
+    }
+    estimatedCredits += memoryCredits;
+  }
   const entitlement = await deps.creditStore.loadOrDefault(userID);
   const creditCheck = checkCredits(entitlement, estimatedCredits);
   if (request.action === "estimate") {
@@ -645,7 +902,9 @@ export async function handleSynopsis(
       },
     });
   } catch (error) {
-    if (claim?.claim_status === "claimed") {
+    if (
+      claim?.claim_status === "claimed" || claim?.claim_status === "ready"
+    ) {
       try {
         await releaseSynopsisClaim(
           userID,
