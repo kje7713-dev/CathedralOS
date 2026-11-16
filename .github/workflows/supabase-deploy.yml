@@ -152,3 +152,7 @@ jobs:
         # or PR-4100-B deploy is a no-op for the export path.
         if: ${{ hashFiles('supabase/functions/export-epub/index.ts') != '' }}
         run: supabase functions deploy export-epub --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy Edge Function - epub-synopsis
+        if: ${{ hashFiles('supabase/functions/epub-synopsis/index.ts') != '' }}
+        run: supabase functions deploy epub-synopsis --project-ref "$SUPABASE_PROJECT_REF"
