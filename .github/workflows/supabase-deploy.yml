@@ -37,7 +37,7 @@ jobs:
             --status applied \
             20260722190336
       - name: Run database migrations
-        run: supabase db push --password "$SUPABASE_DB_PASSWORD"
+        run: supabase db push --include-all --password "$SUPABASE_DB_PASSWORD"
 
       - name: Deploy Edge Function - generate-story
         if: ${{ hashFiles('supabase/functions/generate-story/index.ts') != '' }}
