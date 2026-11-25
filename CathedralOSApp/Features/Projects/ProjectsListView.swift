@@ -1,8 +1,14 @@
 import SwiftUI
 import SwiftData
 
+enum ProjectCreationIntent: Equatable {
+    case quickStory
+    case novel
+}
+
 struct ProjectsListView: View {
     @Environment(\.modelContext) private var modelContext
+    @Binding private var creationIntent: ProjectCreationIntent?
     @Query(sort: \StoryProject.name) private var projects: [StoryProject]
 
     @State private var navigationPath = NavigationPath()
@@ -21,6 +27,10 @@ struct ProjectsListView: View {
     @State private var restoreSuccessMessage: String?
     @State private var deleteErrorMessage: String?
     private let projectDeletionService: any ProjectDeletionServiceProtocol = ProjectDeletionService.shared
+
+    init(creationIntent: Binding<ProjectCreationIntent?> = .constant(nil)) {
+        self._creationIntent = creationIntent
+    }
 
     private enum ProjectCreationRoute: Identifiable {
         case choices
@@ -44,7 +54,7 @@ struct ProjectsListView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(maxWidth: .infinity)
-            Text("Projects provide organization for your ideas. Click the plus sign in the top right to start a new project.")
+            Text("Your stories live here. Start with a quick story or build a novel over time.")
                 .font(CathedralTheme.Typography.body(15))
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
                 .multilineTextAlignment(.leading)
@@ -135,6 +145,11 @@ struct ProjectsListView: View {
             }
         }
         .tint(CathedralTheme.Colors.accent)
+        .onChange(of: creationIntent) { _, intent in
+            guard let intent else { return }
+            launchCreation(for: intent)
+            creationIntent = nil
+        }
         .sheet(isPresented: $showImportProject, onDismiss: {
             if let project = pendingNavigationProject {
                 navigationPath.append(project)
@@ -224,16 +239,16 @@ struct ProjectsListView: View {
                 .foregroundStyle(CathedralTheme.Colors.tertiaryText)
 
             VStack(spacing: CathedralTheme.Spacing.xs) {
-                Text("No Projects")
+                Text("No Stories Yet")
                     .font(CathedralTheme.Typography.headline(18))
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
-                Text("Create a project to begin assembling your story.")
+                Text("Choose a way to start writing.")
                     .font(CathedralTheme.Typography.body())
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                     .multilineTextAlignment(.center)
             }
 
-            CathedralPrimaryButton("New Project", systemImage: "plus") {
+            CathedralPrimaryButton("Start a Story", systemImage: "plus") {
                 projectCreationRoute = .choices
             }
             .padding(.horizontal, CathedralTheme.Spacing.xxl)
@@ -498,6 +513,15 @@ struct ProjectsListView: View {
         pendingNavigationProject = nil
         projectCreationRoute = .quickStory(project)
         Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+    }
+
+    private func launchCreation(for intent: ProjectCreationIntent) {
+        switch intent {
+        case .quickStory:
+            startQuickStory()
+        case .novel:
+            projectCreationRoute = .name
+        }
     }
 
     private func refreshBackupAvailability() {

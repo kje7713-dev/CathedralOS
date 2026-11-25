@@ -10,6 +10,8 @@ import SwiftData
 
 struct HomeView: View {
     @Environment(\.modelContext) private var modelContext
+    let onWriteQuickStory: () -> Void
+    let onBuildNovel: () -> Void
 
     // Sort by name (StoryProject has no updatedAt). Top 5 is plenty for a summary.
     @Query(sort: \StoryProject.name) private var projects: [StoryProject]
@@ -26,11 +28,23 @@ struct HomeView: View {
         Array(recentOutputs.prefix(3))
     }
 
+    init(
+        onWriteQuickStory: @escaping () -> Void = {},
+        onBuildNovel: @escaping () -> Void = {}
+    ) {
+        self.onWriteQuickStory = onWriteQuickStory
+        self.onBuildNovel = onBuildNovel
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
                     welcomeBanner
+                    creationActions
+                    if let project = projects.first {
+                        continueWritingCard(for: project)
+                    }
                     statsRow
                     recentProjectsSection
                     recentOutputsSection
@@ -67,12 +81,85 @@ struct HomeView: View {
         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
     }
 
+    private var creationActions: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            Text("WHAT DO YOU WANT TO MAKE?")
+                .font(CathedralTheme.Typography.label(11, weight: .semibold))
+                .tracking(1.5)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+
+            CathedralPrimaryButton(
+                "Write a Quick Story",
+                systemImage: "bolt.fill",
+                action: onWriteQuickStory
+            )
+
+            Button(action: onBuildNovel) {
+                HStack(spacing: CathedralTheme.Spacing.md) {
+                    Image(systemName: "books.vertical.fill")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Build a Novel")
+                            .font(CathedralTheme.Typography.body(16, weight: .semibold))
+                        Text("Develop characters, arcs, and chapters over time.")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+                .padding(CathedralTheme.Spacing.base)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(CathedralTheme.Colors.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                        .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Start a longer story with a guided writing plan")
+        }
+    }
+
+    private func continueWritingCard(for project: StoryProject) -> some View {
+        NavigationLink(value: project) {
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                HStack {
+                    Text("CONTINUE WRITING")
+                        .font(CathedralTheme.Typography.label(11, weight: .semibold))
+                        .tracking(1.5)
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    Spacer()
+                    Image(systemName: "arrow.right.circle.fill")
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+                }
+                Text(project.name)
+                    .font(CathedralTheme.Typography.headline(18))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                Text(project.generations.isEmpty ? "Start shaping your story." : "Open your latest draft.")
+                    .font(CathedralTheme.Typography.body())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            }
+            .padding(CathedralTheme.Spacing.base)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CathedralTheme.Colors.surfaceRaised)
+            .overlay(
+                RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                    .stroke(CathedralTheme.Colors.accent.opacity(0.55), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Stats row
 
     private var statsRow: some View {
         HStack(spacing: CathedralTheme.Spacing.sm) {
-            statCard(value: "\(projects.count)", label: "Projects")
-            statCard(value: "\(recentOutputs.count)", label: "Outputs")
+            statCard(value: "\(projects.count)", label: "Stories")
+            statCard(value: "\(recentOutputs.count)", label: "Drafts")
         }
     }
 
@@ -99,9 +186,9 @@ struct HomeView: View {
 
     private var recentProjectsSection: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-            sectionHeader("Recent projects")
+            sectionHeader("Recent stories")
             if projects.isEmpty {
-                emptyState("No projects yet — start one from the Projects tab.")
+                emptyState("No stories yet — choose a way to start above.")
             } else {
                 VStack(spacing: 0) {
                     ForEach(recentProjects) { project in
@@ -154,9 +241,9 @@ struct HomeView: View {
 
     private var recentOutputsSection: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-            sectionHeader("Recent outputs")
+            sectionHeader("Recent drafts")
             if recentOutputs.isEmpty {
-                emptyState("No outputs yet — compile a project to start generating.")
+                emptyState("No drafts yet — write a story to create your first one.")
             } else {
                 VStack(spacing: 0) {
                     ForEach(recentOutputsTop) { output in
