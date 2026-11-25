@@ -46,6 +46,15 @@ struct KindleExportMetadataDraft: Codable {
     var partNames: [String: String]? = nil
 }
 
+/// Atomic presentation state for the in-app EPUB reader. Keeping the URL and
+/// title together prevents SwiftUI from presenting an empty sheet while the
+/// separately stored download URL is still being propagated.
+private struct EPUBReaderPresentation: Identifiable {
+    let id = UUID()
+    let fileURL: URL
+    let bookTitle: String
+}
+
 // MARK: - JobState
 
 enum JobState {
@@ -150,14 +159,12 @@ struct KindleExportView: View {
     @State private var jobState: JobState = .idle
 
     // PR-4100-C: reader/share sheet state for Open / Share buttons.
-    @State private var readerURL: URL?
+    @State private var readerPresentation: EPUBReaderPresentation?
     @State private var shareURL: URL?
     // PR 2: explicit history-deletion flow. We capture the pending delete
     // target so the confirmation alert knows which metadata row to remove.
     @State private var pendingDelete: KindleExportHistoryItem?
-    @State private var showReader = false
     @State private var showShare = false
-    @State private var readerBookTitle = ""
 
     // Previously generated EPUBs for this project.
     @State private var previousExports: [KindleExportHistoryItem] = []
@@ -283,10 +290,11 @@ struct KindleExportView: View {
             } message: { msg in
                 Text(msg)
             }
-            .sheet(isPresented: $showReader) {
-                if let url = readerURL {
-                    KindleExportReaderView(fileURL: url, bookTitle: readerBookTitle)
-                }
+            .sheet(item: $readerPresentation) { presentation in
+                KindleExportReaderView(
+                    fileURL: presentation.fileURL,
+                    bookTitle: presentation.bookTitle
+                )
             }
             .sheet(isPresented: $showShare) {
                 if let url = shareURL {
@@ -804,9 +812,10 @@ struct KindleExportView: View {
                 exportMetadataId: metadataId,
                 userAccessToken: token,
             )
-            readerURL = url
-            readerBookTitle = title ?? bookTitle
-            showReader = true
+            readerPresentation = EPUBReaderPresentation(
+                fileURL: url,
+                bookTitle: title ?? bookTitle
+            )
         } catch let error as KindleExportError {
             jobState = .failure(error)
         } catch {
