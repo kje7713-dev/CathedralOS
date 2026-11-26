@@ -271,7 +271,7 @@ struct CathedralLaneGuide: View {
     }
 }
 
-private extension View {
+extension View {
     func laneGuideRowStyle() -> some View {
         self
             .listRowBackground(CathedralTheme.Colors.background)

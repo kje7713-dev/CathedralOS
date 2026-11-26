@@ -479,30 +479,30 @@ struct ProjectDetailView: View {
         case .story:
             CathedralWorkspaceIntro(
                 eyebrow: "Story",
-                step: "01 / Define",
                 title: "Start with what matters.",
-                detail: "Premise, people, place, and the feeling you want the story to leave behind."
+                detail: "Premise, people, place, and the feeling you want the story to leave behind.",
+                step: "01 / Define"
             )
         case .build, .outline:
             CathedralWorkspaceIntro(
                 eyebrow: "Build",
-                step: "02 / Shape",
                 title: "Give the story a shape.",
-                detail: "Recipes hold the ingredients. The arc and outline turn them into a path."
+                detail: "Recipes hold the ingredients. The arc and outline turn them into a path.",
+                step: "02 / Shape"
             )
         case .compile:
             CathedralWorkspaceIntro(
                 eyebrow: "Write",
-                step: "03 / Make",
                 title: "Turn the shape into scenes.",
-                detail: "Write the whole run or work section by section. Every choice stays editable."
+                detail: "Write the whole run or work section by section. Every choice stays editable.",
+                step: "03 / Make"
             )
         case .output:
             CathedralWorkspaceIntro(
                 eyebrow: "Read",
-                step: "04 / Finish",
                 title: "Stay with the work.",
-                detail: "Review your outputs, keep the versions that matter, and finish when it is ready."
+                detail: "Review your outputs, keep the versions that matter, and finish when it is ready.",
+                step: "04 / Finish"
             )
         case .cast, .themes, .recipe:
             EmptyView()
