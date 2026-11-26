@@ -49,20 +49,20 @@ struct ProjectsListView: View {
     // MARK: - Top-of-list summary
 
     private var welcomeSummary: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .center, spacing: CathedralTheme.Spacing.md) {
             Image("StoryDonkeyWordmark")
                 .resizable()
                 .scaledToFit()
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: 280)
             Text("Your stories live here. Start with a quick story or build a novel over time.")
-                .font(CathedralTheme.Typography.body(15))
+                .font(CathedralTheme.Typography.body(16, weight: .medium))
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, CathedralTheme.Spacing.sm)
+        .padding(.vertical, CathedralTheme.Spacing.xl)
         .padding(.horizontal, CathedralTheme.Spacing.base)
         .background(CathedralTheme.Colors.surface)
         .overlay(
@@ -100,8 +100,8 @@ struct ProjectsListView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .contentMargins(.top, 0, for: .scrollContent)
-            .listSectionSpacing(0)
+            .contentMargins(.top, CathedralTheme.Spacing.sm, for: .scrollContent)
+            .listSectionSpacing(CathedralTheme.Spacing.md)
             .scrollContentBackground(.hidden)
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
@@ -286,6 +286,7 @@ struct ProjectsListView: View {
             NavigationLink(value: project) {
                 projectRow(project)
             }
+            .buttonStyle(.plain)
             .listRowBackground(CathedralTheme.Colors.surface)
             .listRowSeparatorTint(CathedralTheme.Colors.separator)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -309,7 +310,7 @@ struct ProjectsListView: View {
     private func projectRow(_ project: StoryProject) -> some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
             Text(project.name)
-                .font(CathedralTheme.Typography.headline(16))
+                .font(CathedralTheme.Typography.headline(18, weight: .bold))
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
 
             if !project.summary.isEmpty {
@@ -329,7 +330,7 @@ struct ProjectsListView: View {
                 .padding(.top, 2)
             }
         }
-        .padding(.vertical, CathedralTheme.Spacing.sm)
+        .padding(.vertical, CathedralTheme.Spacing.md)
     }
 
     private func metadataPills(for project: StoryProject) -> [String] {
