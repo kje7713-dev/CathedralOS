@@ -168,10 +168,10 @@ struct CathedralCard<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(CathedralTheme.Colors.surface)
             .overlay(
-                RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg)
                     .stroke(CathedralTheme.Colors.border, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg))
     }
 }
 
@@ -282,8 +282,8 @@ struct CathedralSectionHeader: View {
     var body: some View {
         HStack(alignment: .center) {
             Text(title.uppercased())
-                .font(CathedralTheme.Typography.label(10, weight: .semibold))
-                .tracking(1.5)
+                .font(CathedralTheme.Typography.label(11, weight: .bold))
+                .tracking(2.0)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
 
             Spacer()
@@ -304,7 +304,7 @@ struct CathedralSectionHeader: View {
                 .buttonStyle(.borderless)
             }
         }
-        .padding(.top, CathedralTheme.Spacing.xs)
+        .padding(.top, CathedralTheme.Spacing.sm)
     }
 }
 

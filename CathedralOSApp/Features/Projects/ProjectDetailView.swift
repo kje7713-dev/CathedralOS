@@ -676,37 +676,12 @@ struct ProjectDetailView: View {
                 .tracking(2.2)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
 
-            Button {
+            CathedralPrimaryButton(
+                workflowActionTitle(nextWorkflowStage),
+                systemImage: "arrow.up.right"
+            ) {
                 performWorkflowAction(nextWorkflowStage)
-            } label: {
-                HStack(spacing: CathedralTheme.Spacing.md) {
-                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-                        Text(workflowActionTitle(nextWorkflowStage))
-                            .font(CathedralTheme.Typography.headline(19, weight: .bold))
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    }
-
-                    Spacer(minLength: CathedralTheme.Spacing.sm)
-
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                }
-                .padding(CathedralTheme.Spacing.base)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(CathedralTheme.Colors.surface)
-                .overlay(alignment: .leading) {
-                    Capsule()
-                        .fill(CathedralTheme.Colors.accent)
-                        .frame(width: 3)
-                }
-                .overlay(
-                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                        .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
-            .buttonStyle(.plain)
             .accessibilityLabel("Next: \(workflowActionTitle(nextWorkflowStage))")
         }
         .padding(.horizontal, CathedralTheme.Spacing.base)
