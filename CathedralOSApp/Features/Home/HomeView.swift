@@ -162,7 +162,8 @@ struct HomeView: View {
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
         }
         .padding(.horizontal, CathedralTheme.Spacing.base)
-        .frame(maxWidth: .infinity, height: 60, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 60)
         .background(CathedralTheme.Colors.surface)
         .overlay(
             RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
