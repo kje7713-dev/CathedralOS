@@ -49,7 +49,8 @@ struct HomeView: View {
             Image("StoryDonkeyWordmark")
                 .resizable()
                 .scaledToFit()
-                .frame(maxWidth: 275, alignment: .leading)
+                .frame(maxWidth: 275)
+                .frame(maxWidth: .infinity, alignment: .center)
 
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
                 Text("TURN A SPARK\nINTO A STORY.")
@@ -88,6 +89,7 @@ struct HomeView: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint("Start a short story immediately")
+            .padding(.bottom, CathedralTheme.Spacing.sm)
 
             Button(action: onBuildNovel) {
                 actionBlock(
