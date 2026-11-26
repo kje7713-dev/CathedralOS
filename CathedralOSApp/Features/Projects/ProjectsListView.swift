@@ -49,28 +49,19 @@ struct ProjectsListView: View {
     // MARK: - Top-of-list summary
 
     private var welcomeSummary: some View {
-        VStack(alignment: .center, spacing: CathedralTheme.Spacing.md) {
+        VStack(alignment: .center, spacing: CathedralTheme.Spacing.xl) {
             Image("StoryDonkeyWordmark")
                 .resizable()
                 .scaledToFit()
-                .frame(maxWidth: 280)
-            Text("Your stories live here. Start with a quick story or build a novel over time.")
-                .font(CathedralTheme.Typography.body(16, weight: .medium))
+                .frame(maxWidth: 340)
+            Text("YOUR STORIES.")
+                .font(CathedralTheme.Typography.display(34, weight: .black))
+                .tracking(-0.5)
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, CathedralTheme.Spacing.xl)
         .padding(.horizontal, CathedralTheme.Spacing.base)
-        .background(CathedralTheme.Colors.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
-        .padding(.bottom, CathedralTheme.Spacing.sm)
     }
 
     // MARK: - Dedupe
@@ -322,34 +313,8 @@ struct ProjectsListView: View {
             Text(project.name)
                 .font(CathedralTheme.Typography.headline(18, weight: .bold))
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
-
-            if !project.summary.isEmpty {
-                Text(project.summary)
-                    .font(CathedralTheme.Typography.body(14))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .lineLimit(2)
-            }
-
-            let pills = metadataPills(for: project)
-            if !pills.isEmpty {
-                HStack(spacing: CathedralTheme.Spacing.xs) {
-                    ForEach(pills, id: \.self) { label in
-                        CathedralMetadataPill(label: label)
-                    }
-                }
-                .padding(.top, 2)
-            }
         }
         .padding(.vertical, CathedralTheme.Spacing.md)
-    }
-
-    private func metadataPills(for project: StoryProject) -> [String] {
-        var pills: [String] = []
-        let charCount = project.characters.count
-        if charCount > 0 { pills.append("\(charCount) \(charCount == 1 ? "character" : "characters")") }
-        let packCount = project.promptPacks.count
-        if packCount > 0 { pills.append("\(packCount) \(packCount == 1 ? "pack" : "packs")") }
-        return pills
     }
 
     // MARK: Creation
