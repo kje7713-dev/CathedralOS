@@ -466,7 +466,8 @@ struct ProjectDetailView: View {
             workspaceTab("Read", mode: .output)
         }
         .padding(.horizontal, CathedralTheme.Spacing.base)
-        .padding(.vertical, CathedralTheme.Spacing.xs)
+        .padding(.top, CathedralTheme.Spacing.xs)
+        .padding(.bottom, CathedralTheme.Spacing.md)
     }
 
     private func workspaceTab(_ title: String, mode: StoryEditorMode) -> some View {
@@ -480,7 +481,7 @@ struct ProjectDetailView: View {
                 .tracking(0.8)
                 .foregroundStyle(isSelected ? CathedralTheme.Colors.background : CathedralTheme.Colors.secondaryText)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, CathedralTheme.Spacing.sm)
+                .frame(height: 40)
                 .background(isSelected ? CathedralTheme.Colors.primaryText : CathedralTheme.Colors.surface)
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
         }
@@ -520,26 +521,19 @@ struct ProjectDetailView: View {
             Button {
                 showKindleExport = true
             } label: {
-                CathedralCard {
-                    HStack(spacing: CathedralTheme.Spacing.md) {
-                        Image(systemName: "book.closed.fill")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(CathedralTheme.Colors.accent)
-                            .frame(width: 36, height: 36)
-                            .background(CathedralTheme.Colors.accent.opacity(0.12))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                        Text("Export EPUB")
-                            .font(CathedralTheme.Typography.body(16, weight: .bold))
-                            .foregroundStyle(CathedralTheme.Colors.primaryText)
-
-                        Spacer(minLength: CathedralTheme.Spacing.sm)
-
-                        Image(systemName: "arrow.up.right")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(CathedralTheme.Colors.accent)
-                    }
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "book.closed.fill")
+                    Text("EXPORT EPUB")
+                        .tracking(1.2)
+                    Image(systemName: "arrow.up.right")
+                        .imageScale(.small)
                 }
+                .font(CathedralTheme.Typography.label(12, weight: .bold))
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .foregroundStyle(CathedralTheme.Colors.background)
+                .background(CathedralTheme.Colors.primaryText)
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
             }
             .buttonStyle(.plain)
             .listRowBackground(CathedralTheme.Colors.background)
@@ -551,7 +545,7 @@ struct ProjectDetailView: View {
                 trailing: CathedralTheme.Spacing.base
             ))
         } header: {
-            CathedralSectionHeader("Publish")
+            CathedralSectionHeader("Finish")
                 .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
