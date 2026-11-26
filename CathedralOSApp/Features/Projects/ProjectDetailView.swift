@@ -263,11 +263,7 @@ struct ProjectDetailView: View {
                 } else {
                     switch storyEditorMode {
                     case .story:
-                        outputsJumpSection
-                        summarySection
-                        audienceSection
-                        settingSection
-                        motifsSection
+                        storyInputSections
                     case .build:
                         buildSections
                     case .cast:
@@ -283,6 +279,7 @@ struct ProjectDetailView: View {
                         buildSections
                     case .output:
                         generationsSection
+                        epubExportSection
                     case .compile:
                         compileGenerateCTA
                     }
@@ -494,14 +491,20 @@ struct ProjectDetailView: View {
     }
 
     @ViewBuilder
-    private var buildSections: some View {
+    private var storyInputSections: some View {
+        summarySection
+        audienceSection
+        settingSection
         charactersSection
         relationshipsSection
-        settingSection
         sparksSection
         aftertastesSection
         themeQuestionsSection
         motifsSection
+    }
+
+    @ViewBuilder
+    private var buildSections: some View {
         recipesSection
         OutlineTabView(
             project: project,
@@ -513,6 +516,47 @@ struct ProjectDetailView: View {
             },
             onProjectRefreshed: refreshProjectReferenceHandler
         )
+    }
+
+    private var epubExportSection: some View {
+        Section {
+            Button {
+                showKindleExport = true
+            } label: {
+                CathedralCard {
+                    HStack(spacing: CathedralTheme.Spacing.md) {
+                        Image(systemName: "book.closed.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(CathedralTheme.Colors.accent)
+                            .frame(width: 36, height: 36)
+                            .background(CathedralTheme.Colors.accent.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                        Text("Export EPUB")
+                            .font(CathedralTheme.Typography.body(16, weight: .bold))
+                            .foregroundStyle(CathedralTheme.Colors.primaryText)
+
+                        Spacer(minLength: CathedralTheme.Spacing.sm)
+
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(CathedralTheme.Colors.accent)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .listRowBackground(CathedralTheme.Colors.background)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(
+                top: CathedralTheme.Spacing.sm,
+                leading: CathedralTheme.Spacing.base,
+                bottom: CathedralTheme.Spacing.sm,
+                trailing: CathedralTheme.Spacing.base
+            ))
+        } header: {
+            CathedralSectionHeader("Publish")
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
+        }
     }
 
     // MARK: - Novel workflow guidance
