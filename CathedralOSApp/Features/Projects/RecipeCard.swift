@@ -52,26 +52,21 @@ struct RecipeCard: View {
     // MARK: Body
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
-            header
+        CathedralObjectSurface {
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+                header
 
-            elementsSection
+                elementsSection
 
-            if isSparse {
-                sparsePackNotice
-            }
+                if isSparse {
+                    sparsePackNotice
+                }
 
-            if showOutputs {
-                outputsSection
+                if showOutputs {
+                    outputsSection
+                }
             }
         }
-        .padding(CathedralTheme.Spacing.base)
-        .background(CathedralTheme.Colors.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg)
-                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg))
         .sheet(isPresented: $showSharePrompt) {
             ShareSheet(activityItems: [promptText])
         }

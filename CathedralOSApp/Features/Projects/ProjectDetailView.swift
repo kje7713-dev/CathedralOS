@@ -689,11 +689,18 @@ struct ProjectDetailView: View {
 
     private var summarySection: some View {
         Section {
-            CathedralCard {
-                TextField("Project summary…", text: $project.summary, axis: .vertical)
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    .lineLimit(3...6)
+            CathedralObjectSurface {
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                    Text("STORY PREMISE")
+                        .font(CathedralTheme.Typography.label(10, weight: .bold))
+                        .tracking(1.8)
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+
+                    TextField("What is this story about?", text: $project.summary, axis: .vertical)
+                        .font(CathedralTheme.Typography.headline(18, weight: .semibold))
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(3...6)
+                }
             }
             .listRowBackground(CathedralTheme.Colors.background)
             .listRowSeparator(.hidden)
@@ -728,44 +735,42 @@ struct ProjectDetailView: View {
 
     private var audienceSection: some View {
         Section {
-            CathedralCard {
-                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-                    Picker("Reading Level", selection: $project.readingLevel) {
-                        ForEach(Self.readingLevels, id: \.value) { item in
-                            Text(item.label).tag(item.value)
+            CathedralObjectSurface {
+                VStack(spacing: 0) {
+                    audiencePickerRow("Reading level", value: readingLevelDisplayName) {
+                        Picker("Reading Level", selection: $project.readingLevel) {
+                            ForEach(Self.readingLevels, id: \.value) { item in
+                                Text(item.label).tag(item.value)
+                            }
                         }
                     }
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
 
-                    Divider()
-
-                    Picker("Content Rating", selection: $project.contentRating) {
-                        ForEach(Self.contentRatings, id: \.value) { item in
-                            let age = StoryContentAgeRating.normalize(item.value)
-                            Text(item.label).tag(item.value).disabled(!StoryIntimacyRating.normalize(project.intimacyRating).isCompatible(with: age))
+                    audiencePickerRow("Content rating", value: StoryContentAgeRating.normalize(project.contentRating).displayName) {
+                        Picker("Content Rating", selection: $project.contentRating) {
+                            ForEach(Self.contentRatings, id: \.value) { item in
+                                let age = StoryContentAgeRating.normalize(item.value)
+                                Text(item.label).tag(item.value).disabled(!StoryIntimacyRating.normalize(project.intimacyRating).isCompatible(with: age))
+                            }
                         }
                     }
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
 
-                    Divider()
-
-                    Picker("Intimacy Level", selection: $project.intimacyRating) {
-                        ForEach(Self.intimacyRatings, id: \.value) { item in
-                            let intimacy = StoryIntimacyRating.normalize(item.value)
-                            Text(item.label).tag(item.value).disabled(!intimacy.isCompatible(with: StoryContentAgeRating.normalize(project.contentRating)))
+                    audiencePickerRow("Intimacy level", value: StoryIntimacyRating.normalize(project.intimacyRating).displayName) {
+                        Picker("Intimacy Level", selection: $project.intimacyRating) {
+                            ForEach(Self.intimacyRatings, id: \.value) { item in
+                                let intimacy = StoryIntimacyRating.normalize(item.value)
+                                Text(item.label).tag(item.value).disabled(!intimacy.isCompatible(with: StoryContentAgeRating.normalize(project.contentRating)))
+                            }
                         }
                     }
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
 
-                    Divider()
-
-                    TextField("Audience notes…", text: $project.audienceNotes, axis: .vertical)
-                        .font(CathedralTheme.Typography.body())
-                        .foregroundStyle(CathedralTheme.Colors.primaryText)
-                        .lineLimit(2...5)
+                    if !project.audienceNotes.isEmpty {
+                        Divider()
+                            .padding(.vertical, CathedralTheme.Spacing.sm)
+                        TextField("Audience notes…", text: $project.audienceNotes, axis: .vertical)
+                            .font(CathedralTheme.Typography.body())
+                            .foregroundStyle(CathedralTheme.Colors.primaryText)
+                            .lineLimit(2...5)
+                    }
                 }
             }
             .listRowBackground(CathedralTheme.Colors.background)
@@ -784,6 +789,31 @@ struct ProjectDetailView: View {
             CathedralSectionHeader("Audience")
                 .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
+    }
+
+    private func audiencePickerRow<PickerContent: View>(
+        _ label: String,
+        value: String,
+        @ViewBuilder picker: () -> PickerContent
+    ) -> some View {
+        HStack(spacing: CathedralTheme.Spacing.sm) {
+            Text(label)
+                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+
+            Spacer(minLength: CathedralTheme.Spacing.sm)
+
+            picker()
+                .labelsHidden()
+                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                .tint(CathedralTheme.Colors.accent)
+                .accessibilityValue(Text(value))
+        }
+        .frame(minHeight: 42)
+    }
+
+    private var readingLevelDisplayName: String {
+        Self.readingLevels.first(where: { $0.value == project.readingLevel })?.label ?? "Not set"
     }
 
     // MARK: Characters Section
@@ -836,8 +866,8 @@ struct ProjectDetailView: View {
             } label: {
                 let s = project.projectSetting
                 CathedralNavRowLabel(
-                    title: "Edit Setting",
-                    subtitle: s?.summary.nilIfEmpty ?? (s == nil ? "No setting defined" : nil)
+                    title: "World & Setting",
+                    subtitle: s?.summary.nilIfEmpty ?? (s == nil ? "Define where this story lives" : nil)
                 )
             }
             .listRowBackground(CathedralTheme.Colors.background)
@@ -1505,46 +1535,41 @@ struct ProjectDetailView: View {
                     .padding(.top, CathedralTheme.Spacing.xs)
 
                 ForEach(outlineSections.sorted(by: { $0.position < $1.position })) { section in
-                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(sectionLabel(section))
-                                .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                                .lineLimit(2)
-                            Text(sectionSettingsLabel(section))
-                                .font(CathedralTheme.Typography.caption())
-                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                        HStack(spacing: CathedralTheme.Spacing.sm) {
-                            Button {
-                                launchOutlineGeneration(sectionID: section.id, scope: "single")
-                            } label: {
-                                Label("Write", systemImage: "play.fill")
-                                    .font(CathedralTheme.Typography.caption(12, weight: .semibold))
-                                    .frame(maxWidth: .infinity)
+                    CathedralObjectSurface {
+                        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(sectionLabel(section))
+                                    .font(CathedralTheme.Typography.headline(16, weight: .semibold))
+                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                    .lineLimit(2)
+                                Text(sectionSettingsLabel(section))
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
                             }
-                            .buttonStyle(.borderedProminent)
-                            .accessibilityLabel("Write \(sectionLabel(section))")
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                            Button {
-                                storyEditorModeRaw = StoryEditorMode.build.rawValue
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                                    .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                            HStack(spacing: CathedralTheme.Spacing.sm) {
+                                Button {
+                                    launchOutlineGeneration(sectionID: section.id, scope: "single")
+                                } label: {
+                                    Label("Write", systemImage: "play.fill")
+                                        .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .accessibilityLabel("Write \(sectionLabel(section))")
+
+                                Button {
+                                    storyEditorModeRaw = StoryEditorMode.build.rawValue
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                        .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityLabel("Edit \(sectionLabel(section)) in Outline")
                             }
-                            .buttonStyle(.bordered)
-                            .accessibilityLabel("Edit \(sectionLabel(section)) in Outline")
                         }
                     }
-                    .padding(CathedralTheme.Spacing.sm)
-                    .background(CathedralTheme.Colors.surface)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg)
-                            .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg))
                 }
             }
         }

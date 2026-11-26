@@ -175,6 +175,35 @@ struct CathedralCard<Content: View>: View {
     }
 }
 
+// MARK: - CathedralObjectSurface
+
+/// The shared surface for editable story objects in a lane.
+/// Keeps the object itself in focus: one surface, one brass rail, one hierarchy.
+struct CathedralObjectSurface<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(CathedralTheme.Spacing.base)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CathedralTheme.Colors.surface)
+            .overlay(alignment: .leading) {
+                Capsule()
+                    .fill(CathedralTheme.Colors.accent)
+                    .frame(width: 3)
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                    .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+}
+
 // MARK: - CathedralPrimaryButton
 
 /// Full-width primary CTA — bold, inverted, uppercase with tracking.

@@ -51,15 +51,6 @@ struct HomeView: View {
                 .scaledToFit()
                 .frame(maxWidth: 340)
                 .frame(maxWidth: .infinity, alignment: .center)
-
-            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-                Text("TURN A SPARK\nINTO A STORY.")
-                    .font(CathedralTheme.Typography.display(34, weight: .black))
-                    .tracking(-0.5)
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
