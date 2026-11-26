@@ -230,10 +230,11 @@ struct ProjectDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            modePicker
             if !advancedMode {
+                workspaceIntro
                 nextStepSection
             }
-            modePicker
             List {
                 if let runStatus = projectRunStatus {
                     runAllStatusSection(runStatus)
@@ -278,9 +279,11 @@ struct ProjectDetailView: View {
                     case .outline:
                         buildSections
                     case .output:
+                        readLaneGuide
                         generationsSection
                         epubExportSection
                     case .compile:
+                        writeLaneGuide
                         compileGenerateCTA
                     }
                 }
@@ -470,6 +473,42 @@ struct ProjectDetailView: View {
         .padding(.bottom, CathedralTheme.Spacing.md)
     }
 
+    @ViewBuilder
+    private var workspaceIntro: some View {
+        switch storyEditorMode {
+        case .story:
+            CathedralWorkspaceIntro(
+                eyebrow: "Story",
+                step: "01 / Define",
+                title: "Start with what matters.",
+                detail: "Premise, people, place, and the feeling you want the story to leave behind."
+            )
+        case .build, .outline:
+            CathedralWorkspaceIntro(
+                eyebrow: "Build",
+                step: "02 / Shape",
+                title: "Give the story a shape.",
+                detail: "Recipes hold the ingredients. The arc and outline turn them into a path."
+            )
+        case .compile:
+            CathedralWorkspaceIntro(
+                eyebrow: "Write",
+                step: "03 / Make",
+                title: "Turn the shape into scenes.",
+                detail: "Write the whole run or work section by section. Every choice stays editable."
+            )
+        case .output:
+            CathedralWorkspaceIntro(
+                eyebrow: "Read",
+                step: "04 / Finish",
+                title: "Stay with the work.",
+                detail: "Review your outputs, keep the versions that matter, and finish when it is ready."
+            )
+        case .cast, .themes, .recipe:
+            EmptyView()
+        }
+    }
+
     private func workspaceTab(_ title: String, mode: StoryEditorMode) -> some View {
         let isSelected = !advancedMode && storyEditorMode == mode
         return Button {
@@ -490,6 +529,7 @@ struct ProjectDetailView: View {
 
     @ViewBuilder
     private var storyInputSections: some View {
+        storyLaneGuide
         summarySection
         audienceSection
         settingSection
@@ -503,6 +543,7 @@ struct ProjectDetailView: View {
 
     @ViewBuilder
     private var buildSections: some View {
+        buildLaneGuide
         recipesSection
         OutlineTabView(
             project: project,
@@ -514,6 +555,50 @@ struct ProjectDetailView: View {
             },
             onProjectRefreshed: refreshProjectReferenceHandler
         )
+    }
+
+    private var storyLaneGuide: some View {
+        Section {
+            CathedralLaneGuide(
+                title: "Start with the story, then add its texture.",
+                detail: "The first useful move is the premise. Everything below gives that premise people, pressure, place, and meaning.",
+                steps: ["Premise", "World", "People"]
+            )
+            .laneGuideRowStyle()
+        }
+    }
+
+    private var buildLaneGuide: some View {
+        Section {
+            CathedralLaneGuide(
+                title: "Turn ingredients into a route.",
+                detail: "A recipe defines the material. The arc gives it movement. The outline makes the writing work concrete.",
+                steps: ["Recipe", "Arc", "Outline"]
+            )
+            .laneGuideRowStyle()
+        }
+    }
+
+    private var writeLaneGuide: some View {
+        Section {
+            CathedralLaneGuide(
+                title: "Choose the size of the next move.",
+                detail: "Write the whole outline for momentum, or write one section when you want tighter control.",
+                steps: ["Choose", "Write", "Review"]
+            )
+            .laneGuideRowStyle()
+        }
+    }
+
+    private var readLaneGuide: some View {
+        Section {
+            CathedralLaneGuide(
+                title: "Judge the work before you finish it.",
+                detail: "The latest output is the center of this lane. Read it, keep the version that matters, then export when it is ready.",
+                steps: ["Review", "Keep", "Export"]
+            )
+            .laneGuideRowStyle()
+        }
     }
 
     private var epubExportSection: some View {
@@ -654,7 +739,7 @@ struct ProjectDetailView: View {
     }
 
     private var nextStepSection: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
             if let acceptRun = projectAcceptRun {
                 AcceptRunBanner(run: acceptRun)
             }
@@ -662,10 +747,22 @@ struct ProjectDetailView: View {
                 GenerationStartingBanner()
             }
 
-            Text("NEXT")
-                .font(CathedralTheme.Typography.label(11, weight: .bold))
-                .tracking(2.2)
+            HStack(alignment: .firstTextBaseline) {
+                Text("NEXT MOVE")
+                    .font(CathedralTheme.Typography.label(11, weight: .bold))
+                    .tracking(2.2)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Spacer()
+                Text("\(workflowCompletedCount)/\(NovelWorkflowStage.allCases.count)")
+                    .font(CathedralTheme.Typography.label(11, weight: .semibold))
+                    .tracking(1.0)
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+            }
+
+            Text(workflowActionDescription(nextWorkflowStage))
+                .font(CathedralTheme.Typography.caption())
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
 
             CathedralPrimaryButton(
                 workflowActionTitle(nextWorkflowStage),
@@ -677,7 +774,15 @@ struct ProjectDetailView: View {
         }
         .padding(.horizontal, CathedralTheme.Spacing.base)
         .padding(.top, CathedralTheme.Spacing.md)
-        .padding(.bottom, CathedralTheme.Spacing.sm)
+        .padding(.bottom, CathedralTheme.Spacing.md)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg)
+                .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg))
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.top, CathedralTheme.Spacing.sm)
     }
 
     private func workflowActionTitle(_ stage: NovelWorkflowStage) -> String {
@@ -690,6 +795,19 @@ struct ProjectDetailView: View {
         case .review: return "Review your latest output"
         case .read: return "Read your latest output"
         case .export: return "Export your novel"
+        }
+    }
+
+    private func workflowActionDescription(_ stage: NovelWorkflowStage) -> String {
+        switch stage {
+        case .define: return "Give the story a premise before you add the detail around it."
+        case .recipe: return "Choose the ingredients the writing model should carry into every scene."
+        case .shape: return "Set the arc that gives the story pressure and direction."
+        case .outline: return "Break the arc into the sections you want to write."
+        case .write: return "Turn the outline into prose, all at once or one section at a time."
+        case .review: return "Open the latest generation and decide what is worth keeping."
+        case .read: return "Read the latest version as a whole before you export it."
+        case .export: return "Package the finished work as an EPUB."
         }
     }
 
@@ -1680,8 +1798,12 @@ struct ProjectDetailView: View {
                         }
                     }
                     .padding(CathedralTheme.Spacing.sm)
-                    .background(CathedralTheme.Colors.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+                    .background(CathedralTheme.Colors.surfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                            .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
                 }
             }
         }

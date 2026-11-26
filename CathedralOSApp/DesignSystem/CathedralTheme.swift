@@ -175,6 +175,116 @@ struct CathedralCard<Content: View>: View {
     }
 }
 
+// MARK: - CathedralWorkspaceIntro
+
+/// Editorial identity block used at the top of each project workspace lane.
+/// The workspace is a sequence of distinct creative rooms, not four unrelated
+/// settings lists; this gives every room the same hierarchy and voice.
+struct CathedralWorkspaceIntro: View {
+    let eyebrow: String
+    let title: String
+    let detail: String
+    let step: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(eyebrow.uppercased())
+                    .font(CathedralTheme.Typography.label(10, weight: .bold))
+                    .tracking(2.0)
+                    .foregroundStyle(CathedralTheme.Colors.accent)
+                Spacer()
+                Text(step.uppercased())
+                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                    .tracking(1.2)
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+            }
+            Text(title)
+                .font(CathedralTheme.Typography.headline(21, weight: .bold))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+            Text(detail)
+                .font(CathedralTheme.Typography.caption(13))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.top, CathedralTheme.Spacing.sm)
+        .padding(.bottom, CathedralTheme.Spacing.xs)
+    }
+}
+
+// MARK: - CathedralLaneGuide
+
+/// Lane-specific orientation card. Each workspace lane has a different job;
+/// this keeps the shared SBD visual language from flattening those jobs into
+/// one generic settings form.
+struct CathedralLaneGuide: View {
+    let title: String
+    let detail: String
+    let steps: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                Text(title)
+                    .font(CathedralTheme.Typography.headline(16, weight: .bold))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                Text(detail)
+                    .font(CathedralTheme.Typography.caption())
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 0) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                    if index > 0 {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                            .padding(.horizontal, CathedralTheme.Spacing.xs)
+                    }
+                    HStack(spacing: CathedralTheme.Spacing.xs) {
+                        Text("0\(index + 1)")
+                            .font(CathedralTheme.Typography.label(9, weight: .bold))
+                            .foregroundStyle(CathedralTheme.Colors.background)
+                            .frame(width: 20, height: 20)
+                            .background(CathedralTheme.Colors.primaryText)
+                            .clipShape(Circle())
+                        Text(step)
+                            .font(CathedralTheme.Typography.label(10, weight: .semibold))
+                            .tracking(0.3)
+                            .foregroundStyle(CathedralTheme.Colors.primaryText)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+        .padding(CathedralTheme.Spacing.base)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CathedralTheme.Colors.surfaceRaised)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+}
+
+private extension View {
+    func laneGuideRowStyle() -> some View {
+        self
+            .listRowBackground(CathedralTheme.Colors.background)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(
+                top: CathedralTheme.Spacing.sm,
+                leading: CathedralTheme.Spacing.base,
+                bottom: CathedralTheme.Spacing.xs,
+                trailing: CathedralTheme.Spacing.base
+            ))
+    }
+}
+
 // MARK: - CathedralPrimaryButton
 
 /// Full-width primary CTA — bold, inverted, uppercase with tracking.
@@ -353,8 +463,14 @@ struct CathedralItemRow: View {
                         .foregroundStyle(CathedralTheme.Colors.tertiaryText)
                 }
             }
-            .padding(.vertical, CathedralTheme.Spacing.sm)
+            .padding(.vertical, CathedralTheme.Spacing.md)
             .padding(.horizontal, CathedralTheme.Spacing.base)
+            .background(CathedralTheme.Colors.surface)
+            .overlay(
+                RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                    .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
         }
         .buttonStyle(.plain)
     }
