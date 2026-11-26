@@ -325,6 +325,25 @@ struct ProjectDetailView: View {
                     } label: {
                         Label("Export story", systemImage: "book.closed")
                     }
+                    Divider()
+                    Button {
+                        advancedMode = false
+                        storyEditorModeRaw = StoryEditorMode.cast.rawValue
+                    } label: {
+                        Label("Cast", systemImage: StoryEditorMode.cast.icon)
+                    }
+                    Button {
+                        advancedMode = false
+                        storyEditorModeRaw = StoryEditorMode.themes.rawValue
+                    } label: {
+                        Label("Themes", systemImage: StoryEditorMode.themes.icon)
+                    }
+                    Button {
+                        advancedMode = false
+                        storyEditorModeRaw = StoryEditorMode.recipe.rawValue
+                    } label: {
+                        Label("Recipe", systemImage: StoryEditorMode.recipe.icon)
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .foregroundStyle(CathedralTheme.Colors.accent)
@@ -468,34 +487,32 @@ struct ProjectDetailView: View {
     // MARK: - Mode Picker / First-run hint
 
     private var modePicker: some View {
-        HStack {
-            Text("SECTION")
-                .font(CathedralTheme.Typography.label(11, weight: .bold))
-                .tracking(1.8)
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-
-            Spacer()
-
-            Picker(selection: $storyEditorModeRaw) {
-                ForEach(StoryEditorMode.allCases) { mode in
-                    Text(mode.title).tag(mode.rawValue)
-                }
-            } label: {
-                HStack(spacing: CathedralTheme.Spacing.xs) {
-                    Text(storyEditorMode.title.uppercased())
-                        .font(CathedralTheme.Typography.label(12, weight: .bold))
-                        .tracking(0.8)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .bold))
-                }
-                .foregroundStyle(CathedralTheme.Colors.primaryText)
-            }
-            .pickerStyle(.menu)
-            .tint(CathedralTheme.Colors.primaryText)
+        HStack(spacing: CathedralTheme.Spacing.xs) {
+            workspaceTab("Story", mode: .story)
+            workspaceTab("Build", mode: .outline)
+            workspaceTab("Write", mode: .compile)
+            workspaceTab("Read", mode: .output)
         }
         .padding(.horizontal, CathedralTheme.Spacing.base)
-        .padding(.vertical, CathedralTheme.Spacing.sm)
-        .background(CathedralTheme.Colors.background)
+        .padding(.vertical, CathedralTheme.Spacing.xs)
+    }
+
+    private func workspaceTab(_ title: String, mode: StoryEditorMode) -> some View {
+        let isSelected = !advancedMode && storyEditorMode == mode
+        return Button {
+            advancedMode = false
+            storyEditorModeRaw = mode.rawValue
+        } label: {
+            Text(title.uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .bold))
+                .tracking(0.8)
+                .foregroundStyle(isSelected ? CathedralTheme.Colors.background : CathedralTheme.Colors.secondaryText)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, CathedralTheme.Spacing.sm)
+                .background(isSelected ? CathedralTheme.Colors.primaryText : CathedralTheme.Colors.surface)
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Novel workflow guidance
