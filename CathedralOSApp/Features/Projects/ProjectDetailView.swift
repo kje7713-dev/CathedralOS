@@ -311,22 +311,24 @@ struct ProjectDetailView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    advancedMode.toggle()
+                Menu {
+                    Button {
+                        advancedMode.toggle()
+                    } label: {
+                        Label(
+                            advancedMode ? "Hide all story tools" : "Show all story tools",
+                            systemImage: advancedMode ? "rectangle.grid.2x2.fill" : "rectangle.grid.2x2"
+                        )
+                    }
+                    Button {
+                        showKindleExport = true
+                    } label: {
+                        Label("Export story", systemImage: "book.closed")
+                    }
                 } label: {
-                    Image(systemName: advancedMode ? "rectangle.grid.2x2.fill" : "rectangle.grid.2x2")
-                        .foregroundStyle(advancedMode ? CathedralTheme.Colors.accent : CathedralTheme.Colors.secondaryText)
-                }
-                .accessibilityLabel(advancedMode ? "Exit advanced mode" : "Enter advanced mode")
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    showKindleExport = true
-                } label: {
-                    Image(systemName: "book.closed")
+                    Image(systemName: "ellipsis.circle")
                         .foregroundStyle(CathedralTheme.Colors.accent)
                 }
-                .accessibilityLabel("Export to eReader")
             }
         }
         .sheet(isPresented: $showKindleExport) {
@@ -466,17 +468,31 @@ struct ProjectDetailView: View {
     // MARK: - Mode Picker / First-run hint
 
     private var modePicker: some View {
-        Picker("Mode", selection: $storyEditorModeRaw) {
-            ForEach(StoryEditorMode.allCases) { mode in
-                // Icons-only display so all 7 tabs fit at iPhone widths
-                // without truncation. VoiceOver reads the tab title via
-                // accessibilityLabel.
-                Image(systemName: mode.icon)
-                    .accessibilityLabel(mode.title)
-                    .tag(mode.rawValue)
+        HStack {
+            Text("SECTION")
+                .font(CathedralTheme.Typography.label(11, weight: .bold))
+                .tracking(1.8)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+
+            Spacer()
+
+            Picker(selection: $storyEditorModeRaw) {
+                ForEach(StoryEditorMode.allCases) { mode in
+                    Text(mode.title).tag(mode.rawValue)
+                }
+            } label: {
+                HStack(spacing: CathedralTheme.Spacing.xs) {
+                    Text(storyEditorMode.title.uppercased())
+                        .font(CathedralTheme.Typography.label(12, weight: .bold))
+                        .tracking(0.8)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                }
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
             }
+            .pickerStyle(.menu)
+            .tint(CathedralTheme.Colors.primaryText)
         }
-        .pickerStyle(.segmented)
         .padding(.horizontal, CathedralTheme.Spacing.base)
         .padding(.vertical, CathedralTheme.Spacing.sm)
         .background(CathedralTheme.Colors.background)
