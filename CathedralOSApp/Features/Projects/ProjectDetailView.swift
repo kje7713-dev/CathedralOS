@@ -14,6 +14,7 @@ enum OutputListFilter: String, CaseIterable {
 /// Advanced toggle that reveals every section in a single flat list.
 enum StoryEditorMode: String, CaseIterable, Identifiable {
     case story
+    case build
     case cast
     case themes
     case recipe
@@ -28,6 +29,7 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .story: return "Story"
+        case .build: return "Build"
         case .cast: return "Cast"
         case .themes: return "Themes"
         case .recipe: return "Recipe"
@@ -43,6 +45,7 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .story: return "text.book.closed"
+        case .build: return "square.stack.3d.up"
         case .cast: return "person.2"
         case .themes: return "sparkles"
         case .recipe: return "list.bullet.rectangle"
@@ -265,6 +268,8 @@ struct ProjectDetailView: View {
                         audienceSection
                         settingSection
                         motifsSection
+                    case .build:
+                        buildSections
                     case .cast:
                         charactersSection
                         relationshipsSection
@@ -275,15 +280,7 @@ struct ProjectDetailView: View {
                     case .recipe:
                         recipesSection
                     case .outline:
-                        OutlineTabView(
-                            project: project,
-                            generationLaunch: $pendingOutlineGeneration,
-                            onGenerationCompleted: {
-                                advancedMode = false
-                                storyEditorModeRaw = StoryEditorMode.output.rawValue
-                            },
-                            onProjectRefreshed: refreshProjectReferenceHandler
-                        )
+                        buildSections
                     case .output:
                         generationsSection
                     case .compile:
@@ -302,7 +299,7 @@ struct ProjectDetailView: View {
                 project: project,
                 generationLaunch: $pendingOutlineGeneration,
                 isGenerationStarting: $isRunAllStarting,
-                isVisible: storyEditorMode != .outline && !advancedMode,
+                isVisible: storyEditorMode != .build && storyEditorMode != .outline && !advancedMode,
                 onProjectRefreshed: refreshProjectReferenceHandler,
                 onGenerationCompleted: handleGenerationCompleted
             )
@@ -324,25 +321,6 @@ struct ProjectDetailView: View {
                         showKindleExport = true
                     } label: {
                         Label("Export story", systemImage: "book.closed")
-                    }
-                    Divider()
-                    Button {
-                        advancedMode = false
-                        storyEditorModeRaw = StoryEditorMode.cast.rawValue
-                    } label: {
-                        Label("Cast", systemImage: StoryEditorMode.cast.icon)
-                    }
-                    Button {
-                        advancedMode = false
-                        storyEditorModeRaw = StoryEditorMode.themes.rawValue
-                    } label: {
-                        Label("Themes", systemImage: StoryEditorMode.themes.icon)
-                    }
-                    Button {
-                        advancedMode = false
-                        storyEditorModeRaw = StoryEditorMode.recipe.rawValue
-                    } label: {
-                        Label("Recipe", systemImage: StoryEditorMode.recipe.icon)
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -489,7 +467,7 @@ struct ProjectDetailView: View {
     private var modePicker: some View {
         HStack(spacing: CathedralTheme.Spacing.xs) {
             workspaceTab("Story", mode: .story)
-            workspaceTab("Build", mode: .outline)
+            workspaceTab("Build", mode: .build)
             workspaceTab("Write", mode: .compile)
             workspaceTab("Read", mode: .output)
         }
@@ -513,6 +491,28 @@ struct ProjectDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var buildSections: some View {
+        charactersSection
+        relationshipsSection
+        settingSection
+        sparksSection
+        aftertastesSection
+        themeQuestionsSection
+        motifsSection
+        recipesSection
+        OutlineTabView(
+            project: project,
+            generationLaunch: $pendingOutlineGeneration,
+            isGenerationStarting: $isRunAllStarting,
+            onGenerationCompleted: {
+                advancedMode = false
+                storyEditorModeRaw = StoryEditorMode.output.rawValue
+            },
+            onProjectRefreshed: refreshProjectReferenceHandler
+        )
     }
 
     // MARK: - Novel workflow guidance
@@ -694,7 +694,7 @@ struct ProjectDetailView: View {
                 storyEditorModeRaw = StoryEditorMode.recipe.rawValue
             }
         case .shape, .outline:
-            storyEditorModeRaw = StoryEditorMode.outline.rawValue
+            storyEditorModeRaw = StoryEditorMode.build.rawValue
         case .write:
             storyEditorModeRaw = StoryEditorMode.compile.rawValue
         case .review:
@@ -734,7 +734,7 @@ struct ProjectDetailView: View {
                     ? durabilityCoordinator.activeRunPollingError
                     : nil,
                 onResume: { await self.resumeRun(status) },
-                onNavigate: { storyEditorModeRaw = StoryEditorMode.outline.rawValue }
+                onNavigate: { storyEditorModeRaw = StoryEditorMode.build.rawValue }
             )
             .accessibilityLabel("View Run All status in Outline")
             .listRowBackground(CathedralTheme.Colors.background)
@@ -1543,7 +1543,7 @@ struct ProjectDetailView: View {
                     .font(CathedralTheme.Typography.caption())
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 CathedralPrimaryButton("Open Outline", systemImage: "list.number") {
-                    storyEditorModeRaw = StoryEditorMode.outline.rawValue
+                    storyEditorModeRaw = StoryEditorMode.build.rawValue
                 }
             } else {
                 if let resumableRun = projectRunStatus, resumableRun.isResumable {
@@ -1660,7 +1660,7 @@ struct ProjectDetailView: View {
                             .accessibilityLabel("Write \(sectionLabel(section))")
 
                             Button {
-                                storyEditorModeRaw = StoryEditorMode.outline.rawValue
+                                storyEditorModeRaw = StoryEditorMode.build.rawValue
                             } label: {
                                 Label("Edit", systemImage: "pencil")
                                     .font(CathedralTheme.Typography.caption(12, weight: .semibold))
