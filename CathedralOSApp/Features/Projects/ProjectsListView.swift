@@ -73,39 +73,33 @@ struct ProjectsListView: View {
         return projects.filter { seen.insert($0.id).inserted }
     }
 
+    private var orderedProjects: [StoryProject] {
+        dedupedProjects.sorted {
+            let leftActivity = activityDate(for: $0)
+            let rightActivity = activityDate(for: $1)
+            if leftActivity != rightActivity { return leftActivity > rightActivity }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            List {
-                Section {
+            ScrollView {
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
                     welcomeSummary
-                }
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
+                    newStoryButton
 
-                Section {
-                    CathedralPrimaryButton("New Story", systemImage: "plus") {
-                        projectCreationRoute = .choices
+                    if orderedProjects.isEmpty {
+                        emptyState
+                    } else {
+                        projectList
                     }
-                    .padding(.horizontal, CathedralTheme.Spacing.sm)
-                    .padding(.vertical, CathedralTheme.Spacing.xs)
                 }
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-
-                if dedupedProjects.isEmpty {
-                    emptyState
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                } else {
-                    projectList
-                }
+                .padding(.horizontal, CathedralTheme.Spacing.base)
+                .padding(.top, CathedralTheme.Spacing.xl)
+                .padding(.bottom, CathedralTheme.Spacing.xxl)
             }
-            .listStyle(.insetGrouped)
-            .contentMargins(.top, CathedralTheme.Spacing.sm, for: .scrollContent)
-            .listSectionSpacing(CathedralTheme.Spacing.md)
-            .scrollContentBackground(.hidden)
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: CathedralTheme.Spacing.sm) {
@@ -230,29 +224,19 @@ struct ProjectsListView: View {
         }
     }
 
+    private var newStoryButton: some View {
+        CathedralPrimaryButton("New Story", systemImage: "plus") {
+            projectCreationRoute = .choices
+        }
+    }
+
     // MARK: Empty State
 
     private var emptyState: some View {
-        VStack(spacing: CathedralTheme.Spacing.xl) {
-            Spacer()
-            Image(systemName: "books.vertical")
-                .font(.system(size: CathedralTheme.Icons.emptyStateGlyph, weight: .ultraLight))
-                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-
-            VStack(spacing: CathedralTheme.Spacing.xs) {
-                Text("No Stories Yet")
-                    .font(CathedralTheme.Typography.headline(18))
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                Text("Choose a way to start writing.")
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .multilineTextAlignment(.center)
-            }
-
-            CathedralPrimaryButton("Start a Story", systemImage: "plus") {
-                projectCreationRoute = .choices
-            }
-            .padding(.horizontal, CathedralTheme.Spacing.xxl)
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+            Text("NO STORIES YET.")
+                .font(CathedralTheme.Typography.display(24, weight: .black))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
 
             if hasLocalBackups {
                 Button {
@@ -273,38 +257,44 @@ struct ProjectsListView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(CathedralTheme.Colors.accent)
-                .padding(.horizontal, CathedralTheme.Spacing.xxl)
             }
-            Spacer()
         }
-        .padding(CathedralTheme.Spacing.xl)
+        .padding(.vertical, CathedralTheme.Spacing.xl)
     }
 
     // MARK: Project List
 
     private var projectList: some View {
-        ForEach(dedupedProjects) { project in
-            NavigationLink(value: project) {
-                projectRow(project)
-            }
-            .buttonStyle(.plain)
-            .listRowBackground(CathedralTheme.Colors.surface)
-            .listRowSeparatorTint(CathedralTheme.Colors.separator)
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                Button(role: .destructive) {
-                    projectToDelete = project
-                } label: {
-                    Label("Delete", systemImage: "trash")
+        VStack(spacing: 0) {
+            ForEach(Array(orderedProjects.enumerated()), id: \.element.id) { index, project in
+                NavigationLink(value: project) {
+                    projectRow(project)
                 }
-                Button {
-                    renameText = project.name
-                    projectToRename = project
-                } label: {
-                    Label("Rename", systemImage: "pencil")
+                .buttonStyle(.plain)
+                .padding(.horizontal, CathedralTheme.Spacing.base)
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        projectToDelete = project
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    Button {
+                        renameText = project.name
+                        projectToRename = project
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                    .tint(CathedralTheme.Colors.accent)
                 }
-                .tint(CathedralTheme.Colors.accent)
+
+                if index < orderedProjects.count - 1 {
+                    Divider()
+                        .padding(.leading, CathedralTheme.Spacing.base)
+                }
             }
         }
+        .background(CathedralTheme.Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg))
     }
 
     @ViewBuilder
@@ -314,7 +304,12 @@ struct ProjectsListView: View {
                 .font(CathedralTheme.Typography.headline(18, weight: .bold))
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, CathedralTheme.Spacing.md)
+    }
+
+    private func activityDate(for project: StoryProject) -> Date {
+        project.generations.map(\.updatedAt).max() ?? .distantPast
     }
 
     // MARK: Creation
