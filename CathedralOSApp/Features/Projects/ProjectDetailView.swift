@@ -133,7 +133,6 @@ struct ProjectDetailView: View {
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
-    @AppStorage("cathedralos.showNovelWorkspace") private var showNovelWorkspace = true
 
     private var storyEditorMode: StoryEditorMode {
         StoryEditorMode(rawValue: storyEditorModeRaw) ?? .story
@@ -228,8 +227,8 @@ struct ProjectDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !advancedMode && showNovelWorkspace {
-                novelWorkflowSection
+            if !advancedMode {
+                nextStepSection
             }
             modePicker
             List {
@@ -311,15 +310,6 @@ struct ProjectDetailView: View {
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    showNovelWorkspace.toggle()
-                } label: {
-                    Image(systemName: showNovelWorkspace ? "eye" : "eye.slash")
-                        .foregroundStyle(showNovelWorkspace ? CathedralTheme.Colors.accent : CathedralTheme.Colors.secondaryText)
-                }
-                .accessibilityLabel(showNovelWorkspace ? "Hide Novel Workspace" : "Show Novel Workspace")
-            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     advancedMode.toggle()
@@ -595,82 +585,55 @@ struct ProjectDetailView: View {
         workflowCompletion.values.filter { $0 }.count
     }
 
-    private var novelWorkflowSection: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-            CathedralSectionHeader("Your path")
-            CathedralCard {
-                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
-                    if let acceptRun = projectAcceptRun {
-                        AcceptRunBanner(run: acceptRun)
-                    }
-                    if isRunAllStarting {
-                        GenerationStartingBanner()
-                    } else if let status = projectRunStatus {
-                        ActiveRunBanner(
-                            status: status,
-                            pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
-                                ? durabilityCoordinator.activeRunPollingError
-                                : nil,
-                            onResume: { await self.resumeRun(status) }
-                        )
-                    }
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-                            Text("Novel Workspace")
-                                .font(CathedralTheme.Typography.body(17, weight: .semibold))
-                                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            Text("An optional path through your existing tools")
-                                .font(CathedralTheme.Typography.caption())
-                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        }
-                        Spacer()
-                        Text("\(workflowCompletedCount) milestones")
-                            .font(CathedralTheme.Typography.caption(12, weight: .semibold))
-                            .foregroundStyle(CathedralTheme.Colors.accent)
-                    }
-
-                    HStack(spacing: CathedralTheme.Spacing.xs) {
-                        ForEach(NovelWorkflowStage.allCases) { stage in
-                            VStack(spacing: 4) {
-                                Image(systemName: stage.icon)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(workflowCompletion[stage] == true
-                                        ? CathedralTheme.Colors.accent
-                                        : CathedralTheme.Colors.tertiaryText)
-                                Text(stage.title)
-                                    .font(CathedralTheme.Typography.label(9, weight: .medium))
-                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.7)
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                    }
-
-                    Button {
-                        performWorkflowAction(nextWorkflowStage)
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Next useful step")
-                                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
-                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                                Text(workflowActionTitle(nextWorkflowStage))
-                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            }
-                            Spacer()
-                            Image(systemName: "arrow.right.circle.fill")
-                                .font(.system(size: 22, weight: .semibold))
-                                .foregroundStyle(CathedralTheme.Colors.accent)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Next useful step: \(workflowActionTitle(nextWorkflowStage))")
-                }
+    private var nextStepSection: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            if let acceptRun = projectAcceptRun {
+                AcceptRunBanner(run: acceptRun)
             }
+            if isRunAllStarting {
+                GenerationStartingBanner()
+            }
+
+            Text("NEXT")
+                .font(CathedralTheme.Typography.label(11, weight: .bold))
+                .tracking(2.2)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+
+            Button {
+                performWorkflowAction(nextWorkflowStage)
+            } label: {
+                HStack(spacing: CathedralTheme.Spacing.md) {
+                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                        Text(workflowActionTitle(nextWorkflowStage))
+                            .font(CathedralTheme.Typography.headline(19, weight: .bold))
+                            .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    }
+
+                    Spacer(minLength: CathedralTheme.Spacing.sm)
+
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+                }
+                .padding(CathedralTheme.Spacing.base)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(CathedralTheme.Colors.surface)
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(CathedralTheme.Colors.accent)
+                        .frame(width: 3)
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                        .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Next: \(workflowActionTitle(nextWorkflowStage))")
         }
         .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.top, CathedralTheme.Spacing.md)
         .padding(.bottom, CathedralTheme.Spacing.sm)
     }
 
