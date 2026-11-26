@@ -52,13 +52,13 @@ struct HomeView: View {
                 .frame(maxWidth: 275, alignment: .leading)
 
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-                Text("MAKE SOMETHING\nTHAT LASTS.")
+                Text("TURN A SPARK\nINTO A STORY.")
                     .font(CathedralTheme.Typography.display(34, weight: .black))
                     .tracking(-0.5)
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("We are what we repeatedly do.")
+                Text("Start with an idea. Keep going until it has a life of its own.")
                     .font(CathedralTheme.Typography.body(18, weight: .medium))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
