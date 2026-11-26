@@ -91,6 +91,16 @@ struct ProjectsListView: View {
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
 
+                Section {
+                    CathedralPrimaryButton("New Story", systemImage: "plus") {
+                        projectCreationRoute = .choices
+                    }
+                    .padding(.horizontal, CathedralTheme.Spacing.sm)
+                    .padding(.vertical, CathedralTheme.Spacing.xs)
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+
                 if dedupedProjects.isEmpty {
                     emptyState
                         .listRowInsets(EdgeInsets())
