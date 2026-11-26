@@ -286,7 +286,9 @@ struct ProjectDetailView: View {
                 }
             }
             .listStyle(.plain)
+            .listRowSpacing(CathedralTheme.Spacing.sm)
             .scrollContentBackground(.hidden)
+            .safeAreaPadding(.bottom, CathedralTheme.Spacing.xxl + CathedralTheme.Spacing.xl)
         }
         .background(CathedralTheme.Colors.background.ignoresSafeArea())
         // Keep the existing confirmation and kickoff flow alive while the user
@@ -313,11 +315,6 @@ struct ProjectDetailView: View {
                             advancedMode ? "Hide all story tools" : "Show all story tools",
                             systemImage: advancedMode ? "rectangle.grid.2x2.fill" : "rectangle.grid.2x2"
                         )
-                    }
-                    Button {
-                        showKindleExport = true
-                    } label: {
-                        Label("Export story", systemImage: "book.closed")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
