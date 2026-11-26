@@ -68,10 +68,10 @@ struct RecipeCard: View {
         .padding(CathedralTheme.Spacing.base)
         .background(CathedralTheme.Colors.surface)
         .overlay(
-            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg)
                 .stroke(CathedralTheme.Colors.border, lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg))
         .sheet(isPresented: $showSharePrompt) {
             ShareSheet(activityItems: [promptText])
         }
