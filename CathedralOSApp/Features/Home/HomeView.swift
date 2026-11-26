@@ -49,7 +49,7 @@ struct HomeView: View {
             Image("StoryDonkeyWordmark")
                 .resizable()
                 .scaledToFit()
-                .frame(maxWidth: 275)
+                .frame(maxWidth: 340)
                 .frame(maxWidth: .infinity, alignment: .center)
 
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
@@ -59,9 +59,6 @@ struct HomeView: View {
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("Start with an idea. Keep going until it has a life of its own.")
-                    .font(CathedralTheme.Typography.body(18, weight: .medium))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -94,8 +91,7 @@ struct HomeView: View {
             Button(action: onBuildNovel) {
                 actionBlock(
                     icon: "books.vertical.fill",
-                    title: "BUILD A NOVEL",
-                    subtitle: "Develop characters, arcs, and chapters over time."
+                    title: "BUILD A NOVEL"
                 )
             }
             .buttonStyle(.plain)
@@ -116,9 +112,6 @@ struct HomeView: View {
                         Text(project.name)
                             .font(CathedralTheme.Typography.headline(20, weight: .bold))
                             .foregroundStyle(CathedralTheme.Colors.primaryText)
-                        Text(project.generations.isEmpty ? "Start shaping your story." : "Open your latest draft.")
-                            .font(CathedralTheme.Typography.body(14))
-                            .foregroundStyle(CathedralTheme.Colors.secondaryText)
                     }
 
                     Spacer(minLength: CathedralTheme.Spacing.sm)
@@ -148,7 +141,7 @@ struct HomeView: View {
         }
     }
 
-    private func actionBlock(icon: String, title: String, subtitle: String) -> some View {
+    private func actionBlock(icon: String, title: String) -> some View {
         HStack(spacing: CathedralTheme.Spacing.md) {
             Image(systemName: icon)
                 .font(.system(size: 18, weight: .semibold))
@@ -160,10 +153,6 @@ struct HomeView: View {
                     .font(CathedralTheme.Typography.headline(16, weight: .bold))
                     .tracking(0.5)
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
-                Text(subtitle)
-                    .font(CathedralTheme.Typography.caption(13))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: CathedralTheme.Spacing.sm)
