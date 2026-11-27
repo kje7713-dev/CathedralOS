@@ -1,4 +1,5 @@
 import Foundation
+import ReadiumShared
 
 // MARK: - ExportDownloadResponse
 
@@ -189,6 +190,148 @@ final class KindleExportDownloader {
             request: request,
             session: session,
         )
+    }
+}
+
+// MARK: - EPUBReadingProgressStore
+
+/// Persists Readium locators per signed-in user and publication. Cloud errors
+/// are intentionally non-fatal: the local cache keeps the reader usable offline.
+@MainActor
+final class EPUBReadingProgressStore {
+    private let backend: (any BackendClient)?
+    private let session: URLSession
+    private let sessionProvider: any SupabaseSessionProvider
+    private let authService: AuthService
+    private let defaults: UserDefaults
+    private let localPrefix = "reader.progress."
+    private var pendingUpload: Task<Void, Never>?
+    private var latestUpload: (Locator, String)?
+
+    init(
+        backend: (any BackendClient)? = nil,
+        session: URLSession = .shared,
+        sessionProvider: (any SupabaseSessionProvider)? = nil,
+        authService: AuthService = BackendAuthService.shared,
+        defaults: UserDefaults = .standard
+    ) {
+        self.backend = backend
+        self.session = session
+        self.sessionProvider = sessionProvider ?? AuthSessionResolver.shared
+        self.authService = authService
+        self.defaults = defaults
+    }
+
+    func loadLocator(publicationKey: String) async -> Locator? {
+        if let local = localLocator(publicationKey: publicationKey) {
+            // Cloud is authoritative when available, but local data gives us
+            // an immediate offline fallback if the request cannot be made.
+            if let cloud = try? await fetchCloudLocator(publicationKey: publicationKey) {
+                saveLocal(cloud, publicationKey: publicationKey)
+                return cloud
+            }
+            return local
+        }
+        guard let cloud = try? await fetchCloudLocator(publicationKey: publicationKey) else { return nil }
+        saveLocal(cloud, publicationKey: publicationKey)
+        return cloud
+    }
+
+    func save(_ locator: Locator, publicationKey: String) {
+        saveLocal(locator, publicationKey: publicationKey)
+        latestUpload = (locator, publicationKey)
+        pendingUpload?.cancel()
+        pendingUpload = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(750))
+            guard !Task.isCancelled, let self, let latest = self.latestUpload else { return }
+            try? await self.upsertCloud(latest.0, publicationKey: latest.1)
+        }
+    }
+
+    /// Sends the most recent position immediately when the reader is closing.
+    func flush() {
+        pendingUpload?.cancel()
+        guard let latestUpload else { return }
+        pendingUpload = Task { [weak self] in
+            guard let self else { return }
+            try? await self.upsertCloud(latestUpload.0, publicationKey: latestUpload.1)
+        }
+    }
+
+    private func localKey(_ publicationKey: String) -> String {
+        let userKey = authService.currentUserID ?? "anonymous"
+        return localPrefix + userKey + "." + publicationKey
+    }
+
+    private func localLocator(publicationKey: String) -> Locator? {
+        guard let data = defaults.data(forKey: localKey(publicationKey)) else { return nil }
+        return try? Locator(jsonData: data)
+    }
+
+    private func saveLocal(_ locator: Locator, publicationKey: String) {
+        guard let data = try? locator.jsonData() else { return }
+        defaults.set(data, forKey: localKey(publicationKey))
+    }
+
+    private func fetchCloudLocator(publicationKey: String) async throws -> Locator? {
+        let (client, token, _) = try await authenticatedClientAndToken()
+        var components = URLComponents(url: restURL(client: client), resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "publication_key", value: "eq.\(publicationKey)"),
+            URLQueryItem(name: "select", value: "publication_key,locator_json"),
+            URLQueryItem(name: "limit", value: "1")
+        ]
+        guard let url = components?.url else { throw BackendClientError.networkError(URLError(.badURL)) }
+        var request = client.authorizedRequest(for: url, userAccessToken: token)
+        request.httpMethod = "GET"
+        let (data, response) = try await sessionProvider.retryOnceAfterExpiredJWT(request: request, session: session)
+        try validate(response: response, data: data)
+        guard let records = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+              let locatorObject = records.first?["locator_json"],
+              let locatorData = try? JSONSerialization.data(withJSONObject: locatorObject),
+              let locator = try? Locator(jsonData: locatorData) else { return nil }
+        return locator
+    }
+
+    private func upsertCloud(_ locator: Locator, publicationKey: String) async throws {
+        let (client, token, userID) = try await authenticatedClientAndToken()
+        let body = try JSONSerialization.data(withJSONObject: [
+            "user_id": userID,
+            "publication_key": publicationKey,
+            "locator_json": locator.jsonValue.any
+        ])
+        var components = URLComponents(url: restURL(client: client), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "on_conflict", value: "user_id,publication_key")]
+        guard let url = components?.url else { throw BackendClientError.networkError(URLError(.badURL)) }
+        var request = client.authorizedRequest(for: url, userAccessToken: token)
+        request.httpMethod = "POST"
+        request.setValue("resolution=merge-duplicates,return=minimal", forHTTPHeaderField: "Prefer")
+        request.httpBody = body
+        let (data, response) = try await sessionProvider.retryOnceAfterExpiredJWT(request: request, session: session)
+        try validate(response: response, data: data)
+    }
+
+    private func authenticatedClientAndToken() async throws -> (any BackendClient, String, String) {
+        let client: any BackendClient
+        if let backend {
+            client = backend
+        } else {
+            client = try SupabaseBackendClient()
+        }
+        let user = try await sessionProvider.ensureSignedInUser()
+        let token = try await sessionProvider.validAccessToken(forceRefresh: false)
+        return (client, token, user.id)
+    }
+
+    private func restURL(client: any BackendClient) -> URL {
+        client.configuration.projectURL.appendingPathComponent("rest/v1/reader_progress")
+    }
+
+    private func validate(response: URLResponse, data: Data) throws {
+        guard let http = response as? HTTPURLResponse else { throw BackendClientError.networkError(URLError(.badServerResponse)) }
+        guard (200...299).contains(http.statusCode) else {
+            throw BackendClientError.serverError(statusCode: http.statusCode, message: String(data: data, encoding: .utf8))
+        }
     }
 }
 

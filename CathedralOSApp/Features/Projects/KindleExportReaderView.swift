@@ -33,14 +33,21 @@ private final class EPUBSpeechModel: ObservableObject {
 struct KindleExportReaderView: View {
     let fileURL: URL
     let bookTitle: String
+    let publicationKey: String?
 
     @Environment(\.dismiss) private var dismiss
     @State private var loadError: String?
     @StateObject private var speech = EPUBSpeechModel()
 
+    init(fileURL: URL, bookTitle: String, publicationKey: String? = nil) {
+        self.fileURL = fileURL
+        self.bookTitle = bookTitle
+        self.publicationKey = publicationKey
+    }
+
     var body: some View {
         NavigationStack {
-            ReadiumEPUBView(fileURL: fileURL, speech: speech) { message in
+            ReadiumEPUBView(fileURL: fileURL, speech: speech, publicationKey: publicationKey) { message in
                 loadError = message
             }
             .ignoresSafeArea()
@@ -84,10 +91,11 @@ struct KindleExportReaderView: View {
 private struct ReadiumEPUBView: UIViewControllerRepresentable {
     let fileURL: URL
     let speech: EPUBSpeechModel
+    let publicationKey: String?
     let onError: @MainActor (String) -> Void
 
     func makeUIViewController(context: Context) -> ReadiumEPUBViewController {
-        ReadiumEPUBViewController(fileURL: fileURL, speech: speech, onError: onError)
+        ReadiumEPUBViewController(fileURL: fileURL, speech: speech, publicationKey: publicationKey, onError: onError)
     }
 
     func updateUIViewController(_ viewController: ReadiumEPUBViewController, context: Context) {}
@@ -97,14 +105,17 @@ private struct ReadiumEPUBView: UIViewControllerRepresentable {
 private final class ReadiumEPUBViewController: UIViewController {
     private let fileURL: URL
     private let speech: EPUBSpeechModel
+    private let publicationKey: String?
+    private let progressStore = EPUBReadingProgressStore()
     private let onError: @MainActor (String) -> Void
     private var navigator: EPUBNavigatorViewController?
     private var speechSynthesizer: PublicationSpeechSynthesizer?
     private var loadTask: Task<Void, Never>?
 
-    init(fileURL: URL, speech: EPUBSpeechModel, onError: @escaping @MainActor (String) -> Void) {
+    init(fileURL: URL, speech: EPUBSpeechModel, publicationKey: String?, onError: @escaping @MainActor (String) -> Void) {
         self.fileURL = fileURL
         self.speech = speech
+        self.publicationKey = publicationKey
         self.onError = onError
         super.init(nibName: nil, bundle: nil)
         speech.reader = self
@@ -129,6 +140,7 @@ private final class ReadiumEPUBViewController: UIViewController {
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         stopSpeech()
+        progressStore.flush()
     }
 
     func toggleSpeech() {
@@ -185,10 +197,17 @@ private final class ReadiumEPUBViewController: UIViewController {
         }
 
         do {
+            let savedLocation: Locator?
+            if let publicationKey {
+                savedLocation = await progressStore.loadLocator(publicationKey: publicationKey)
+            } else {
+                savedLocation = nil
+            }
             let navigator = try EPUBNavigatorViewController(
                 publication: publication,
-                initialLocation: nil
+                initialLocation: savedLocation
             )
+            navigator.delegate = self
             addChild(navigator)
             view.addSubview(navigator.view)
             navigator.view.translatesAutoresizingMaskIntoConstraints = false
@@ -211,7 +230,14 @@ private final class ReadiumEPUBViewController: UIViewController {
     }
 }
 
-extension ReadiumEPUBViewController: PublicationSpeechSynthesizerDelegate {
+extension ReadiumEPUBViewController: EPUBNavigatorDelegate, PublicationSpeechSynthesizerDelegate {
+    func navigator(_ navigator: Navigator, presentError error: NavigatorError) {}
+
+    func navigator(_ navigator: Navigator, locationDidChange locator: Locator) {
+        guard let publicationKey else { return }
+        progressStore.save(locator, publicationKey: publicationKey)
+    }
+
     func publicationSpeechSynthesizer(
         _ synthesizer: PublicationSpeechSynthesizer,
         stateDidChange state: PublicationSpeechSynthesizer.State
