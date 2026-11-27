@@ -84,7 +84,12 @@ struct RecipeCard: View {
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
                 .lineLimit(1)
             Spacer()
-            metadataPillStrip
+            if !metadataPills.isEmpty {
+                Text(metadataPills.joined(separator: " · "))
+                    .font(CathedralTheme.Typography.caption(11, weight: .medium))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .lineLimit(1)
+            }
             Menu {
                 Button {
                     showSharePrompt = true
@@ -112,21 +117,6 @@ struct RecipeCard: View {
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
             }
             .accessibilityLabel("Recipe actions")
-        }
-    }
-
-    private var metadataPillStrip: some View {
-        let pills = metadataPills
-        return Group {
-            if !pills.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: CathedralTheme.Spacing.xs) {
-                        ForEach(pills, id: \.self) { label in
-                            CathedralMetadataPill(label: label)
-                        }
-                    }
-                }
-            }
         }
     }
 

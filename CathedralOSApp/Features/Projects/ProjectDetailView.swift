@@ -1453,7 +1453,8 @@ struct ProjectDetailView: View {
                             Image(systemName: "arrow.uturn.backward.circle.fill")
                                 .font(.system(size: 16, weight: .semibold))
                                 .frame(width: 28, height: 28)
-                                .background(CathedralTheme.Colors.accent.opacity(0.16))
+                                .foregroundStyle(CathedralTheme.Colors.background)
+                                .background(CathedralTheme.Colors.primaryText)
                                 .clipShape(Circle())
 
                             VStack(alignment: .leading, spacing: 3) {
@@ -1474,10 +1475,10 @@ struct ProjectDetailView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(CathedralTheme.Spacing.md)
-                        .background(CathedralTheme.Colors.accent.opacity(0.10))
+                        .background(CathedralTheme.Colors.surface)
                         .overlay(
                             RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                                .stroke(CathedralTheme.Colors.accent.opacity(0.25), lineWidth: 1)
+                                .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
                         )
                         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
                     }
@@ -1495,7 +1496,8 @@ struct ProjectDetailView: View {
                             Image(systemName: "play.fill")
                                 .font(.system(size: 16, weight: .semibold))
                                 .frame(width: 28, height: 28)
-                                .background(CathedralTheme.Colors.accent.opacity(0.16))
+                                .foregroundStyle(CathedralTheme.Colors.background)
+                                .background(CathedralTheme.Colors.primaryText)
                                 .clipShape(Circle())
 
                             VStack(alignment: .leading, spacing: 3) {
@@ -1516,10 +1518,10 @@ struct ProjectDetailView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(CathedralTheme.Spacing.md)
-                        .background(CathedralTheme.Colors.accent.opacity(0.10))
+                        .background(CathedralTheme.Colors.surface)
                         .overlay(
                             RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                                .stroke(CathedralTheme.Colors.accent.opacity(0.25), lineWidth: 1)
+                                .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
                         )
                         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
                     }
@@ -1555,8 +1557,12 @@ struct ProjectDetailView: View {
                                     Label("Write", systemImage: "play.fill")
                                         .font(CathedralTheme.Typography.caption(12, weight: .semibold))
                                         .frame(maxWidth: .infinity)
+                                        .frame(height: 40)
+                                        .foregroundStyle(CathedralTheme.Colors.background)
+                                        .background(CathedralTheme.Colors.primaryText)
+                                        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
                                 }
-                                .buttonStyle(.borderedProminent)
+                                .buttonStyle(.plain)
                                 .accessibilityLabel("Write \(sectionLabel(section))")
 
                                 Button {
@@ -1564,8 +1570,13 @@ struct ProjectDetailView: View {
                                 } label: {
                                     Label("Edit", systemImage: "pencil")
                                         .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                                        .frame(height: 40)
+                                        .padding(.horizontal, CathedralTheme.Spacing.md)
+                                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                        .background(CathedralTheme.Colors.surfaceRaised)
+                                        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
                                 }
-                                .buttonStyle(.bordered)
+                                .buttonStyle(.plain)
                                 .accessibilityLabel("Edit \(sectionLabel(section)) in Outline")
                             }
                         }
@@ -1699,48 +1710,38 @@ struct ProjectDetailView: View {
     }
 
     private func successBanner(for output: GenerationOutput) -> some View {
-        HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
-            Image(systemName: output.wasTruncated
-                ? "exclamationmark.triangle"
-                : (output.syncStatus == SyncStatus.failed.rawValue ? "exclamationmark.triangle" : "checkmark.circle"))
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
-                    ? CathedralTheme.Colors.destructive
-                    : CathedralTheme.Colors.accent)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(output.wasTruncated
-                    ? "Generation saved as incomplete — \(output.title)"
-                    : "Generation complete — \(output.title)")
-                    .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(2)
-                if output.wasTruncated {
-                    Text("This output hit the model length limit and may be incomplete.")
+        CathedralObjectSurface {
+            HStack(alignment: .top, spacing: CathedralTheme.Spacing.md) {
+                Image(systemName: output.wasTruncated
+                    ? "exclamationmark.triangle"
+                    : (output.syncStatus == SyncStatus.failed.rawValue ? "exclamationmark.triangle" : "checkmark"))
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
+                        ? CathedralTheme.Colors.destructive
+                        : CathedralTheme.Colors.accent)
+                    .frame(width: 24, height: 24)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(output.wasTruncated ? "Saved incomplete" : "Generation complete")
+                        .font(CathedralTheme.Typography.headline(15, weight: .semibold))
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    Text(output.title)
                         .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if output.syncStatus == SyncStatus.failed.rawValue {
-                    Text("Output Sync: Failed\(output.syncErrorMessage.flatMap { $0.nilIfEmpty }.map { " — \($0)" } ?? "")")
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        .lineLimit(2)
+                    if output.wasTruncated {
+                        Text("This output hit the model length limit and may be incomplete.")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                    }
+                    if output.syncStatus == SyncStatus.failed.rawValue {
+                        Text("Output Sync: Failed\(output.syncErrorMessage.flatMap { $0.nilIfEmpty }.map { " — \($0)" } ?? "")")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                    }
                 }
             }
         }
-        .padding(CathedralTheme.Spacing.sm)
-        .background(CathedralTheme.Colors.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                .stroke(
-                    (output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
-                        ? CathedralTheme.Colors.destructive
-                        : CathedralTheme.Colors.accent).opacity(0.4),
-                    lineWidth: 1
-                )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
     }
 
     private func diagnosticsBlock(_ diagnostics: String) -> some View {

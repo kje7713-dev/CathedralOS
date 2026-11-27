@@ -83,20 +83,17 @@ struct StoryArcRegionView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
-            header
-            templatePicker
-            if let arc = currentArc, let template = currentTemplate {
-                beatsList(arc: arc, template: template)
-            } else {
-                emptyState
+        CathedralObjectSurface {
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+                header
+                templatePicker
+                if let arc = currentArc, let template = currentTemplate {
+                    beatsList(arc: arc, template: template)
+                } else {
+                    emptyState
+                }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(CathedralTheme.Spacing.base)
-        .background(CathedralTheme.Colors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, CathedralTheme.Spacing.base)
         .task {
             refreshUnmodifiedBeatDefaults()
             syncBeatsOrder()

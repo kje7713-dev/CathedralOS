@@ -434,42 +434,49 @@ struct CathedralEmptyState: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-            Text(label)
-                .font(CathedralTheme.Typography.body(14, weight: .medium))
-                .foregroundStyle(CathedralTheme.Colors.primaryText)
-            if let description, !description.isEmpty {
-                Text(description)
-                    .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let actionLabel, !actionLabel.isEmpty, let action {
+        CathedralObjectSurface {
+            if let action, let actionLabel, !actionLabel.isEmpty {
                 Button(action: action) {
-                    HStack(spacing: CathedralTheme.Spacing.xs) {
-                        Text(actionLabel.uppercased())
-                            .tracking(1.0)
-                        Image(systemName: "plus.circle.fill")
-                            .imageScale(.small)
-                    }
-                    .font(CathedralTheme.Typography.label(11, weight: .semibold))
+                    objectContent(actionLabel: actionLabel, showsAffordance: true)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(actionLabel)
+            } else {
+                objectContent(actionLabel: nil, showsAffordance: false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func objectContent(actionLabel: String?, showsAffordance: Bool) -> some View {
+        HStack(alignment: .top, spacing: CathedralTheme.Spacing.md) {
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                Text(label)
+                    .font(CathedralTheme.Typography.headline(16, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                if let description, !description.isEmpty {
+                    Text(description)
+                        .font(CathedralTheme.Typography.caption())
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if showsAffordance {
+                Spacer(minLength: CathedralTheme.Spacing.sm)
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(CathedralTheme.Colors.accent)
-                    .padding(.vertical, CathedralTheme.Spacing.xs)
-                    .padding(.horizontal, CathedralTheme.Spacing.sm)
+                    .frame(width: 30, height: 30)
                     .background(CathedralTheme.Colors.surfaceRaised)
                     .overlay(
                         RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm)
-                            .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+                            .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
                     )
                     .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
-                }
-                .buttonStyle(.plain)
-                .padding(.top, CathedralTheme.Spacing.xs)
+                    .accessibilityHidden(true)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, CathedralTheme.Spacing.sm)
-        .padding(.horizontal, CathedralTheme.Spacing.base)
     }
 }
 
