@@ -564,7 +564,11 @@ struct ProjectDetailView: View {
             Button {
                 showAddPromptPack = true
             } label: {
-                actionBlock(icon: "plus", title: project.promptPacks.isEmpty ? "ADD A RECIPE" : "ADD ANOTHER RECIPE")
+                buildStepBlock(
+                    icon: "plus",
+                    title: project.promptPacks.isEmpty ? "ADD A RECIPE" : "ADD ANOTHER RECIPE",
+                    isExpanded: false
+                )
             }
             .buttonStyle(.plain)
 
