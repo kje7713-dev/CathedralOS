@@ -87,8 +87,8 @@ struct StoryArcRegionView: View {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
                 header
                 templatePicker
-                if let arc = currentArc, let template = currentTemplate {
-                    beatsList(arc: arc, template: template)
+                if let arc = currentArc, currentTemplate != nil {
+                    beatsList(arc: arc)
                 } else {
                     emptyState
                 }
@@ -212,7 +212,7 @@ struct StoryArcRegionView: View {
             }
             Text("Shape the story before drafting")
                 .font(CathedralTheme.Typography.headline(20, weight: .semibold))
-            Text("Choose a template, then edit the beats it creates.")
+            Text("Choose a shape, then edit the beats.")
                 .font(CathedralTheme.Typography.body(13))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
         }
@@ -245,27 +245,24 @@ struct StoryArcRegionView: View {
                 .tracking(1.2)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
             HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(currentTemplate?.name ?? "No template selected")
-                        .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                    Text(currentTemplate == nil ? "Start with a story shape" : "Change the shape without losing your edits")
-                        .font(CathedralTheme.Typography.caption(12))
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                }
+                Text(currentTemplate?.name ?? "Choose a template")
+                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
                 Spacer()
-                Picker("Template", selection: templateSelection) {
+                Picker(selection: templateSelection, label: Text("CHANGE")) {
                     Text("None").tag(UUID?.none)
                     ForEach(StoryArcTemplate.allTemplates) { template in
                         Text(template.name).tag(UUID?.some(template.id))
                     }
                 }
                 .pickerStyle(.menu)
+                .font(CathedralTheme.Typography.label(10, weight: .bold))
+                .tracking(1.1)
                 .tint(CathedralTheme.Colors.accent)
             }
         }
     }
 
-    private func beatsList(arc: StoryArc, template: StoryArcTemplate) -> some View {
+    private func beatsList(arc: StoryArc) -> some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
             HStack(alignment: .firstTextBaseline) {
                 Text("2  EDIT THE BEATS")
@@ -273,13 +270,14 @@ struct StoryArcRegionView: View {
                     .tracking(1.2)
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 Spacer()
-                Text("Tap to edit · drag · swipe")
-                    .font(CathedralTheme.Typography.caption(11))
-                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+                Button(action: addBeat) {
+                    Label("ADD BEAT", systemImage: "plus")
+                        .font(CathedralTheme.Typography.label(10, weight: .bold))
+                        .tracking(1.1)
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+                }
+                .buttonStyle(.plain)
             }
-            Text(template.description)
-                .font(CathedralTheme.Typography.body(13))
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
             List {
                 ForEach(beatsOrder, id: \.id) { beat in
                     StoryArcBeatRow(beat: beat)
@@ -291,11 +289,6 @@ struct StoryArcRegionView: View {
                 .onMove(perform: moveBeats)
                 .onDelete(perform: deleteBeats)
 
-                Button(action: addBeat) {
-                    Label("Add Beat", systemImage: "plus.circle")
-                        .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                }
-                .listRowBackground(Color.clear)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)

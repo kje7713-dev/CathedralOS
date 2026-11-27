@@ -21,7 +21,7 @@ struct RecipeCard: View {
     // Display state only — generation state moved up to ProjectDetailView.
     @State private var showSharePrompt = false
     @State private var showShareJSON = false
-    @State private var isElementsExpanded = true
+    @State private var isElementsExpanded = false
 
     init(
         project: StoryProject,
@@ -150,7 +150,7 @@ struct RecipeCard: View {
                 HStack(spacing: CathedralTheme.Spacing.xs) {
                     Image(systemName: isElementsExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
-                    Text("WHAT THIS RECIPE USES")
+                    Text(isElementsExpanded ? "HIDE INPUTS" : "SHOW INPUTS")
                         .font(CathedralTheme.Typography.label(10, weight: .semibold))
                         .tracking(1.5)
                 }

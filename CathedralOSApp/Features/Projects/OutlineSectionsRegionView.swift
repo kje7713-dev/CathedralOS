@@ -341,6 +341,15 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
         .padding(CathedralTheme.Spacing.base)
         .background(CathedralTheme.Colors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(alignment: .leading) {
+            Capsule()
+                .fill(CathedralTheme.Colors.accent)
+                .frame(width: 3)
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
+        )
         .padding(.horizontal, CathedralTheme.Spacing.base)
         // State-driven chapter reader navigation. The Button in sectionsList sets
         // readerSection; this destination presents ChapterReaderView without the
@@ -1039,8 +1048,10 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     private var header: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Outline Sections")
-                    .font(CathedralTheme.Typography.headline(20, weight: .semibold))
+                Text("OUTLINE")
+                    .font(CathedralTheme.Typography.label(11, weight: .bold))
+                    .tracking(1.6)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 Spacer()
                 Button {
                     rebuildAfterDelete = false
@@ -1053,13 +1064,42 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 .accessibilityLabel("Delete All Sections")
                 .disabled(sectionsOrder.isEmpty)
             }
+            Text("Build the chapter plan")
+                .font(CathedralTheme.Typography.headline(20, weight: .semibold))
+            Text("Turn this story into editable chapters and scenes.")
+                .font(CathedralTheme.Typography.body(13))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            let connectionUnavailable = durabilityCoordinator.activeSuggestionRun(for: project.id)?.status == "connection_unavailable"
+            if connectionUnavailable {
+                CathedralPrimaryButton("Reconnect", systemImage: "arrow.clockwise") {
+                    suggestionsLoading = true
+                    suggestionsError = nil
+                    suggestionsNotice = nil
+                    durabilityCoordinator.reconnectSuggestionRun(
+                        projectID: project.id,
+                        lineageID: project.stableLineageID
+                    )
+                }
+            } else {
+                CathedralPrimaryButton(
+                    suggestionRunActive ? "Running" : "Suggest Sections",
+                    systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
+                ) {
+                    if suggestionRunActive {
+                        suggestionsNotice = "Your outline suggestions are still running or reconnecting. The original job and selected model are preserved. No new generation was started."
+                    } else {
+                        prepareOutlinePlanning()
+                    }
+                }
+                .disabled(!suggestionsReady)
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: CathedralTheme.Spacing.sm) {
                     if recoverableSuggestions != nil {
                         Button {
                             openRecoverableSuggestions()
                         } label: {
-                            Label("Resume Suggestions", systemImage: "arrow.uturn.backward.circle")
+                            Label("RESUME", systemImage: "arrow.uturn.backward.circle")
                                 .font(CathedralTheme.Typography.body(13, weight: .semibold))
                         }
                     }
@@ -1085,11 +1125,11 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                             }
                         } label: {
                             if let chosenName {
-                                Label("Recipe: \(chosenName)", systemImage: "book.closed")
+                                Label("RECIPE: \(chosenName)", systemImage: "book.closed")
                                     .font(CathedralTheme.Typography.body(13, weight: .semibold))
                                     .lineLimit(1)
                             } else {
-                                Label("Choose Recipe", systemImage: "book.closed")
+                                Label("CHOOSE RECIPE", systemImage: "book.closed")
                                     .font(CathedralTheme.Typography.body(13, weight: .semibold))
                             }
                         }
@@ -1098,44 +1138,16 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                         Button {
                             runAllSections()
                         } label: {
-                            Label("Run Sections", systemImage: "play.fill")
+                            Label("RUN ALL", systemImage: "play.fill")
                                 .font(CathedralTheme.Typography.body(13, weight: .semibold))
                         }
                         // A completed or failed banner is historical, not an active run.
                         .disabled((projectRunStatus?.blocksNewGeneration ?? false) || isGenerationStarting)
                     }
-                    let connectionUnavailable = durabilityCoordinator.activeSuggestionRun(for: project.id)?.status == "connection_unavailable"
-                    if connectionUnavailable {
-                        Button {
-                            suggestionsLoading = true
-                            suggestionsError = nil
-                            suggestionsNotice = nil
-                            durabilityCoordinator.reconnectSuggestionRun(
-                                projectID: project.id,
-                                lineageID: project.stableLineageID
-                            )
-                        } label: {
-                            Label("Reconnect to Existing Run", systemImage: "arrow.clockwise")
-                                .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                        }
-                    } else {
-                        Button {
-                            if suggestionRunActive {
-                                suggestionsNotice = "Your outline suggestions are still running or reconnecting. The original job and selected model are preserved. No new generation was started."
-                            } else {
-                                prepareOutlinePlanning()
-                            }
-                        } label: {
-                            Label(
-                                suggestionRunActive ? "Suggestions Running" : "Suggest Sections",
-                                systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
-                            )
-                            .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                        }
-                        .disabled(!suggestionsReady)
-                    }
                 }
                 .fixedSize(horizontal: true, vertical: false)
+                .buttonStyle(.plain)
+                .foregroundStyle(CathedralTheme.Colors.accent)
             }
             if let run = durabilityCoordinator.activeSuggestionRun(for: project.id) {
                 switch run.status {
@@ -1265,7 +1277,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
 
     private var sectionsList: some View {
         List {
-            DisclosureGroup("Public Sharing Eligibility") {
+            DisclosureGroup("SHARING CHECK") {
                 Text("StoryDonkey checks sections for content that cannot be shared publicly. This does not restrict what you can write, save, edit, or privately export.")
                     .font(CathedralTheme.Typography.caption(12))
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
@@ -1302,7 +1314,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private var emptyState: some View {
-        Text("No outline sections yet. Tap Suggest Sections above to choose a model and generate your outline.")
+        Text("No sections yet. Use SUGGEST SECTIONS above to build the chapter plan.")
             .font(CathedralTheme.Typography.body(13))
             .foregroundStyle(CathedralTheme.Colors.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1726,12 +1738,8 @@ struct OutlineSectionRow: View {
                         .lineLimit(1)
                 }
                 Spacer()
+                sharingStatus
             }
-
-            Text(publicSharingStatus.label)
-                .font(CathedralTheme.Typography.caption(11, weight: .semibold))
-                .foregroundStyle(publicSharingStatus == .restricted ? .orange : CathedralTheme.Colors.secondaryText)
-                .accessibilityLabel(publicSharingStatus.label)
             if publicSharingStatus == .restricted {
                 Text("This section can’t be shared publicly because the automated safety check identified sexual content involving a minor. This does not affect private writing or export.")
                     .font(CathedralTheme.Typography.caption(11))
@@ -1757,8 +1765,9 @@ struct OutlineSectionRow: View {
                 // action, which is not discoverable).
                 if let onEdit {
                     Button(action: onEdit) {
-                        Image(systemName: "pencil")
-                            .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                        Label("EDIT", systemImage: "pencil")
+                            .font(CathedralTheme.Typography.label(10, weight: .bold))
+                            .tracking(1.1)
                             .foregroundStyle(CathedralTheme.Colors.accent)
                     }
                     .buttonStyle(.borderless)
@@ -1771,8 +1780,9 @@ struct OutlineSectionRow: View {
                         } label: {
                             HStack(spacing: 2) {
                                 latestOutputStatusIcon
-                                Image(systemName: "eye")
-                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                Label("VIEW", systemImage: "eye")
+                                    .font(CathedralTheme.Typography.label(10, weight: .bold))
+                                    .tracking(1.1)
                                     .foregroundStyle(.tint)
                             }
                         }
@@ -1790,8 +1800,9 @@ struct OutlineSectionRow: View {
                         } label: {
                             HStack(spacing: 2) {
                                 latestOutputStatusIcon
-                                Image(systemName: "eye")
-                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                                Label("VIEW", systemImage: "eye")
+                                    .font(CathedralTheme.Typography.label(10, weight: .bold))
+                                    .tracking(1.1)
                                     .foregroundStyle(.tint)
                                 Text("\(outputs.count)")
                                     .font(CathedralTheme.Typography.caption(11, weight: .semibold))
@@ -1809,8 +1820,9 @@ struct OutlineSectionRow: View {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
-                            Image(systemName: "checkmark.circle")
-                                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                            Label("ACCEPT", systemImage: "checkmark.circle")
+                                .font(CathedralTheme.Typography.label(10, weight: .bold))
+                                .tracking(1.1)
                                 .foregroundStyle(CathedralTheme.Colors.accent)
                         }
                     }
@@ -1820,8 +1832,9 @@ struct OutlineSectionRow: View {
                 }
                 if let onGenerate {
                     Button(action: onGenerate) {
-                        Image(systemName: "sparkles")
-                            .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                        Label("GENERATE", systemImage: "sparkles")
+                            .font(CathedralTheme.Typography.label(10, weight: .bold))
+                            .tracking(1.1)
                             .foregroundStyle(.tint)
                     }
                     .buttonStyle(.borderless)
@@ -1829,19 +1842,42 @@ struct OutlineSectionRow: View {
                 }
             }
         }
-        .padding(CathedralTheme.Spacing.sm)
-        .background(CathedralTheme.Colors.background)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.vertical, CathedralTheme.Spacing.md)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(CathedralTheme.Colors.separator)
+                .frame(height: 1)
+        }
     }
 
     private var statusBadge: some View {
-        Text(section.status.capitalized)
-            .font(CathedralTheme.Typography.caption(11, weight: .semibold))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(badgeColor.opacity(0.15))
+        Text(section.status.uppercased())
+            .font(CathedralTheme.Typography.label(10, weight: .bold))
+            .tracking(1.1)
             .foregroundStyle(badgeColor)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+
+    @ViewBuilder
+    private var sharingStatus: some View {
+        switch publicSharingStatus {
+        case .notYetChecked:
+            EmptyView()
+        case .checking:
+            Text("CHECKING SHARE")
+                .font(CathedralTheme.Typography.label(9, weight: .bold))
+                .tracking(0.8)
+                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+        case .eligible:
+            Text("SHAREABLE")
+                .font(CathedralTheme.Typography.label(9, weight: .bold))
+                .tracking(0.8)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+        case .restricted:
+            Text("SHARING RESTRICTED")
+                .font(CathedralTheme.Typography.label(9, weight: .bold))
+                .tracking(0.8)
+                .foregroundStyle(.orange)
+        }
     }
 
     private var badgeColor: Color {
