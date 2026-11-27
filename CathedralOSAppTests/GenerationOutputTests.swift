@@ -28,6 +28,7 @@ final class GenerationOutputTests: XCTestCase {
         XCTAssertEqual(ActiveRunBanner.completionDismissDelayNanoseconds, 8_000_000_000)
     }
 
+    @MainActor
     func testCompletedRunDismissalPersistsAcrossCoordinatorRecreation() {
         let suiteName = "GenerationOutputTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
