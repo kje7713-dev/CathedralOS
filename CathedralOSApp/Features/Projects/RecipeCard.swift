@@ -13,6 +13,8 @@ struct RecipeCard: View {
     let pack: PromptPack
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let onSelect: (() -> Void)?
+    let isSelected: Bool
     /// Show the "Outputs from this recipe" section. Default true. Pass false
     /// when rendering on the Compile tab (where only the recipe info matters,
     /// not the historical outputs).
@@ -28,13 +30,17 @@ struct RecipeCard: View {
         pack: PromptPack,
         onEdit: @escaping () -> Void,
         onDelete: @escaping () -> Void,
-        showOutputs: Bool = true
+        showOutputs: Bool = true,
+        isSelected: Bool = false,
+        onSelect: (() -> Void)? = nil
     ) {
         self.project = project
         self.pack = pack
         self.onEdit = onEdit
         self.onDelete = onDelete
         self.showOutputs = showOutputs
+        self.isSelected = isSelected
+        self.onSelect = onSelect
     }
 
     private var exportPayload: PromptPackExportPayload {
@@ -120,6 +126,13 @@ struct RecipeCard: View {
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
                     .lineLimit(2)
                 Spacer()
+                if let onSelect {
+                    Button(isSelected ? "USING" : "USE", action: onSelect)
+                        .font(CathedralTheme.Typography.label(11, weight: .bold))
+                        .tracking(1.2)
+                        .foregroundStyle(isSelected ? CathedralTheme.Colors.secondaryText : CathedralTheme.Colors.accent)
+                        .disabled(isSelected)
+                }
                 Button("CHANGE", action: onEdit)
                     .font(CathedralTheme.Typography.label(11, weight: .bold))
                     .tracking(1.2)

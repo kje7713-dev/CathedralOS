@@ -1048,7 +1048,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     private var header: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
             HStack(alignment: .firstTextBaseline) {
-                Text("3  MAKE YOUR CHAPTER PLAN")
+                Text("STORY OUTLINE")
                     .font(CathedralTheme.Typography.label(11, weight: .bold))
                     .tracking(1.6)
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
@@ -1064,12 +1064,8 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 .accessibilityLabel("Delete All Sections")
                 .disabled(sectionsOrder.isEmpty)
             }
-            Text("Make the chapter plan")
+            Text("Make the outline")
                 .font(CathedralTheme.Typography.headline(20, weight: .semibold))
-            Text("StoryDonkey will use your recipe and story shape to make the chapters for you.")
-                .font(CathedralTheme.Typography.body(13))
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            recipeChooser
             let connectionUnavailable = durabilityCoordinator.activeSuggestionRun(for: project.id)?.status == "connection_unavailable"
             if connectionUnavailable {
                 CathedralPrimaryButton("Reconnect", systemImage: "arrow.clockwise") {
@@ -1083,7 +1079,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 }
             } else {
                 CathedralPrimaryButton(
-                    suggestionRunActive ? "Working…" : "Make my chapter plan",
+                    suggestionRunActive ? "Working…" : "Make the outline",
                     systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
                 ) {
                     if suggestionRunActive {
@@ -1157,63 +1153,6 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     EmptyView()
                 }
             }
-        }
-    }
-
-    @ViewBuilder
-    private var recipeChooser: some View {
-        if let recipes = recipeSelection?.recipes, !recipes.isEmpty {
-            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-                Text("1  CHOOSE A RECIPE")
-                    .font(CathedralTheme.Typography.label(11, weight: .bold))
-                    .tracking(1.2)
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                Text("A recipe tells StoryDonkey which people, ideas, and instructions to use while planning and writing.")
-                    .font(CathedralTheme.Typography.caption(12))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                let chosenName = recipes.first(where: { $0.id == recipeSelection?.selectedRecipe?.id })?.name
-                Menu {
-                    ForEach(recipes, id: \.id) { pack in
-                        Button(pack.name) {
-                            recipeSelectionService.setSelectedRecipe(id: pack.id, for: project)
-                            recipeSelection = recipeSelectionService.resolve(for: project)
-                            if let prior = recoverableSuggestions,
-                               prior.sourceRecipe.promptPack.id != pack.id {
-                                recoverableSuggestions = nil
-                            }
-                        }
-                    }
-                } label: {
-                    HStack {
-                        Image(systemName: "book.closed")
-                        Text(chosenName ?? "Choose a recipe")
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    .padding(.horizontal, CathedralTheme.Spacing.sm)
-                    .frame(minHeight: 48)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(CathedralTheme.Colors.surface)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm)
-                            .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
-                }
-                .buttonStyle(.plain)
-            }
-        } else {
-            Text("First create a recipe above. It is the set of story ingredients StoryDonkey will use.")
-                .font(CathedralTheme.Typography.caption(12))
-                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

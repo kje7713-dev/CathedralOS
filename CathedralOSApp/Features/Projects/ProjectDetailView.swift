@@ -63,6 +63,12 @@ struct OutlineGenerationLaunch: Identifiable {
     let modelID: String?
 }
 
+private enum BuildStep: String {
+    case recipe
+    case shape
+    case outline
+}
+
 /// Shared completion behavior for both ProjectDetailView resume paths. Keeping
 /// the canonical-project rebind in one seam prevents the polling-resume and
 /// already-running-resume callbacks from drifting apart.
@@ -133,6 +139,8 @@ struct ProjectDetailView: View {
     @State private var showDeleteAllOutputsConfirm = false
     @State private var pendingDeleteAllInputs: [GenerationOutputDeletionInput] = []
     @State private var isDeletingAllOutputs = false
+    @State private var expandedBuildStep: BuildStep?
+    @State private var recipeSelectionRevision = 0
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
@@ -500,17 +508,123 @@ struct ProjectDetailView: View {
 
     @ViewBuilder
     private var buildSections: some View {
-        recipesSection
-        OutlineTabView(
-            project: project,
-            generationLaunch: $pendingOutlineGeneration,
-            isGenerationStarting: $isRunAllStarting,
-            onGenerationCompleted: {
-                advancedMode = false
-                storyEditorModeRaw = StoryEditorMode.output.rawValue
-            },
-            onProjectRefreshed: refreshProjectReferenceHandler
+        buildStepButton("STORY RECIPE", icon: "book.closed", step: .recipe)
+        if expandedBuildStep == .recipe {
+            buildRecipeOptions
+        }
+
+        buildStepButton("STORY SHAPE", icon: "point.topleft.down.curvedto.point.bottomright.up", step: .shape)
+        if expandedBuildStep == .shape {
+            StoryArcRegionView(project: project, modelContext: modelContext)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+        }
+
+        buildStepButton("STORY OUTLINE", icon: "list.number", step: .outline)
+        if expandedBuildStep == .outline {
+            OutlineSectionsRegionView(
+                project: project,
+                modelContext: modelContext,
+                generationLaunch: $pendingOutlineGeneration,
+                isGenerationStarting: $isRunAllStarting,
+                onGenerationCompleted: {
+                    advancedMode = false
+                    storyEditorModeRaw = StoryEditorMode.output.rawValue
+                },
+                onProjectRefreshed: refreshProjectReferenceHandler
+            )
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        }
+    }
+
+    private func buildStepButton(_ title: String, icon: String, step: BuildStep) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                expandedBuildStep = expandedBuildStep == step ? nil : step
+            }
+        } label: {
+            buildStepBlock(icon: icon, title: title, isExpanded: expandedBuildStep == step)
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(
+            top: CathedralTheme.Spacing.xs,
+            leading: CathedralTheme.Spacing.base,
+            bottom: CathedralTheme.Spacing.xs,
+            trailing: CathedralTheme.Spacing.base
+        ))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+    }
+
+    private var buildRecipeOptions: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            Button {
+                showAddPromptPack = true
+            } label: {
+                actionBlock(icon: "plus", title: project.promptPacks.isEmpty ? "ADD A RECIPE" : "ADD ANOTHER RECIPE")
+            }
+            .buttonStyle(.plain)
+
+            ForEach(project.promptPacks.sorted { $0.name < $1.name }) { pack in
+                RecipeCard(
+                    project: project,
+                    pack: pack,
+                    onEdit: { packToEdit = pack },
+                    onDelete: {
+                        modelContext.delete(pack)
+                        try? modelContext.save()
+                        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+                    },
+                    showOutputs: false,
+                    isSelected: selectedRecipeID == pack.id,
+                    onSelect: { selectRecipe(pack) }
+                )
+            }
+        }
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.vertical, CathedralTheme.Spacing.sm)
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+    }
+
+    private func buildStepBlock(icon: String, title: String, isExpanded: Bool) -> some View {
+        HStack(spacing: CathedralTheme.Spacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 24)
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+            Text(title)
+                .font(CathedralTheme.Typography.headline(16, weight: .bold))
+                .tracking(0.5)
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+            Spacer(minLength: CathedralTheme.Spacing.sm)
+            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+        }
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 64)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
         )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+
+    private var selectedRecipeID: UUID? {
+        _ = recipeSelectionRevision
+        return RecipeSelectionService().resolve(for: project).selectedRecipe?.id
+    }
+
+    private func selectRecipe(_ pack: PromptPack) {
+        RecipeSelectionService().setSelectedRecipe(id: pack.id, for: project)
+        recipeSelectionRevision += 1
     }
 
     private var epubExportSection: some View {
