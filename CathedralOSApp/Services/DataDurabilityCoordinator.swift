@@ -184,6 +184,10 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// User-visible state when the server run is alive but status polling is failing.
     @Published private(set) var activeRunPollingError: String?
     @Published private(set) var activeRunProjectLineageID: UUID?
+    /// Completed run IDs dismissed by the user-facing status banner. This is
+    /// persisted because the banner can be rebuilt when SwiftUI recreates the
+    /// project screen.
+    @Published private(set) var dismissedCompletedRunIDs: Set<String>
     @Published private(set) var storeMode: StoreMode = .normal
     @Published private(set) var storePath: String?
     @Published private(set) var recoveryState: RecoveryState = .none
@@ -259,6 +263,8 @@ final class DataDurabilityCoordinator: ObservableObject {
         "cathedralos.runOutline.status.\(projectLineageID.uuidString)"
     }
 
+    private static let dismissedCompletedRunIDsKey = "cathedralos.runOutline.dismissedCompletedRunIDs"
+
     // MARK: - Init
 
     init(
@@ -273,6 +279,9 @@ final class DataDurabilityCoordinator: ObservableObject {
         self.runStatusDefaults = defaults
         self.acceptRunDefaults = defaults
         self.suggestionRunDefaults = defaults
+        self.dismissedCompletedRunIDs = Set(
+            defaults.stringArray(forKey: Self.dismissedCompletedRunIDsKey) ?? []
+        )
         if let data = defaults.data(forKey: Self.acceptRefreshRecoveryKey),
            let recovery = try? JSONDecoder().decode(AcceptRefreshRecovery.self, from: data) {
             self.acceptRefreshRecovery = recovery
@@ -1894,6 +1903,18 @@ final class DataDurabilityCoordinator: ObservableObject {
     /// Surface a resume/request error without exposing the published setter.
     func setRunPollingError(_ message: String?) {
         activeRunPollingError = message
+    }
+
+    func isCompletedRunDismissed(_ runID: String) -> Bool {
+        dismissedCompletedRunIDs.contains(runID)
+    }
+
+    func dismissCompletedRun(_ runID: String) {
+        guard dismissedCompletedRunIDs.insert(runID).inserted else { return }
+        runStatusDefaults.set(
+            Array(dismissedCompletedRunIDs).sorted(),
+            forKey: Self.dismissedCompletedRunIDsKey
+        )
     }
 
     /// Cancel the active polling task if any. Does not affect in-flight syncs.

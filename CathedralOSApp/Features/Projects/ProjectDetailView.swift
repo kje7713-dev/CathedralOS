@@ -1298,7 +1298,7 @@ struct ProjectDetailView: View {
             }
             ForEach(filteredGenerations) { gen in
                 CathedralItemRow(
-                    title: gen.title,
+                    title: generationSectionTitle(gen) ?? gen.title,
                     subtitle: generationSubtitle(gen)
                 ) { generationToView = gen }
                 .listRowBackground(CathedralTheme.Colors.background)
@@ -1366,15 +1366,21 @@ struct ProjectDetailView: View {
         var parts: [String] = []
         let status = GenerationStatus(rawValue: gen.status)?.displayName ?? gen.status
         parts.append(status)
-        if !gen.sourcePromptPackName.isEmpty {
-            parts.append(gen.sourcePromptPackName)
-        }
         parts.append(gen.createdAt.formatted(date: .abbreviated, time: .shortened))
         let vis = OutputVisibility(rawValue: gen.visibility) ?? .private
         if vis != .private {
             parts.append(vis.displayName)
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func generationSectionTitle(_ gen: GenerationOutput) -> String? {
+        guard let sectionID = gen.outlineSectionID else { return nil }
+        return project.outlines
+            .flatMap(\.sections)
+            .first(where: { $0.id == sectionID })?
+            .title
+            .nilIfEmpty
     }
 
     // MARK: - Compile tab CTA + generation helpers

@@ -319,7 +319,7 @@ struct RecipeCard: View {
             HStack(alignment: .center, spacing: CathedralTheme.Spacing.sm) {
                 statusGlyph(for: output)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(output.title)
+                    Text(sectionTitle(for: output) ?? output.title)
                         .font(CathedralTheme.Typography.body(14, weight: .medium))
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .lineLimit(1)
@@ -336,6 +336,15 @@ struct RecipeCard: View {
             .padding(.vertical, CathedralTheme.Spacing.xs)
         }
         .buttonStyle(.plain)
+    }
+
+    private func sectionTitle(for output: GenerationOutput) -> String? {
+        guard let sectionID = output.outlineSectionID else { return nil }
+        return project.outlines
+            .flatMap(\.sections)
+            .first(where: { $0.id == sectionID })?
+            .title
+            .nilIfEmpty
     }
 
     private func statusGlyph(for output: GenerationOutput) -> some View {

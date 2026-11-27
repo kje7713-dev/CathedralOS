@@ -2289,20 +2289,21 @@ struct ActiveRunBanner: View {
     var pollingError: String? = nil
     var onResume: (() async -> Void)? = nil
     var onNavigate: (() -> Void)? = nil
-    @State private var dismissedCompletionRunID: String?
+    @ObservedObject private var durabilityCoordinator: DataDurabilityCoordinator = .shared
 
     var body: some View {
         Group {
             if Self.shouldShowBanner(
                 status: status.status,
                 runID: status.run_id,
-                dismissedRunID: dismissedCompletionRunID
+                dismissedRunID: durabilityCoordinator.isCompletedRunDismissed(status.run_id)
+                    ? status.run_id
+                    : nil
             ) {
                 bannerContent
             }
         }
         .task(id: "\(status.run_id):\(status.status)") {
-            dismissedCompletionRunID = nil
             guard isCompleted else { return }
             do {
                 try await Task.sleep(nanoseconds: Self.completionDismissDelayNanoseconds)
@@ -2310,7 +2311,7 @@ struct ActiveRunBanner: View {
                 return
             }
             guard !Task.isCancelled else { return }
-            dismissedCompletionRunID = status.run_id
+            durabilityCoordinator.dismissCompletedRun(status.run_id)
         }
     }
 
