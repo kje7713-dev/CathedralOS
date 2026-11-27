@@ -14,6 +14,8 @@ private final class EPUBSpeechModel: ObservableObject {
     }
 
     @Published var state: State = .unavailable
+    @Published var voices: [TTSVoice] = []
+    @Published var selectedVoiceIdentifier: String?
     weak var reader: ReadiumEPUBViewController?
 
     var isAvailable: Bool { state != .unavailable }
@@ -24,6 +26,12 @@ private final class EPUBSpeechModel: ObservableObject {
 
     func stop() {
         reader?.stopSpeech()
+    }
+
+    func selectVoice(_ voice: TTSVoice) {
+        selectedVoiceIdentifier = voice.identifier
+        UserDefaults.standard.set(voice.identifier, forKey: "cathedralos.reader.voice")
+        reader?.selectVoice(voice)
     }
 }
 
@@ -37,6 +45,7 @@ struct KindleExportReaderView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var loadError: String?
+    @State private var showingVoicePicker = false
     @StateObject private var speech = EPUBSpeechModel()
 
     init(fileURL: URL, bookTitle: String, publicationKey: String? = nil) {
@@ -59,6 +68,13 @@ struct KindleExportReaderView: View {
                 }
                 if speech.isAvailable {
                     ToolbarItemGroup(placement: .primaryAction) {
+                        if !speech.voices.isEmpty {
+                            Button {
+                                showingVoicePicker = true
+                            } label: {
+                                Label("Voice", systemImage: "person.wave.2")
+                            }
+                        }
                         Button {
                             speech.toggle()
                         } label: {
@@ -83,6 +99,34 @@ struct KindleExportReaderView: View {
                 }
             } message: {
                 Text(loadError ?? "The EPUB could not be opened.")
+            }
+            .sheet(isPresented: $showingVoicePicker) {
+                NavigationStack {
+                    List(speech.voices, id: \.identifier) { voice in
+                        Button {
+                            speech.selectVoice(voice)
+                            showingVoicePicker = false
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(voice.name)
+                                        .foregroundStyle(.primary)
+                                    Text("\(voice.language.code.bcp47) · \(voice.qualityLabel)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if voice.identifier == speech.selectedVoiceIdentifier {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.tint)
+                                }
+                            }
+                        }
+                    }
+                    .navigationTitle("Narrator Voice")
+                    .navigationBarTitleDisplayMode(.inline)
+                }
+                .presentationDetents([.medium, .large])
             }
         }
     }
@@ -162,6 +206,10 @@ private final class ReadiumEPUBViewController: UIViewController {
         speech.state = .ready
     }
 
+    func selectVoice(_ voice: TTSVoice) {
+        speechSynthesizer?.config.voiceIdentifier = voice.identifier
+    }
+
     private func loadPublication() async {
         guard let readiumFileURL = FileURL(url: fileURL) else {
             onError("The cached EPUB URL is invalid.")
@@ -222,10 +270,44 @@ private final class ReadiumEPUBViewController: UIViewController {
 
             if let synthesizer = PublicationSpeechSynthesizer(publication: publication, delegate: self) {
                 speechSynthesizer = synthesizer
+                let preferredLanguage = (Locale.current.languageCode ?? "en").lowercased()
+                let voices = synthesizer.availableVoices
+                    .filter { $0.language.code.bcp47.lowercased().hasPrefix(preferredLanguage) }
+                    .sorted { $0.qualityRank > $1.qualityRank }
+                speech.voices = voices
+                if let saved = UserDefaults.standard.string(forKey: "cathedralos.reader.voice"),
+                   voices.contains(where: { $0.identifier == saved }) {
+                    speech.selectedVoiceIdentifier = saved
+                    synthesizer.config.voiceIdentifier = saved
+                } else if let preferred = voices.first {
+                    speech.selectedVoiceIdentifier = preferred.identifier
+                    synthesizer.config.voiceIdentifier = preferred.identifier
+                }
                 speech.state = .ready
             }
         } catch {
             onError("Readium could not create the EPUB reader.")
+        }
+    }
+}
+
+private extension TTSVoice {
+    var qualityRank: Int {
+        switch quality {
+        case .some(.higher): return 5
+        case .some(.high): return 4
+        case .some(.medium): return 3
+        case .some(.low): return 2
+        case .some(.lower): return 1
+        case .none: return 0
+        }
+    }
+
+    var qualityLabel: String {
+        switch quality {
+        case .some(.higher), .some(.high): return "Enhanced"
+        case .some(.medium): return "Standard"
+        case .some(.low), .some(.lower), .none: return "Basic"
         }
     }
 }

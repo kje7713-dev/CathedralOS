@@ -196,8 +196,10 @@ struct StoryArcRegionView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Story Arc")
-                    .font(CathedralTheme.Typography.headline(20, weight: .semibold))
+                Text("STORY ARC")
+                    .font(CathedralTheme.Typography.label(11, weight: .bold))
+                    .tracking(1.6)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 Spacer()
                 Button {
                     showingDeleteAllBeatsConfirm = true
@@ -208,7 +210,9 @@ struct StoryArcRegionView: View {
                 }
                 .disabled(beatsOrder.isEmpty)
             }
-            Text("Pick a template to populate the beats. Tap to edit, drag to reorder, swipe to delete.")
+            Text("Shape the story before drafting")
+                .font(CathedralTheme.Typography.headline(20, weight: .semibold))
+            Text("Choose a template, then edit the beats it creates.")
                 .font(CathedralTheme.Typography.body(13))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
         }
@@ -235,17 +239,44 @@ struct StoryArcRegionView: View {
     }
 
     private var templatePicker: some View {
-        Picker("Template", selection: templateSelection) {
-            Text("None").tag(UUID?.none)
-            ForEach(StoryArcTemplate.allTemplates) { template in
-                Text(template.name).tag(UUID?.some(template.id))
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            Text("1  CHOOSE A TEMPLATE")
+                .font(CathedralTheme.Typography.label(11, weight: .bold))
+                .tracking(1.2)
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(currentTemplate?.name ?? "No template selected")
+                        .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                    Text(currentTemplate == nil ? "Start with a story shape" : "Change the shape without losing your edits")
+                        .font(CathedralTheme.Typography.caption(12))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                Spacer()
+                Picker("Template", selection: templateSelection) {
+                    Text("None").tag(UUID?.none)
+                    ForEach(StoryArcTemplate.allTemplates) { template in
+                        Text(template.name).tag(UUID?.some(template.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(CathedralTheme.Colors.accent)
             }
         }
-        .pickerStyle(.menu)
     }
 
     private func beatsList(arc: StoryArc, template: StoryArcTemplate) -> some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("2  EDIT THE BEATS")
+                    .font(CathedralTheme.Typography.label(11, weight: .bold))
+                    .tracking(1.2)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Spacer()
+                Text("Tap to edit · drag · swipe")
+                    .font(CathedralTheme.Typography.caption(11))
+                    .foregroundStyle(CathedralTheme.Colors.tertiaryText)
+            }
             Text(template.description)
                 .font(CathedralTheme.Typography.body(13))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
@@ -631,8 +662,11 @@ struct StoryArcBeatRow: View {
             }
             Spacer()
         }
-        .padding(CathedralTheme.Spacing.sm)
-        .background(CathedralTheme.Colors.background)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .padding(.vertical, CathedralTheme.Spacing.sm)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(CathedralTheme.Colors.separator)
+                .frame(height: 1)
+        }
     }
 }

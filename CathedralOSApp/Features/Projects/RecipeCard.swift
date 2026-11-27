@@ -78,45 +78,53 @@ struct RecipeCard: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: CathedralTheme.Spacing.sm) {
-            Text(pack.name)
-                .font(CathedralTheme.Typography.headline(16))
-                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                .lineLimit(1)
-            Spacer()
-            if !metadataPills.isEmpty {
-                Text(metadataPills.joined(separator: " · "))
-                    .font(CathedralTheme.Typography.caption(11, weight: .medium))
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("RECIPE")
+                    .font(CathedralTheme.Typography.label(11, weight: .bold))
+                    .tracking(1.6)
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .lineLimit(1)
+                Spacer()
+                if !metadataPills.isEmpty {
+                    Text(metadataPills.joined(separator: " · "))
+                        .font(CathedralTheme.Typography.caption(11, weight: .medium))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        .lineLimit(1)
+                }
+                Menu {
+                    Button {
+                        showSharePrompt = true
+                    } label: {
+                        Label("Share Prompt", systemImage: "square.and.arrow.up")
+                    }
+                    Button {
+                        showShareJSON = true
+                    } label: {
+                        Label("Share JSON", systemImage: "curlybraces.square")
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        onDelete()
+                    } label: {
+                        Label("Delete Recipe", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                .accessibilityLabel("Recipe actions")
             }
-            Menu {
-                Button {
-                    showSharePrompt = true
-                } label: {
-                    Label("Share Prompt", systemImage: "square.and.arrow.up")
-                }
-                Button {
-                    showShareJSON = true
-                } label: {
-                    Label("Share JSON", systemImage: "curlybraces.square")
-                }
-                Button {
-                    onEdit()
-                } label: {
-                    Label("Edit Recipe", systemImage: "pencil")
-                }
-                Divider()
-                Button(role: .destructive) {
-                    onDelete()
-                } label: {
-                    Label("Delete Recipe", systemImage: "trash")
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            HStack(alignment: .firstTextBaseline) {
+                Text(pack.name)
+                    .font(CathedralTheme.Typography.headline(18, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    .lineLimit(2)
+                Spacer()
+                Button("EDIT", action: onEdit)
+                    .font(CathedralTheme.Typography.label(11, weight: .bold))
+                    .tracking(1.2)
+                    .foregroundStyle(CathedralTheme.Colors.accent)
             }
-            .accessibilityLabel("Recipe actions")
         }
     }
 
