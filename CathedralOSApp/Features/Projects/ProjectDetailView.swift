@@ -285,7 +285,7 @@ struct ProjectDetailView: View {
             .listStyle(.plain)
             .listRowSpacing(CathedralTheme.Spacing.sm)
             .scrollContentBackground(.hidden)
-            .safeAreaPadding(.bottom, CathedralTheme.Spacing.xxl + CathedralTheme.Spacing.xl)
+            .safeAreaPadding(.bottom, CathedralTheme.Spacing.xxl + CathedralTheme.Spacing.xl + CathedralTheme.Spacing.base)
         }
         .background(CathedralTheme.Colors.background.ignoresSafeArea())
         // Keep the existing confirmation and kickoff flow alive while the user
@@ -965,12 +965,24 @@ struct ProjectDetailView: View {
 
     private var recipesSection: some View {
         Section {
+            Text("A recipe is the story ingredients: the people, ideas, and instructions StoryDonkey should use.")
+                .font(CathedralTheme.Typography.body(13))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(
+                    top: CathedralTheme.Spacing.xs,
+                    leading: CathedralTheme.Spacing.base,
+                    bottom: CathedralTheme.Spacing.xs,
+                    trailing: CathedralTheme.Spacing.base
+                ))
             let sorted = (project.promptPacks).sorted { $0.name < $1.name }
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "Recipes turn your story into something the model can write from.",
                     description: "Each one bundles characters, sparks, and themes into a generation-ready set. Create your first to get started.",
-                    actionLabel: "Create first recipe",
+                    actionLabel: "Create your recipe",
                     action: { showAddPromptPack = true }
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
@@ -999,7 +1011,7 @@ struct ProjectDetailView: View {
                 ))
             }
         } header: {
-            CathedralSectionHeader("Recipes") { showAddPromptPack = true }
+            CathedralSectionHeader("1  CHOOSE A RECIPE") { showAddPromptPack = true }
                 .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }

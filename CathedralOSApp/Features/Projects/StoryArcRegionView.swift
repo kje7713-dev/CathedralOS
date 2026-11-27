@@ -52,9 +52,10 @@ final class StoryArcSyncState: ObservableObject {
     }
 }
 
-/// PR #2b: beats are now editable. Tap to edit (sheet), swipe to delete,
-/// drag-to-reorder (long-press to lift on iOS), "+" button to add. Template
-/// switch preserves user edits via role-based merge:
+/// The story shape is a guided choice, not another authoring surface. The
+/// selected template still materializes beats for the generation pipeline, but
+/// those implementation details stay out of the beginner-facing UI.
+/// Template switching preserves existing role-based data:
 ///   - Beats whose `role` exists in the new template keep their label/details
 ///     (just update position).
 ///   - User-added beats (empty role) survive as orphans at the end.
@@ -64,9 +65,8 @@ struct StoryArcRegionView: View {
     let modelContext: ModelContext
 
     @State private var beatsOrder: [StoryArcBeat] = []
-    @State private var editingBeat: StoryArcBeat?
-    @State private var showingDeleteAllBeatsConfirm = false
-    @State private var deleteError: String?
+    // The persisted beats remain available to the outline/generation pipeline.
+    // They are intentionally not exposed as an editable list here.
     // PR-XXX-O/persistence: single-flight guard so concurrent deleteBeats /
     // deleteAllBeats Tasks can't race on the shared SwiftData ModelContext.
     @State private var isDeletingInFlight: Bool = false
@@ -87,8 +87,8 @@ struct StoryArcRegionView: View {
             VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
                 header
                 templatePicker
-                if let arc = currentArc, currentTemplate != nil {
-                    beatsList(arc: arc)
+                if currentTemplate != nil {
+                    shapeSummary
                 } else {
                     emptyState
                 }
@@ -110,50 +110,6 @@ struct StoryArcRegionView: View {
             // so user edits aren't lost when navigating away mid-debounce.
             if let arc = currentArc { syncState.drainSync(arc, modelContext: modelContext) }
             Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
-        }
-        .sheet(item: $editingBeat) { beat in
-            StoryArcBeatEditView(
-                beat: beat,
-                onSave: {
-                    if let arc = currentArc {
-                        // StoryArcSyncService.syncArc is the sole cloud mutation authority
-                        // for StoryArc beats. Beat CRUD mutates SwiftData first; syncArc
-                        // reconciles the complete persisted beat set to the server.
-                        arc.lastSyncedAt = nil
-                        do {
-                            try modelContext.save()
-                        } catch {
-                            // Save failed; lastSyncedAt stays nil so app-launch recovery
-                            // retries this arc on the next launch.
-                        }
-                        Task {
-                            do {
-                                _ = try await StoryArcSyncService().syncArc(arc: arc, modelContext: modelContext)
-                                arc.lastSyncedAt = Date()
-                                try modelContext.save()
-                            } catch {
-                                // Sync failed; lastSyncedAt stays nil so app-launch recovery
-                                // retries this arc on the next launch.
-                            }
-                        }
-                    }
-                    Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
-                }
-            )
-        }
-        .alert("Delete All Beats?", isPresented: $showingDeleteAllBeatsConfirm) {
-            Button("Delete All", role: .destructive) { deleteAllBeats() }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text(alertMessage)
-        }
-        .alert("Delete Error", isPresented: Binding(
-            get: { deleteError != nil },
-            set: { if !$0 { deleteError = nil } }
-        )) {
-            Button("OK") { deleteError = nil }
-        } message: {
-            Text(deleteError ?? "")
         }
     }
 
@@ -196,23 +152,15 @@ struct StoryArcRegionView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text("STORY ARC")
+                Text("2  STORY SHAPE")
                     .font(CathedralTheme.Typography.label(11, weight: .bold))
                     .tracking(1.6)
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 Spacer()
-                Button {
-                    showingDeleteAllBeatsConfirm = true
-                } label: {
-                    Label("Delete All", systemImage: "trash")
-                        .font(CathedralTheme.Typography.body(13))
-                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                }
-                .disabled(beatsOrder.isEmpty)
             }
-            Text("Shape the story before drafting")
+            Text("Pick the shape of your story")
                 .font(CathedralTheme.Typography.headline(20, weight: .semibold))
-            Text("Choose a shape, then edit the beats.")
+            Text("This guides the chapter plan. You do not need to build the beats yourself.")
                 .font(CathedralTheme.Typography.body(13))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
         }
@@ -240,14 +188,11 @@ struct StoryArcRegionView: View {
 
     private var templatePicker: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-            Text("1  CHOOSE A TEMPLATE")
+            Text("CHOOSE ONE")
                 .font(CathedralTheme.Typography.label(11, weight: .bold))
                 .tracking(1.2)
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            HStack {
-                Text(currentTemplate?.name ?? "Choose a template")
-                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                Spacer()
+            HStack(alignment: .center, spacing: CathedralTheme.Spacing.sm) {
                 Picker(selection: templateSelection, label: Text("CHANGE")) {
                     Text("None").tag(UUID?.none)
                     ForEach(StoryArcTemplate.allTemplates) { template in
@@ -258,46 +203,32 @@ struct StoryArcRegionView: View {
                 .font(CathedralTheme.Typography.label(10, weight: .bold))
                 .tracking(1.1)
                 .tint(CathedralTheme.Colors.accent)
+                Spacer(minLength: 0)
+                Text(currentTemplate?.name ?? "Choose a shape")
+                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+            }
+            .frame(minHeight: 44)
+            if let description = currentTemplate?.description {
+                Text(description)
+                    .font(CathedralTheme.Typography.caption(12))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    private func beatsList(arc: StoryArc) -> some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("2  EDIT THE BEATS")
-                    .font(CathedralTheme.Typography.label(11, weight: .bold))
-                    .tracking(1.2)
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                Spacer()
-                Button(action: addBeat) {
-                    Label("ADD BEAT", systemImage: "plus")
-                        .font(CathedralTheme.Typography.label(10, weight: .bold))
-                        .tracking(1.1)
-                        .foregroundStyle(CathedralTheme.Colors.accent)
-                }
-                .buttonStyle(.plain)
-            }
-            List {
-                ForEach(beatsOrder, id: \.id) { beat in
-                    StoryArcBeatRow(beat: beat)
-                        .listRowBackground(CathedralTheme.Colors.background)
-                        .listRowSeparator(.hidden)
-                        .contentShape(Rectangle())
-                        .onTapGesture { editingBeat = beat }
-                }
-                .onMove(perform: moveBeats)
-                .onDelete(perform: deleteBeats)
-
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .frame(minHeight: 220)
-        }
+    private var shapeSummary: some View {
+        Label("StoryDonkey will use this shape to organize the chapters for you.", systemImage: "checkmark.circle.fill")
+            .font(CathedralTheme.Typography.caption(12))
+            .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var emptyState: some View {
-        Text("Pick a template to populate the beats.")
+        Text("Choose a story shape above. StoryDonkey will use it to plan the chapters.")
             .font(CathedralTheme.Typography.body(13))
             .foregroundStyle(CathedralTheme.Colors.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)

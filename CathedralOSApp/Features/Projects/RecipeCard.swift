@@ -80,7 +80,7 @@ struct RecipeCard: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
             HStack(alignment: .firstTextBaseline) {
-                Text("RECIPE")
+                Text("YOUR STORY INGREDIENTS")
                     .font(CathedralTheme.Typography.label(11, weight: .bold))
                     .tracking(1.6)
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
@@ -120,7 +120,7 @@ struct RecipeCard: View {
                     .foregroundStyle(CathedralTheme.Colors.primaryText)
                     .lineLimit(2)
                 Spacer()
-                Button("EDIT", action: onEdit)
+                Button("CHANGE", action: onEdit)
                     .font(CathedralTheme.Typography.label(11, weight: .bold))
                     .tracking(1.2)
                     .foregroundStyle(CathedralTheme.Colors.accent)

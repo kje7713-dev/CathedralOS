@@ -1048,7 +1048,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     private var header: some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
             HStack(alignment: .firstTextBaseline) {
-                Text("OUTLINE")
+                Text("3  MAKE YOUR CHAPTER PLAN")
                     .font(CathedralTheme.Typography.label(11, weight: .bold))
                     .tracking(1.6)
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
@@ -1064,11 +1064,12 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 .accessibilityLabel("Delete All Sections")
                 .disabled(sectionsOrder.isEmpty)
             }
-            Text("Build the chapter plan")
+            Text("Make the chapter plan")
                 .font(CathedralTheme.Typography.headline(20, weight: .semibold))
-            Text("Turn this story into editable chapters and scenes.")
+            Text("StoryDonkey will use your recipe and story shape to make the chapters for you.")
                 .font(CathedralTheme.Typography.body(13))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
+            recipeChooser
             let connectionUnavailable = durabilityCoordinator.activeSuggestionRun(for: project.id)?.status == "connection_unavailable"
             if connectionUnavailable {
                 CathedralPrimaryButton("Reconnect", systemImage: "arrow.clockwise") {
@@ -1082,7 +1083,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 }
             } else {
                 CathedralPrimaryButton(
-                    suggestionRunActive ? "Running" : "Suggest Sections",
+                    suggestionRunActive ? "Working…" : "Make my chapter plan",
                     systemImage: suggestionRunActive ? "arrow.clockwise" : "sparkles"
                 ) {
                     if suggestionRunActive {
@@ -1093,61 +1094,26 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                 }
                 .disabled(!suggestionsReady)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: CathedralTheme.Spacing.sm) {
-                    if recoverableSuggestions != nil {
-                        Button {
-                            openRecoverableSuggestions()
-                        } label: {
-                            Label("RESUME", systemImage: "arrow.uturn.backward.circle")
-                                .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                        }
-                    }
-                    // PR 1: the recipe chooser is visible whenever the project has
-                    // multiple recipes, not only when pending. Pending -> show
-                    // "Choose Recipe"; selected -> show the current recipe name so
-                    // the user can switch via the same menu.
-                    if let recipes = recipeSelection?.recipes, recipes.count >= 2 {
-                        let chosenName = recipes
-                            .first(where: { $0.id == recipeSelection?.selectedRecipe?.id })?
-                            .name
-                        Menu {
-                            ForEach(recipes, id: \.id) { pack in
-                                Button(pack.name) {
-                                    recipeSelectionService.setSelectedRecipe(id: pack.id, for: project)
-                                    recipeSelection = recipeSelectionService.resolve(for: project)
-                                    // Clear any stale recoverable suggestions from a prior recipe.
-                                    if let prior = recoverableSuggestions,
-                                       prior.sourceRecipe.promptPack.id != pack.id {
-                                        recoverableSuggestions = nil
-                                    }
-                                }
-                            }
-                        } label: {
-                            if let chosenName {
-                                Label("RECIPE: \(chosenName)", systemImage: "book.closed")
-                                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                                    .lineLimit(1)
-                            } else {
-                                Label("CHOOSE RECIPE", systemImage: "book.closed")
-                                    .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                            }
-                        }
-                    }
-                    if outlineHasSections {
-                        Button {
-                            runAllSections()
-                        } label: {
-                            Label("RUN ALL", systemImage: "play.fill")
-                                .font(CathedralTheme.Typography.body(13, weight: .semibold))
-                        }
-                        // A completed or failed banner is historical, not an active run.
-                        .disabled((projectRunStatus?.blocksNewGeneration ?? false) || isGenerationStarting)
-                    }
+            if recoverableSuggestions != nil {
+                Button {
+                    openRecoverableSuggestions()
+                } label: {
+                    Label("Continue the saved plan", systemImage: "arrow.uturn.backward.circle")
+                        .font(CathedralTheme.Typography.body(13, weight: .semibold))
                 }
-                .fixedSize(horizontal: true, vertical: false)
                 .buttonStyle(.plain)
                 .foregroundStyle(CathedralTheme.Colors.accent)
+            }
+            if outlineHasSections {
+                Button {
+                    runAllSections()
+                } label: {
+                    Label("Write all chapters", systemImage: "play.fill")
+                        .font(CathedralTheme.Typography.body(13, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(CathedralTheme.Colors.accent)
+                .disabled((projectRunStatus?.blocksNewGeneration ?? false) || isGenerationStarting)
             }
             if let run = durabilityCoordinator.activeSuggestionRun(for: project.id) {
                 switch run.status {
@@ -1191,9 +1157,63 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
                     EmptyView()
                 }
             }
-            Text("Your outline defines the structure of your novel. Run your sections to turn the plan into written chapters and scenes.")
-                .font(CathedralTheme.Typography.body(13))
+        }
+    }
+
+    @ViewBuilder
+    private var recipeChooser: some View {
+        if let recipes = recipeSelection?.recipes, !recipes.isEmpty {
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
+                Text("1  CHOOSE A RECIPE")
+                    .font(CathedralTheme.Typography.label(11, weight: .bold))
+                    .tracking(1.2)
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                Text("A recipe tells StoryDonkey which people, ideas, and instructions to use while planning and writing.")
+                    .font(CathedralTheme.Typography.caption(12))
+                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                let chosenName = recipes.first(where: { $0.id == recipeSelection?.selectedRecipe?.id })?.name
+                Menu {
+                    ForEach(recipes, id: \.id) { pack in
+                        Button(pack.name) {
+                            recipeSelectionService.setSelectedRecipe(id: pack.id, for: project)
+                            recipeSelection = recipeSelectionService.resolve(for: project)
+                            if let prior = recoverableSuggestions,
+                               prior.sourceRecipe.promptPack.id != pack.id {
+                                recoverableSuggestions = nil
+                            }
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "book.closed")
+                        Text(chosenName ?? "Choose a recipe")
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    .padding(.horizontal, CathedralTheme.Spacing.sm)
+                    .frame(minHeight: 48)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(CathedralTheme.Colors.surface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm)
+                            .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+                }
+                .buttonStyle(.plain)
+            }
+        } else {
+            Text("First create a recipe above. It is the set of story ingredients StoryDonkey will use.")
+                .font(CathedralTheme.Typography.caption(12))
                 .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1314,7 +1334,7 @@ visibleSectionIDs=\(sectionsOrder.map(\.id))
     }
 
     private var emptyState: some View {
-        Text("No sections yet. Use SUGGEST SECTIONS above to build the chapter plan.")
+        Text("Your chapters will appear here after you make the chapter plan above.")
             .font(CathedralTheme.Typography.body(13))
             .foregroundStyle(CathedralTheme.Colors.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)

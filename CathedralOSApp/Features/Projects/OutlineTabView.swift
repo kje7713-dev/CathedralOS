@@ -29,21 +29,18 @@ struct OutlineTabView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: CathedralTheme.Spacing.base) {
-                StoryArcRegionView(project: project, modelContext: modelContext)
-                OutlineSectionsRegionView(
-                    project: project,
-                    modelContext: modelContext,
-                    generationLaunch: $generationLaunch,
-                    isGenerationStarting: $isGenerationStarting,
-                    onGenerationCompleted: onGenerationCompleted,
-                    onProjectRefreshed: onProjectRefreshed
-                )
-            }
-            .padding(.vertical, CathedralTheme.Spacing.base)
+        VStack(spacing: CathedralTheme.Spacing.base) {
+            StoryArcRegionView(project: project, modelContext: modelContext)
+            OutlineSectionsRegionView(
+                project: project,
+                modelContext: modelContext,
+                generationLaunch: $generationLaunch,
+                isGenerationStarting: $isGenerationStarting,
+                onGenerationCompleted: onGenerationCompleted,
+                onProjectRefreshed: onProjectRefreshed
+            )
         }
-        .scrollContentBackground(.hidden)
+        .padding(.vertical, CathedralTheme.Spacing.base)
         .background(CathedralTheme.Colors.background)
     }
 }
