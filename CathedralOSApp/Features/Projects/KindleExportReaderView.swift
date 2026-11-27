@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import ReadiumNavigator
 import ReadiumShared
 import ReadiumStreamer
@@ -64,7 +65,10 @@ struct KindleExportReaderView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        speech.stop()
+                        dismiss()
+                    }
                 }
                 if speech.isAvailable {
                     ToolbarItemGroup(placement: .primaryAction) {
@@ -155,6 +159,8 @@ private final class ReadiumEPUBViewController: UIViewController {
     private var navigator: EPUBNavigatorViewController?
     private var speechSynthesizer: PublicationSpeechSynthesizer?
     private var loadTask: Task<Void, Never>?
+    private var interruptionObserver: NSObjectProtocol?
+    private var wasPlayingBeforeInterruption = false
 
     init(fileURL: URL, speech: EPUBSpeechModel, publicationKey: String?, onError: @escaping @MainActor (String) -> Void) {
         self.fileURL = fileURL
@@ -163,6 +169,15 @@ private final class ReadiumEPUBViewController: UIViewController {
         self.onError = onError
         super.init(nibName: nil, bundle: nil)
         speech.reader = self
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                self?.handleAudioInterruption(notification)
+            }
+        }
     }
 
     @available(*, unavailable)
@@ -179,11 +194,13 @@ private final class ReadiumEPUBViewController: UIViewController {
 
     deinit {
         loadTask?.cancel()
+        if let interruptionObserver {
+            NotificationCenter.default.removeObserver(interruptionObserver)
+        }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        stopSpeech()
         progressStore.flush()
     }
 
@@ -191,6 +208,10 @@ private final class ReadiumEPUBViewController: UIViewController {
         guard let speechSynthesizer else { return }
         switch speech.state {
         case .ready:
+            guard activateAudioSession() else {
+                speech.state = .paused
+                return
+            }
             speechSynthesizer.start(from: navigator?.currentLocation)
         case .playing:
             speechSynthesizer.pause()
@@ -203,7 +224,53 @@ private final class ReadiumEPUBViewController: UIViewController {
 
     func stopSpeech() {
         speechSynthesizer?.stop()
+        deactivateAudioSession()
         speech.state = .ready
+    }
+
+    private func activateAudioSession() -> Bool {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+            try session.setActive(true)
+            return true
+        } catch {
+            onError("Narration could not access audio playback.")
+            return false
+        }
+    }
+
+    private func deactivateAudioSession() {
+        try? AVAudioSession.sharedInstance().setActive(
+            false,
+            options: [.notifyOthersOnDeactivation]
+        )
+    }
+
+    private func handleAudioInterruption(_ notification: Notification) {
+        guard
+            let userInfo = notification.userInfo,
+            let rawType = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+            let type = AVAudioSession.InterruptionType(rawValue: rawType)
+        else { return }
+
+        switch type {
+        case .began:
+            wasPlayingBeforeInterruption = speech.state == .playing
+            if wasPlayingBeforeInterruption {
+                speechSynthesizer?.pause()
+            }
+        case .ended:
+            guard wasPlayingBeforeInterruption else { return }
+            wasPlayingBeforeInterruption = false
+            guard activateAudioSession() else { return }
+            if let optionsRaw = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt,
+               AVAudioSession.InterruptionOptions(rawValue: optionsRaw).contains(.shouldResume) {
+                speechSynthesizer?.resume()
+            }
+        @unknown default:
+            break
+        }
     }
 
     func selectVoice(_ voice: TTSVoice) {

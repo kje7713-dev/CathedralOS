@@ -1264,6 +1264,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				INFOPLIST_KEY_CFBundleDisplayName = StoryDonkey;
+				INFOPLIST_KEY_UIBackgroundModes = audio;
 				CODE_SIGN_ENTITLEMENTS = CathedralOSApp/CathedralOSApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -1299,6 +1300,7 @@ echo \"Runtime config plist injection completed: keys present\"";
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				INFOPLIST_KEY_CFBundleDisplayName = StoryDonkey;
+				INFOPLIST_KEY_UIBackgroundModes = audio;
 				CODE_SIGN_ENTITLEMENTS = CathedralOSApp/CathedralOSApp.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
