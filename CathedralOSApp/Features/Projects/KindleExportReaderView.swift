@@ -4,6 +4,29 @@ import ReadiumShared
 import ReadiumStreamer
 import SwiftUI
 
+@MainActor
+private final class EPUBSpeechModel: ObservableObject {
+    enum State: Equatable {
+        case unavailable
+        case ready
+        case playing
+        case paused
+    }
+
+    @Published var state: State = .unavailable
+    weak var reader: ReadiumEPUBViewController?
+
+    var isAvailable: Bool { state != .unavailable }
+
+    func toggle() {
+        reader?.toggleSpeech()
+    }
+
+    func stop() {
+        reader?.stopSpeech()
+    }
+}
+
 /// In-app EPUB reader backed by Readium's EPUB navigator.
 ///
 /// Limited to read/share — no library, bookmark, or highlight features.
@@ -13,10 +36,11 @@ struct KindleExportReaderView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var loadError: String?
+    @StateObject private var speech = EPUBSpeechModel()
 
     var body: some View {
         NavigationStack {
-            ReadiumEPUBView(fileURL: fileURL) { message in
+            ReadiumEPUBView(fileURL: fileURL, speech: speech) { message in
                 loadError = message
             }
             .ignoresSafeArea()
@@ -25,6 +49,24 @@ struct KindleExportReaderView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                }
+                if speech.isAvailable {
+                    ToolbarItemGroup(placement: .primaryAction) {
+                        Button {
+                            speech.toggle()
+                        } label: {
+                            Label(
+                                speech.state == .playing ? "Pause" : "Listen",
+                                systemImage: speech.state == .playing ? "pause.fill" : "play.fill"
+                            )
+                        }
+                        Button {
+                            speech.stop()
+                        } label: {
+                            Label("Stop", systemImage: "stop.fill")
+                        }
+                        .disabled(speech.state == .ready)
+                    }
                 }
             }
             .alert("Unable to open EPUB", isPresented: .constant(loadError != nil)) {
@@ -41,10 +83,11 @@ struct KindleExportReaderView: View {
 
 private struct ReadiumEPUBView: UIViewControllerRepresentable {
     let fileURL: URL
+    let speech: EPUBSpeechModel
     let onError: @MainActor (String) -> Void
 
     func makeUIViewController(context: Context) -> ReadiumEPUBViewController {
-        ReadiumEPUBViewController(fileURL: fileURL, onError: onError)
+        ReadiumEPUBViewController(fileURL: fileURL, speech: speech, onError: onError)
     }
 
     func updateUIViewController(_ viewController: ReadiumEPUBViewController, context: Context) {}
@@ -53,14 +96,18 @@ private struct ReadiumEPUBView: UIViewControllerRepresentable {
 @MainActor
 private final class ReadiumEPUBViewController: UIViewController {
     private let fileURL: URL
+    private let speech: EPUBSpeechModel
     private let onError: @MainActor (String) -> Void
     private var navigator: EPUBNavigatorViewController?
+    private var speechSynthesizer: PublicationSpeechSynthesizer?
     private var loadTask: Task<Void, Never>?
 
-    init(fileURL: URL, onError: @escaping @MainActor (String) -> Void) {
+    init(fileURL: URL, speech: EPUBSpeechModel, onError: @escaping @MainActor (String) -> Void) {
         self.fileURL = fileURL
+        self.speech = speech
         self.onError = onError
         super.init(nibName: nil, bundle: nil)
+        speech.reader = self
     }
 
     @available(*, unavailable)
@@ -77,6 +124,30 @@ private final class ReadiumEPUBViewController: UIViewController {
 
     deinit {
         loadTask?.cancel()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        stopSpeech()
+    }
+
+    func toggleSpeech() {
+        guard let speechSynthesizer else { return }
+        switch speech.state {
+        case .ready:
+            speechSynthesizer.start(from: navigator?.currentLocation)
+        case .playing:
+            speechSynthesizer.pause()
+        case .paused:
+            speechSynthesizer.resume()
+        case .unavailable:
+            break
+        }
+    }
+
+    func stopSpeech() {
+        speechSynthesizer?.stop()
+        speech.state = .ready
     }
 
     private func loadPublication() async {
@@ -129,8 +200,37 @@ private final class ReadiumEPUBViewController: UIViewController {
             ])
             navigator.didMove(toParent: self)
             self.navigator = navigator
+
+            if let synthesizer = PublicationSpeechSynthesizer(publication: publication, delegate: self) {
+                speechSynthesizer = synthesizer
+                speech.state = .ready
+            }
         } catch {
             onError("Readium could not create the EPUB reader.")
         }
+    }
+}
+
+extension ReadiumEPUBViewController: PublicationSpeechSynthesizerDelegate {
+    func publicationSpeechSynthesizer(
+        _ synthesizer: PublicationSpeechSynthesizer,
+        stateDidChange state: PublicationSpeechSynthesizer.State
+    ) {
+        switch state {
+        case .stopped:
+            speech.state = .ready
+        case .paused:
+            speech.state = .paused
+        case .playing:
+            speech.state = .playing
+        }
+    }
+
+    func publicationSpeechSynthesizer(
+        _ synthesizer: PublicationSpeechSynthesizer,
+        utterance: PublicationSpeechSynthesizer.Utterance,
+        didFailWithError error: PublicationSpeechSynthesizer.Error
+    ) {
+        speech.state = .paused
     }
 }
