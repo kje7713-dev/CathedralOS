@@ -23,7 +23,7 @@ struct HomeView: View {
 
         // First launch fallback for existing installs that predate the resume
         // marker. Once a story is opened, the marker becomes authoritative.
-        projects.max { activityDate(for: $0) < activityDate(for: $1) }
+        return projects.max { activityDate(for: $0) < activityDate(for: $1) }
     }
 
     init(
