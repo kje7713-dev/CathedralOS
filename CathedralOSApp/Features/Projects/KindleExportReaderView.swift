@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import UIKit
 import ReadiumNavigator
 import ReadiumShared
 import ReadiumStreamer
@@ -160,7 +161,9 @@ private final class ReadiumEPUBViewController: UIViewController {
     private var speechSynthesizer: PublicationSpeechSynthesizer?
     private var loadTask: Task<Void, Never>?
     private var interruptionObserver: NSObjectProtocol?
+    private var lifecycleObservers: [NSObjectProtocol] = []
     private var wasPlayingBeforeInterruption = false
+    private var wasPlayingBeforeBackground = false
 
     init(fileURL: URL, speech: EPUBSpeechModel, publicationKey: String?, onError: @escaping @MainActor (String) -> Void) {
         self.fileURL = fileURL
@@ -176,6 +179,17 @@ private final class ReadiumEPUBViewController: UIViewController {
         ) { [weak self] notification in
             Task { @MainActor [weak self] in
                 self?.handleAudioInterruption(notification)
+            }
+        }
+        let notificationCenter = NotificationCenter.default
+        lifecycleObservers = [
+            UIApplication.willResignActiveNotification,
+            UIApplication.didEnterBackgroundNotification,
+        ].map { name in
+            notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                Task { @MainActor [weak self] in
+                    self?.handleAppLifecycle(notification)
+                }
             }
         }
     }
@@ -197,6 +211,7 @@ private final class ReadiumEPUBViewController: UIViewController {
         if let interruptionObserver {
             NotificationCenter.default.removeObserver(interruptionObserver)
         }
+        lifecycleObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -214,6 +229,7 @@ private final class ReadiumEPUBViewController: UIViewController {
             }
             speechSynthesizer.start(from: navigator?.currentLocation)
         case .playing:
+            wasPlayingBeforeBackground = false
             speechSynthesizer.pause()
         case .paused:
             speechSynthesizer.resume()
@@ -223,6 +239,7 @@ private final class ReadiumEPUBViewController: UIViewController {
     }
 
     func stopSpeech() {
+        wasPlayingBeforeBackground = false
         speechSynthesizer?.stop()
         deactivateAudioSession()
         speech.state = .ready
@@ -231,7 +248,14 @@ private final class ReadiumEPUBViewController: UIViewController {
     private func activateAudioSession() -> Bool {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+            // Long-form audio is the policy intended for spoken playback that must
+            // continue while the device is locked or the app is backgrounded.
+            try session.setCategory(
+                .playback,
+                mode: .spokenAudio,
+                policy: .longFormAudio,
+                options: [.duckOthers]
+            )
             try session.setActive(true)
             return true
         } catch {
@@ -269,6 +293,27 @@ private final class ReadiumEPUBViewController: UIViewController {
                 speechSynthesizer?.resume()
             }
         @unknown default:
+            break
+        }
+    }
+
+    private func handleAppLifecycle(_ notification: Notification) {
+        switch notification.name {
+        case UIApplication.willResignActiveNotification:
+            // Locking the device makes the scene inactive before backgrounding.
+            // Remember only active narration; an intentional user pause must stay
+            // paused when the phone is locked.
+            wasPlayingBeforeBackground = speech.state == .playing
+            if wasPlayingBeforeBackground {
+                _ = activateAudioSession()
+            }
+        case UIApplication.didEnterBackgroundNotification:
+            guard wasPlayingBeforeBackground else { return }
+            _ = activateAudioSession()
+            if speech.state == .paused {
+                speechSynthesizer?.resume()
+            }
+        default:
             break
         }
     }
@@ -335,7 +380,16 @@ private final class ReadiumEPUBViewController: UIViewController {
             navigator.didMove(toParent: self)
             self.navigator = navigator
 
-            if let synthesizer = PublicationSpeechSynthesizer(publication: publication, delegate: self) {
+            if let synthesizer = PublicationSpeechSynthesizer(
+                publication: publication,
+                audioSessionConfig: .init(
+                    category: .playback,
+                    mode: .spokenAudio,
+                    routeSharingPolicy: .longFormAudio,
+                    options: [.duckOthers]
+                ),
+                delegate: self
+            ) {
                 speechSynthesizer = synthesizer
                 let preferredLanguage = (Locale.current.languageCode ?? "en").lowercased()
                 let voices = synthesizer.availableVoices
@@ -393,6 +447,7 @@ extension ReadiumEPUBViewController: EPUBNavigatorDelegate, PublicationSpeechSyn
     ) {
         switch state {
         case .stopped:
+            wasPlayingBeforeBackground = false
             speech.state = .ready
         case .paused:
             speech.state = .paused

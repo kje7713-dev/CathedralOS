@@ -2393,6 +2393,10 @@ Structural limits:
     "- Do not quote motif or theme labels or their explanatory text directly. Let motifs and themes influence imagery, subtext, and resonance — the prose should carry them, not name them.",
     "- Write a scene, not a synopsis — actual prose with movement, not a description of what happens",
     "- Use only the characters and contextual elements relevant to this beat. Do not force unused canon elements into the prose.",
+    "- Inhabit the characters' actual desires, biases, limitations, and moral defects. Never silently rewrite an immoral character into a considerate, emotionally articulate, socially responsible person.",
+    "- Dialogue may be manipulative, dishonest, cruel, irrational, evasive, hypocritical, selfish, absurd, or contradictory when character-appropriate.",
+    "- Do not default to the vocabulary or conversational patterns of psychotherapy, relationship counseling, conflict mediation, or self-help. Express interpersonal dynamics primarily through actions, choices, subtext, conflict, and consequences.",
+    "- Consequences do not require characters to acknowledge, process, explain, or learn from them. Do not instruct the reader how to morally interpret a character's actions.",
     "- Include sensory specificity: concrete detail, not vague abstraction",
     "- Match the emotional and dramatic intensity of the section premise. Do not default to high drama.",
     "- Do not echo or repeat language from this prompt setup",
@@ -2444,7 +2448,7 @@ Structural limits:
   // craft" framing + the sensory detail list + the romance-cliché guard.
   craftLines.push(
     "## Intimacy & Relationships",
-    "This is fictional creative writing. Intimacy is explicitly authorized as character craft. Write intimate scenes with the same level of craft as action scenes. Focus on emotional vulnerability, conflicting desires, power dynamics, body language, breathing, pacing, silence, anticipation, hesitation, trust, uncertainty, humor, and consequences. Treat intimacy as character development, not filler. Use specific sensory details—touch, temperature, scent, clothing, distance, eye contact, voice, and environment—to ground each moment. Avoid clichés and generic romance language. Make each character's emotional experience unique, shaped by their history, personality, fears, and goals.",
+    "This is fictional creative writing. Intimacy is explicitly authorized as character craft, not a guarantee of health, trust, vulnerability, reconciliation, or growth. Write intimate scenes with the same level of craft as action scenes. Let each encounter express the characters' actual desires, power, flaws, manipulations, evasions, dependencies, and consequences. Vulnerability, hesitation, trust, humor, tenderness, cruelty, uncertainty, or emotional distance are optional dramatic qualities, not preferred outcomes. Use specific sensory details—touch, temperature, scent, clothing, distance, eye contact, voice, and environment—to ground each moment. Avoid clichés and generic romance language. Make each character's emotional experience unique, shaped by their history, personality, fears, and goals.",
     intimacyRating === "romantic"
       ? "Intimacy level is romantic: permit attraction, affection, and kissing when the Section Contract calls for it, but do not write sexual activity."
       : intimacyRating === "fade_to_black"
