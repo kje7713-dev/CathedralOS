@@ -13,6 +13,8 @@ struct RecipeCard: View {
     let pack: PromptPack
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let onSelect: (() -> Void)?
+    let isSelected: Bool
     /// Show the "Outputs from this recipe" section. Default true. Pass false
     /// when rendering on the Compile tab (where only the recipe info matters,
     /// not the historical outputs).
@@ -21,20 +23,24 @@ struct RecipeCard: View {
     // Display state only — generation state moved up to ProjectDetailView.
     @State private var showSharePrompt = false
     @State private var showShareJSON = false
-    @State private var isElementsExpanded = true
+    @State private var isElementsExpanded = false
 
     init(
         project: StoryProject,
         pack: PromptPack,
         onEdit: @escaping () -> Void,
         onDelete: @escaping () -> Void,
-        showOutputs: Bool = true
+        showOutputs: Bool = true,
+        isSelected: Bool = false,
+        onSelect: (() -> Void)? = nil
     ) {
         self.project = project
         self.pack = pack
         self.onEdit = onEdit
         self.onDelete = onDelete
         self.showOutputs = showOutputs
+        self.isSelected = isSelected
+        self.onSelect = onSelect
     }
 
     private var exportPayload: PromptPackExportPayload {
@@ -52,26 +58,21 @@ struct RecipeCard: View {
     // MARK: Body
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
-            header
+        CathedralObjectSurface {
+            VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+                header
 
-            elementsSection
+                elementsSection
 
-            if isSparse {
-                sparsePackNotice
-            }
+                if isSparse {
+                    sparsePackNotice
+                }
 
-            if showOutputs {
-                outputsSection
+                if showOutputs {
+                    outputsSection
+                }
             }
         }
-        .padding(CathedralTheme.Spacing.base)
-        .background(CathedralTheme.Colors.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
         .sheet(isPresented: $showSharePrompt) {
             ShareSheet(activityItems: [promptText])
         }
@@ -83,54 +84,59 @@ struct RecipeCard: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: CathedralTheme.Spacing.sm) {
-            Text(pack.name)
-                .font(CathedralTheme.Typography.headline(16))
-                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                .lineLimit(1)
-            Spacer()
-            metadataPillStrip
-            Menu {
-                Button {
-                    showSharePrompt = true
-                } label: {
-                    Label("Share Prompt", systemImage: "square.and.arrow.up")
-                }
-                Button {
-                    showShareJSON = true
-                } label: {
-                    Label("Share JSON", systemImage: "curlybraces.square")
-                }
-                Button {
-                    onEdit()
-                } label: {
-                    Label("Edit Recipe", systemImage: "pencil")
-                }
-                Divider()
-                Button(role: .destructive) {
-                    onDelete()
-                } label: {
-                    Label("Delete Recipe", systemImage: "trash")
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("YOUR STORY INGREDIENTS")
+                    .font(CathedralTheme.Typography.label(11, weight: .bold))
+                    .tracking(1.6)
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
-            }
-            .accessibilityLabel("Recipe actions")
-        }
-    }
-
-    private var metadataPillStrip: some View {
-        let pills = metadataPills
-        return Group {
-            if !pills.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: CathedralTheme.Spacing.xs) {
-                        ForEach(pills, id: \.self) { label in
-                            CathedralMetadataPill(label: label)
-                        }
-                    }
+                Spacer()
+                if !metadataPills.isEmpty {
+                    Text(metadataPills.joined(separator: " · "))
+                        .font(CathedralTheme.Typography.caption(11, weight: .medium))
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        .lineLimit(1)
                 }
+                Menu {
+                    Button {
+                        showSharePrompt = true
+                    } label: {
+                        Label("Share Prompt", systemImage: "square.and.arrow.up")
+                    }
+                    Button {
+                        showShareJSON = true
+                    } label: {
+                        Label("Share JSON", systemImage: "curlybraces.square")
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        onDelete()
+                    } label: {
+                        Label("Delete Recipe", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                }
+                .accessibilityLabel("Recipe actions")
+            }
+            HStack(alignment: .firstTextBaseline) {
+                Text(pack.name)
+                    .font(CathedralTheme.Typography.headline(18, weight: .semibold))
+                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    .lineLimit(2)
+                Spacer()
+                if let onSelect {
+                    Button(isSelected ? "USING" : "USE", action: onSelect)
+                        .font(CathedralTheme.Typography.label(11, weight: .bold))
+                        .tracking(1.2)
+                        .foregroundStyle(isSelected ? CathedralTheme.Colors.secondaryText : CathedralTheme.Colors.accent)
+                        .disabled(isSelected)
+                }
+                Button("CHANGE", action: onEdit)
+                    .font(CathedralTheme.Typography.label(11, weight: .bold))
+                    .tracking(1.2)
+                    .foregroundStyle(CathedralTheme.Colors.accent)
             }
         }
     }
@@ -157,7 +163,7 @@ struct RecipeCard: View {
                 HStack(spacing: CathedralTheme.Spacing.xs) {
                     Image(systemName: isElementsExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
-                    Text("WHAT THIS RECIPE USES")
+                    Text(isElementsExpanded ? "HIDE INPUTS" : "SHOW INPUTS")
                         .font(CathedralTheme.Typography.label(10, weight: .semibold))
                         .tracking(1.5)
                 }
@@ -313,7 +319,7 @@ struct RecipeCard: View {
             HStack(alignment: .center, spacing: CathedralTheme.Spacing.sm) {
                 statusGlyph(for: output)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(output.title)
+                    Text(sectionTitle(for: output) ?? output.title)
                         .font(CathedralTheme.Typography.body(14, weight: .medium))
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .lineLimit(1)
@@ -330,6 +336,15 @@ struct RecipeCard: View {
             .padding(.vertical, CathedralTheme.Spacing.xs)
         }
         .buttonStyle(.plain)
+    }
+
+    private func sectionTitle(for output: GenerationOutput) -> String? {
+        guard let sectionID = output.outlineSectionID else { return nil }
+        return project.outlines
+            .flatMap(\.sections)
+            .first(where: { $0.id == sectionID })?
+            .title
+            .nilIfEmpty
     }
 
     private func statusGlyph(for output: GenerationOutput) -> some View {

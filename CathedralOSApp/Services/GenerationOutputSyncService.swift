@@ -209,16 +209,21 @@ protocol GenerationOutputSyncServiceProtocol {
     /// Fetches the signed-in user's cloud `generation_outputs` and reconciles them into
     /// the local SwiftData store.  Requires a signed-in session; throws `notSignedIn`
     /// when the user is not authenticated.
+    /// SwiftData models and contexts are shared with SwiftUI's @Query store;
+    /// keep all local output reads/writes on the MainActor across network awaits.
+    @MainActor
     func pullOutputs(into context: ModelContext) async throws
 
     /// Uploads a single local-only `GenerationOutput` to Supabase and records the
     /// returned cloud ID.  On failure the local record is preserved and marked `failed`.
+    @MainActor
     func pushOutput(_ output: GenerationOutput) async throws
 
     /// Returns the current cloud row count for the signed-in user's `generation_outputs`.
     func fetchCloudOutputCount() async throws -> Int
 
     /// Convenience: pushes all `local_only` outputs, then pulls from the cloud.
+    @MainActor
     func syncAll(in context: ModelContext) async throws
 }
 
@@ -290,6 +295,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
 
     // MARK: - Pull
 
+    @MainActor
     func pullOutputs(into context: ModelContext) async throws {
         do {
             let (client, _, accessToken) = try await validatedClientAndUser()
@@ -394,6 +400,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
 
     // MARK: - Push
 
+    @MainActor
     func pushOutput(_ output: GenerationOutput) async throws {
         try await mutationGate.run {
             let tombstones = try await tombstoneService.fetchGenerationOutputTombstones()
@@ -463,6 +470,7 @@ final class SupabaseGenerationOutputSyncService: GenerationOutputSyncServiceProt
 
     // MARK: - Sync All
 
+    @MainActor
     func syncAll(in context: ModelContext) async throws {
         let outputsNeedingUpload = ((try? context.fetch(FetchDescriptor<GenerationOutput>())) ?? [])
             .filter {
@@ -1364,10 +1372,12 @@ private struct GenerationOutputOwnershipResponse: Decodable {
 /// No-op implementation for use when Supabase is not configured or in previews/tests.
 final class StubGenerationOutputSyncService: GenerationOutputSyncServiceProtocol {
 
+    @MainActor
     func pullOutputs(into context: ModelContext) async throws {
         // No-op stub: no network calls.
     }
 
+    @MainActor
     func pushOutput(_ output: GenerationOutput) async throws {
         // No-op stub: no network calls.
     }
@@ -1376,6 +1386,7 @@ final class StubGenerationOutputSyncService: GenerationOutputSyncServiceProtocol
         0
     }
 
+    @MainActor
     func syncAll(in context: ModelContext) async throws {
         // No-op stub: no network calls.
     }

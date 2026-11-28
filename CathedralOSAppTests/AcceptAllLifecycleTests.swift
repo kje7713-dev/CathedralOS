@@ -104,9 +104,12 @@ private final class StubProjectSyncServiceForLifecycle: ProjectCloudSyncServiceP
 }
 
 private final class StubOutputSyncServiceForLifecycle: GenerationOutputSyncServiceProtocol {
+    @MainActor
     func pullOutputs(into context: ModelContext) async throws {}
+    @MainActor
     func pushOutput(_ output: GenerationOutput) async throws {}
     func fetchCloudOutputCount() async throws -> Int { 0 }
+    @MainActor
     func syncAll(in context: ModelContext) async throws {}
 }
 

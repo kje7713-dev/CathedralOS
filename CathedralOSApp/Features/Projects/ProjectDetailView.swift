@@ -14,6 +14,7 @@ enum OutputListFilter: String, CaseIterable {
 /// Advanced toggle that reveals every section in a single flat list.
 enum StoryEditorMode: String, CaseIterable, Identifiable {
     case story
+    case build
     case cast
     case themes
     case recipe
@@ -28,6 +29,7 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .story: return "Story"
+        case .build: return "Build"
         case .cast: return "Cast"
         case .themes: return "Themes"
         case .recipe: return "Recipe"
@@ -43,6 +45,7 @@ enum StoryEditorMode: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .story: return "text.book.closed"
+        case .build: return "square.stack.3d.up"
         case .cast: return "person.2"
         case .themes: return "sparkles"
         case .recipe: return "list.bullet.rectangle"
@@ -58,6 +61,19 @@ struct OutlineGenerationLaunch: Identifiable {
     let sectionID: UUID
     let scope: String
     let modelID: String?
+}
+
+private enum BuildStep: String {
+    case recipe
+    case shape
+    case outline
+}
+
+private enum StoryStep: String {
+    case idea
+    case audience
+    case world
+    case people
 }
 
 /// Shared completion behavior for both ProjectDetailView resume paths. Keeping
@@ -130,10 +146,13 @@ struct ProjectDetailView: View {
     @State private var showDeleteAllOutputsConfirm = false
     @State private var pendingDeleteAllInputs: [GenerationOutputDeletionInput] = []
     @State private var isDeletingAllOutputs = false
+    @State private var expandedBuildStep: BuildStep?
+    @State private var expandedStoryStep: StoryStep?
+    @State private var recipeSelectionRevision = 0
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
-    @AppStorage("cathedralos.showNovelWorkspace") private var showNovelWorkspace = true
+    @AppStorage("cathedralos.lastOpenedProjectLineageID") private var lastOpenedProjectLineageID = ""
 
     private var storyEditorMode: StoryEditorMode {
         StoryEditorMode(rawValue: storyEditorModeRaw) ?? .story
@@ -228,9 +247,6 @@ struct ProjectDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !advancedMode && showNovelWorkspace {
-                novelWorkflowSection
-            }
             modePicker
             List {
                 if let runStatus = projectRunStatus {
@@ -261,11 +277,9 @@ struct ProjectDetailView: View {
                 } else {
                     switch storyEditorMode {
                     case .story:
-                        outputsJumpSection
-                        summarySection
-                        audienceSection
-                        settingSection
-                        motifsSection
+                        storySections
+                    case .build:
+                        buildSections
                     case .cast:
                         charactersSection
                         relationshipsSection
@@ -276,24 +290,19 @@ struct ProjectDetailView: View {
                     case .recipe:
                         recipesSection
                     case .outline:
-                        OutlineTabView(
-                            project: project,
-                            generationLaunch: $pendingOutlineGeneration,
-                            onGenerationCompleted: {
-                                advancedMode = false
-                                storyEditorModeRaw = StoryEditorMode.output.rawValue
-                            },
-                            onProjectRefreshed: refreshProjectReferenceHandler
-                        )
+                        buildSections
                     case .output:
                         generationsSection
+                        epubExportSection
                     case .compile:
                         compileGenerateCTA
                     }
                 }
             }
             .listStyle(.plain)
+            .listRowSpacing(CathedralTheme.Spacing.sm)
             .scrollContentBackground(.hidden)
+            .safeAreaPadding(.bottom, CathedralTheme.Spacing.xxl + CathedralTheme.Spacing.xl + CathedralTheme.Spacing.base)
         }
         .background(CathedralTheme.Colors.background.ignoresSafeArea())
         // Keep the existing confirmation and kickoff flow alive while the user
@@ -303,7 +312,7 @@ struct ProjectDetailView: View {
                 project: project,
                 generationLaunch: $pendingOutlineGeneration,
                 isGenerationStarting: $isRunAllStarting,
-                isVisible: storyEditorMode != .outline && !advancedMode,
+                isVisible: storyEditorMode != .build && storyEditorMode != .outline && !advancedMode,
                 onProjectRefreshed: refreshProjectReferenceHandler,
                 onGenerationCompleted: handleGenerationCompleted
             )
@@ -312,31 +321,19 @@ struct ProjectDetailView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    showNovelWorkspace.toggle()
+                Menu {
+                    Button {
+                        advancedMode.toggle()
+                    } label: {
+                        Label(
+                            advancedMode ? "Hide all story tools" : "Show all story tools",
+                            systemImage: advancedMode ? "rectangle.grid.2x2.fill" : "rectangle.grid.2x2"
+                        )
+                    }
                 } label: {
-                    Image(systemName: showNovelWorkspace ? "eye" : "eye.slash")
-                        .foregroundStyle(showNovelWorkspace ? CathedralTheme.Colors.accent : CathedralTheme.Colors.secondaryText)
-                }
-                .accessibilityLabel(showNovelWorkspace ? "Hide Novel Workspace" : "Show Novel Workspace")
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    advancedMode.toggle()
-                } label: {
-                    Image(systemName: advancedMode ? "rectangle.grid.2x2.fill" : "rectangle.grid.2x2")
-                        .foregroundStyle(advancedMode ? CathedralTheme.Colors.accent : CathedralTheme.Colors.secondaryText)
-                }
-                .accessibilityLabel(advancedMode ? "Exit advanced mode" : "Enter advanced mode")
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    showKindleExport = true
-                } label: {
-                    Image(systemName: "book.closed")
+                    Image(systemName: "ellipsis.circle")
                         .foregroundStyle(CathedralTheme.Colors.accent)
                 }
-                .accessibilityLabel("Export to eReader")
             }
         }
         .sheet(isPresented: $showKindleExport) {
@@ -345,6 +342,9 @@ struct ProjectDetailView: View {
         }
         .tint(CathedralTheme.Colors.accent)
         .task {
+            // Home resumes the story the user most recently opened, rather
+            // than guessing from whichever project has the newest output.
+            lastOpenedProjectLineageID = project.stableLineageID.uuidString
             durabilityCoordinator.resumeAcceptAllIfNeeded(
                 context: modelContext,
                 onProjectRefreshed: refreshProjectReferenceHandler
@@ -476,76 +476,243 @@ struct ProjectDetailView: View {
     // MARK: - Mode Picker / First-run hint
 
     private var modePicker: some View {
-        Picker("Mode", selection: $storyEditorModeRaw) {
-            ForEach(StoryEditorMode.allCases) { mode in
-                // Icons-only display so all 7 tabs fit at iPhone widths
-                // without truncation. VoiceOver reads the tab title via
-                // accessibilityLabel.
-                Image(systemName: mode.icon)
-                    .accessibilityLabel(mode.title)
-                    .tag(mode.rawValue)
-            }
+        HStack(spacing: CathedralTheme.Spacing.xs) {
+            workspaceTab("Story", mode: .story)
+            workspaceTab("Build", mode: .build)
+            workspaceTab("Write", mode: .compile)
+            workspaceTab("Read", mode: .output)
         }
-        .pickerStyle(.segmented)
         .padding(.horizontal, CathedralTheme.Spacing.base)
-        .padding(.vertical, CathedralTheme.Spacing.sm)
-        .background(CathedralTheme.Colors.background)
+        .padding(.top, CathedralTheme.Spacing.xs)
+        .padding(.bottom, CathedralTheme.Spacing.md)
     }
 
-    // MARK: - Novel workflow guidance
+    private func workspaceTab(_ title: String, mode: StoryEditorMode) -> some View {
+        let isSelected = !advancedMode && storyEditorMode == mode
+        return Button {
+            advancedMode = false
+            storyEditorModeRaw = mode.rawValue
+        } label: {
+            Text(title.uppercased())
+                .font(CathedralTheme.Typography.label(10, weight: .bold))
+                .tracking(0.8)
+                .foregroundStyle(isSelected ? CathedralTheme.Colors.background : CathedralTheme.Colors.secondaryText)
+                .frame(maxWidth: .infinity)
+                .frame(height: 40)
+                .background(isSelected ? CathedralTheme.Colors.primaryText : CathedralTheme.Colors.surface)
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+        }
+        .buttonStyle(.plain)
+    }
 
-    private enum NovelWorkflowStage: String, CaseIterable, Identifiable {
-        case define, recipe, shape, outline, write, review, read, export
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .define: return "Define"
-            case .recipe: return "Recipe"
-            case .shape: return "Shape"
-            case .outline: return "Outline"
-            case .write: return "Write"
-            case .review: return "Review"
-            case .read: return "Read"
-            case .export: return "Export"
-            }
+    @ViewBuilder
+    private var storySections: some View {
+        storyStepButton("STORY IDEA", icon: "lightbulb", step: .idea)
+        if expandedStoryStep == .idea {
+            summarySection
+            sparksSection
+            themeQuestionsSection
         }
 
-        var icon: String {
-            switch self {
-            case .define: return "lightbulb"
-            case .recipe: return "list.bullet.rectangle"
-            case .shape: return "point.3.connected.trianglepath.dotted"
-            case .outline: return "list.number"
-            case .write: return "pencil.line"
-            case .review: return "checkmark.circle"
-            case .read: return "book"
-            case .export: return "square.and.arrow.up"
+        storyStepButton("STORY AUDIENCE", icon: "person.crop.circle", step: .audience)
+        if expandedStoryStep == .audience {
+            audienceSection
+        }
+
+        storyStepButton("STORY WORLD", icon: "globe.americas", step: .world)
+        if expandedStoryStep == .world {
+            settingSection
+            motifsSection
+            aftertastesSection
+        }
+
+        storyStepButton("STORY PEOPLE", icon: "person.2", step: .people)
+        if expandedStoryStep == .people {
+            charactersSection
+            relationshipsSection
+        }
+    }
+
+    private func storyStepButton(_ title: String, icon: String, step: StoryStep) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                expandedStoryStep = expandedStoryStep == step ? nil : step
             }
+        } label: {
+            buildStepBlock(icon: icon, title: title, isExpanded: expandedStoryStep == step)
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(
+            top: CathedralTheme.Spacing.md,
+            leading: CathedralTheme.Spacing.base,
+            bottom: CathedralTheme.Spacing.xs,
+            trailing: CathedralTheme.Spacing.base
+        ))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+    }
+
+    @ViewBuilder
+    private var buildSections: some View {
+        buildStepButton("STORY RECIPE", icon: "book.closed", step: .recipe)
+        if expandedBuildStep == .recipe {
+            buildRecipeOptions
+        }
+
+        buildStepButton("STORY SHAPE", icon: "point.topleft.down.curvedto.point.bottomright.up", step: .shape)
+        if expandedBuildStep == .shape {
+            StoryArcRegionView(project: project, modelContext: modelContext)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+        }
+
+        buildStepButton("STORY OUTLINE", icon: "list.number", step: .outline)
+        if expandedBuildStep == .outline {
+            OutlineSectionsRegionView(
+                project: project,
+                modelContext: modelContext,
+                generationLaunch: $pendingOutlineGeneration,
+                isGenerationStarting: $isRunAllStarting,
+                onGenerationCompleted: {
+                    advancedMode = false
+                    storyEditorModeRaw = StoryEditorMode.output.rawValue
+                },
+                onProjectRefreshed: refreshProjectReferenceHandler
+            )
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+        }
+    }
+
+    private func buildStepButton(_ title: String, icon: String, step: BuildStep) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                expandedBuildStep = expandedBuildStep == step ? nil : step
+            }
+        } label: {
+            buildStepBlock(icon: icon, title: title, isExpanded: expandedBuildStep == step)
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(
+            top: CathedralTheme.Spacing.xs,
+            leading: CathedralTheme.Spacing.base,
+            bottom: CathedralTheme.Spacing.xs,
+            trailing: CathedralTheme.Spacing.base
+        ))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+    }
+
+    private var buildRecipeOptions: some View {
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+            Button {
+                showAddPromptPack = true
+            } label: {
+                buildStepBlock(
+                    icon: "plus",
+                    title: project.promptPacks.isEmpty ? "ADD A RECIPE" : "ADD ANOTHER RECIPE",
+                    isExpanded: false
+                )
+            }
+            .buttonStyle(.plain)
+
+            ForEach(project.promptPacks.sorted { $0.name < $1.name }) { pack in
+                RecipeCard(
+                    project: project,
+                    pack: pack,
+                    onEdit: { packToEdit = pack },
+                    onDelete: {
+                        modelContext.delete(pack)
+                        try? modelContext.save()
+                        Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+                    },
+                    showOutputs: false,
+                    isSelected: selectedRecipeID == pack.id,
+                    onSelect: { selectRecipe(pack) }
+                )
+            }
+        }
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .padding(.vertical, CathedralTheme.Spacing.sm)
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+    }
+
+    private func buildStepBlock(icon: String, title: String, isExpanded: Bool) -> some View {
+        HStack(spacing: CathedralTheme.Spacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 24)
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+            Text(title)
+                .font(CathedralTheme.Typography.headline(16, weight: .bold))
+                .tracking(0.5)
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+            Spacer(minLength: CathedralTheme.Spacing.sm)
+            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+        }
+        .padding(.horizontal, CathedralTheme.Spacing.base)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 64)
+        .background(CathedralTheme.Colors.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
+                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+    }
+
+    private var selectedRecipeID: UUID? {
+        _ = recipeSelectionRevision
+        return RecipeSelectionService().resolve(for: project).selectedRecipe?.id
+    }
+
+    private func selectRecipe(_ pack: PromptPack) {
+        RecipeSelectionService().setSelectedRecipe(id: pack.id, for: project)
+        recipeSelectionRevision += 1
+    }
+
+    private var epubExportSection: some View {
+        Section {
+            Button {
+                showKindleExport = true
+            } label: {
+                HStack(spacing: CathedralTheme.Spacing.sm) {
+                    Image(systemName: "book.closed.fill")
+                    Text("EXPORT EPUB")
+                        .tracking(1.2)
+                    Image(systemName: "arrow.up.right")
+                        .imageScale(.small)
+                }
+                .font(CathedralTheme.Typography.label(12, weight: .bold))
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .foregroundStyle(CathedralTheme.Colors.background)
+                .background(CathedralTheme.Colors.primaryText)
+                .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
+            }
+            .buttonStyle(.plain)
+            .listRowBackground(CathedralTheme.Colors.background)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(
+                top: CathedralTheme.Spacing.sm,
+                leading: CathedralTheme.Spacing.base,
+                bottom: CathedralTheme.Spacing.sm,
+                trailing: CathedralTheme.Spacing.base
+            ))
+        } header: {
+            CathedralSectionHeader("Finish")
+                .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
 
     private var outlineSections: [OutlineSection] {
         project.outlines.flatMap(\.sections)
-    }
-
-    private var workflowCompletion: [NovelWorkflowStage: Bool] {
-        let latestIsFinished = latestGeneration.map {
-            $0.status == GenerationStatus.complete.rawValue || $0.wasTruncated
-        } ?? false
-        return [
-            .define: !project.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            .recipe: !project.promptPacks.isEmpty,
-            .shape: !project.storyArcs.isEmpty,
-            .outline: !outlineSections.isEmpty,
-            .write: !project.generations.isEmpty,
-            .review: latestIsFinished,
-            // Reading is completed when the latest output is opened from this
-            // workflow. Export remains the final explicit destination.
-            .read: readLatestOutputID == latestGeneration?.id && latestIsFinished,
-            .export: false
-        ]
     }
 
     @MainActor
@@ -582,145 +749,6 @@ struct ProjectDetailView: View {
         storyEditorModeRaw = StoryEditorMode.output.rawValue
     }
 
-    private var nextWorkflowStage: NovelWorkflowStage {
-        for stage in NovelWorkflowStage.allCases {
-            if workflowCompletion[stage] == false {
-                return stage
-            }
-        }
-        return .export
-    }
-
-    private var workflowCompletedCount: Int {
-        workflowCompletion.values.filter { $0 }.count
-    }
-
-    private var novelWorkflowSection: some View {
-        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-            CathedralSectionHeader("Your path")
-            CathedralCard {
-                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
-                    if let acceptRun = projectAcceptRun {
-                        AcceptRunBanner(run: acceptRun)
-                    }
-                    if isRunAllStarting {
-                        GenerationStartingBanner()
-                    } else if let status = projectRunStatus {
-                        ActiveRunBanner(
-                            status: status,
-                            pollingError: durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID
-                                ? durabilityCoordinator.activeRunPollingError
-                                : nil,
-                            onResume: { await self.resumeRun(status) }
-                        )
-                    }
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
-                            Text("Novel Workspace")
-                                .font(CathedralTheme.Typography.body(17, weight: .semibold))
-                                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            Text("An optional path through your existing tools")
-                                .font(CathedralTheme.Typography.caption())
-                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        }
-                        Spacer()
-                        Text("\(workflowCompletedCount) milestones")
-                            .font(CathedralTheme.Typography.caption(12, weight: .semibold))
-                            .foregroundStyle(CathedralTheme.Colors.accent)
-                    }
-
-                    HStack(spacing: CathedralTheme.Spacing.xs) {
-                        ForEach(NovelWorkflowStage.allCases) { stage in
-                            VStack(spacing: 4) {
-                                Image(systemName: stage.icon)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(workflowCompletion[stage] == true
-                                        ? CathedralTheme.Colors.accent
-                                        : CathedralTheme.Colors.tertiaryText)
-                                Text(stage.title)
-                                    .font(CathedralTheme.Typography.label(9, weight: .medium))
-                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.7)
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                    }
-
-                    Button {
-                        performWorkflowAction(nextWorkflowStage)
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Next useful step")
-                                    .font(CathedralTheme.Typography.label(10, weight: .semibold))
-                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                                Text(workflowActionTitle(nextWorkflowStage))
-                                    .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                            }
-                            Spacer()
-                            Image(systemName: "arrow.right.circle.fill")
-                                .font(.system(size: 22, weight: .semibold))
-                                .foregroundStyle(CathedralTheme.Colors.accent)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Next useful step: \(workflowActionTitle(nextWorkflowStage))")
-                }
-            }
-        }
-        .padding(.horizontal, CathedralTheme.Spacing.base)
-        .padding(.bottom, CathedralTheme.Spacing.sm)
-    }
-
-    private func workflowActionTitle(_ stage: NovelWorkflowStage) -> String {
-        switch stage {
-        case .define: return "Define your premise"
-        case .recipe: return "Create or refine your recipe"
-        case .shape: return "Shape the story arc"
-        case .outline: return "Add an outline section"
-        case .write: return "Write your first section"
-        case .review: return "Review your latest output"
-        case .read: return "Read your latest output"
-        case .export: return "Export your novel"
-        }
-    }
-
-    private func performWorkflowAction(_ stage: NovelWorkflowStage) {
-        switch stage {
-        case .define:
-            storyEditorModeRaw = StoryEditorMode.story.rawValue
-        case .recipe:
-            if project.promptPacks.isEmpty {
-                showAddPromptPack = true
-            } else {
-                storyEditorModeRaw = StoryEditorMode.recipe.rawValue
-            }
-        case .shape, .outline:
-            storyEditorModeRaw = StoryEditorMode.outline.rawValue
-        case .write:
-            storyEditorModeRaw = StoryEditorMode.compile.rawValue
-        case .review:
-            storyEditorModeRaw = StoryEditorMode.output.rawValue
-        case .read:
-            if let latest = latestGeneration {
-                generationToView = latest
-            } else {
-                storyEditorModeRaw = StoryEditorMode.output.rawValue
-            }
-        case .export:
-            showKindleExport = true
-        }
-    }
-
-    private var projectAcceptRun: DataDurabilityCoordinator.AcceptRunMetadata? {
-        guard let run = durabilityCoordinator.activeAcceptRun,
-              run.isActive,
-              run.projectLineageID == project.stableLineageID else { return nil }
-        return run
-    }
-
     private var projectRunStatus: RunOutlineStatus? {
         guard durabilityCoordinator.activeRunProjectLineageID == project.stableLineageID else {
             return durabilityCoordinator.runStatus(for: project.stableLineageID)
@@ -738,7 +766,7 @@ struct ProjectDetailView: View {
                     ? durabilityCoordinator.activeRunPollingError
                     : nil,
                 onResume: { await self.resumeRun(status) },
-                onNavigate: { storyEditorModeRaw = StoryEditorMode.outline.rawValue }
+                onNavigate: { storyEditorModeRaw = StoryEditorMode.build.rawValue }
             )
             .accessibilityLabel("View Run All status in Outline")
             .listRowBackground(CathedralTheme.Colors.background)
@@ -825,11 +853,18 @@ struct ProjectDetailView: View {
 
     private var summarySection: some View {
         Section {
-            CathedralCard {
-                TextField("Project summary…", text: $project.summary, axis: .vertical)
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                    .lineLimit(3...6)
+            CathedralObjectSurface {
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                    Text("STORY PREMISE")
+                        .font(CathedralTheme.Typography.label(10, weight: .bold))
+                        .tracking(1.8)
+                        .foregroundStyle(CathedralTheme.Colors.accent)
+
+                    TextField("What is this story about?", text: $project.summary, axis: .vertical)
+                        .font(CathedralTheme.Typography.headline(18, weight: .semibold))
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                        .lineLimit(3...6)
+                }
             }
             .listRowBackground(CathedralTheme.Colors.background)
             .listRowSeparator(.hidden)
@@ -864,44 +899,42 @@ struct ProjectDetailView: View {
 
     private var audienceSection: some View {
         Section {
-            CathedralCard {
-                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-                    Picker("Reading Level", selection: $project.readingLevel) {
-                        ForEach(Self.readingLevels, id: \.value) { item in
-                            Text(item.label).tag(item.value)
+            CathedralObjectSurface {
+                VStack(spacing: 0) {
+                    audiencePickerRow("Reading level", value: readingLevelDisplayName) {
+                        Picker("Reading Level", selection: $project.readingLevel) {
+                            ForEach(Self.readingLevels, id: \.value) { item in
+                                Text(item.label).tag(item.value)
+                            }
                         }
                     }
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
 
-                    Divider()
-
-                    Picker("Content Rating", selection: $project.contentRating) {
-                        ForEach(Self.contentRatings, id: \.value) { item in
-                            let age = StoryContentAgeRating.normalize(item.value)
-                            Text(item.label).tag(item.value).disabled(!StoryIntimacyRating.normalize(project.intimacyRating).isCompatible(with: age))
+                    audiencePickerRow("Content rating", value: StoryContentAgeRating.normalize(project.contentRating).displayName) {
+                        Picker("Content Rating", selection: $project.contentRating) {
+                            ForEach(Self.contentRatings, id: \.value) { item in
+                                let age = StoryContentAgeRating.normalize(item.value)
+                                Text(item.label).tag(item.value).disabled(!StoryIntimacyRating.normalize(project.intimacyRating).isCompatible(with: age))
+                            }
                         }
                     }
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
 
-                    Divider()
-
-                    Picker("Intimacy Level", selection: $project.intimacyRating) {
-                        ForEach(Self.intimacyRatings, id: \.value) { item in
-                            let intimacy = StoryIntimacyRating.normalize(item.value)
-                            Text(item.label).tag(item.value).disabled(!intimacy.isCompatible(with: StoryContentAgeRating.normalize(project.contentRating)))
+                    audiencePickerRow("Intimacy level", value: StoryIntimacyRating.normalize(project.intimacyRating).displayName) {
+                        Picker("Intimacy Level", selection: $project.intimacyRating) {
+                            ForEach(Self.intimacyRatings, id: \.value) { item in
+                                let intimacy = StoryIntimacyRating.normalize(item.value)
+                                Text(item.label).tag(item.value).disabled(!intimacy.isCompatible(with: StoryContentAgeRating.normalize(project.contentRating)))
+                            }
                         }
                     }
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
 
-                    Divider()
-
-                    TextField("Audience notes…", text: $project.audienceNotes, axis: .vertical)
-                        .font(CathedralTheme.Typography.body())
-                        .foregroundStyle(CathedralTheme.Colors.primaryText)
-                        .lineLimit(2...5)
+                    if !project.audienceNotes.isEmpty {
+                        Divider()
+                            .padding(.vertical, CathedralTheme.Spacing.sm)
+                        TextField("Audience notes…", text: $project.audienceNotes, axis: .vertical)
+                            .font(CathedralTheme.Typography.body())
+                            .foregroundStyle(CathedralTheme.Colors.primaryText)
+                            .lineLimit(2...5)
+                    }
                 }
             }
             .listRowBackground(CathedralTheme.Colors.background)
@@ -922,6 +955,31 @@ struct ProjectDetailView: View {
         }
     }
 
+    private func audiencePickerRow<PickerContent: View>(
+        _ label: String,
+        value: String,
+        @ViewBuilder picker: () -> PickerContent
+    ) -> some View {
+        HStack(spacing: CathedralTheme.Spacing.sm) {
+            Text(label)
+                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
+
+            Spacer(minLength: CathedralTheme.Spacing.sm)
+
+            picker()
+                .labelsHidden()
+                .font(CathedralTheme.Typography.body(15, weight: .semibold))
+                .tint(CathedralTheme.Colors.accent)
+                .accessibilityValue(Text(value))
+        }
+        .frame(minHeight: 42)
+    }
+
+    private var readingLevelDisplayName: String {
+        Self.readingLevels.first(where: { $0.value == project.readingLevel })?.label ?? "Not set"
+    }
+
     // MARK: Characters Section
 
     private var charactersSection: some View {
@@ -930,9 +988,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "Who's in your story?",
-                    description: "Cast your characters first — every generation runs through them.",
-                    actionLabel: "Add first character",
-                    action: { showAddCharacter = true }
+                    description: "Cast your characters first — every generation runs through them."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
@@ -972,12 +1028,13 @@ struct ProjectDetailView: View {
             } label: {
                 let s = project.projectSetting
                 CathedralNavRowLabel(
-                    title: "Edit Setting",
-                    subtitle: s?.summary.nilIfEmpty ?? (s == nil ? "No setting defined" : nil)
+                    title: "World & Setting",
+                    subtitle: s?.summary.nilIfEmpty ?? (s == nil ? "Define where this story lives" : nil)
                 )
             }
             .listRowBackground(CathedralTheme.Colors.background)
-            .listRowSeparatorTint(CathedralTheme.Colors.separator)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets())
         } header: {
             CathedralSectionHeader("Setting")
                 .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
@@ -992,9 +1049,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "What's the inciting moment?",
-                    description: "Sparks seed scenes. Add one to give the compiler somewhere to start.",
-                    actionLabel: "Add first spark",
-                    action: { showAddSpark = true }
+                    description: "Sparks seed scenes. Add one to give the compiler somewhere to start."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
@@ -1033,9 +1088,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "How should it feel at the end?",
-                    description: "Aftertastes shape what the reader carries away.",
-                    actionLabel: "Add first aftertaste",
-                    action: { showAddAftertaste = true }
+                    description: "Aftertastes shape what the reader carries away."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
@@ -1070,12 +1123,24 @@ struct ProjectDetailView: View {
 
     private var recipesSection: some View {
         Section {
+            Text("A recipe is the story ingredients: the people, ideas, and instructions StoryDonkey should use.")
+                .font(CathedralTheme.Typography.body(13))
+                .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .listRowBackground(CathedralTheme.Colors.background)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(
+                    top: CathedralTheme.Spacing.xs,
+                    leading: CathedralTheme.Spacing.base,
+                    bottom: CathedralTheme.Spacing.xs,
+                    trailing: CathedralTheme.Spacing.base
+                ))
             let sorted = (project.promptPacks).sorted { $0.name < $1.name }
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "Recipes turn your story into something the model can write from.",
                     description: "Each one bundles characters, sparks, and themes into a generation-ready set. Create your first to get started.",
-                    actionLabel: "Create first recipe",
+                    actionLabel: "Create your recipe",
                     action: { showAddPromptPack = true }
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
@@ -1104,7 +1169,7 @@ struct ProjectDetailView: View {
                 ))
             }
         } header: {
-            CathedralSectionHeader("Recipes") { showAddPromptPack = true }
+            CathedralSectionHeader("1  CHOOSE A RECIPE") { showAddPromptPack = true }
                 .listRowInsets(EdgeInsets(top: 0, leading: CathedralTheme.Spacing.base, bottom: 0, trailing: CathedralTheme.Spacing.base))
         }
     }
@@ -1115,9 +1180,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "Who connects to whom?",
-                    description: "Relationships drive dialogue and subtext in generated scenes.",
-                    actionLabel: "Add first relationship",
-                    action: { showAddRelationship = true }
+                    description: "Relationships drive dialogue and subtext in generated scenes."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
@@ -1154,9 +1217,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "What is the story arguing?",
-                    description: "Theme questions give the compiler something to interrogate.",
-                    actionLabel: "Add first theme question",
-                    action: { showAddThemeQuestion = true }
+                    description: "Theme questions give the compiler something to interrogate."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
@@ -1193,9 +1254,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "What images recur?",
-                    description: "Motifs give your story texture — anchors the reader recognizes.",
-                    actionLabel: "Add first motif",
-                    action: { showAddMotif = true }
+                    description: "Motifs give your story texture — anchors the reader recognizes."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
@@ -1273,7 +1332,7 @@ struct ProjectDetailView: View {
             }
             ForEach(filteredGenerations) { gen in
                 CathedralItemRow(
-                    title: gen.title,
+                    title: generationSectionTitle(gen) ?? gen.title,
                     subtitle: generationSubtitle(gen)
                 ) { generationToView = gen }
                 .listRowBackground(CathedralTheme.Colors.background)
@@ -1341,15 +1400,21 @@ struct ProjectDetailView: View {
         var parts: [String] = []
         let status = GenerationStatus(rawValue: gen.status)?.displayName ?? gen.status
         parts.append(status)
-        if !gen.sourcePromptPackName.isEmpty {
-            parts.append(gen.sourcePromptPackName)
-        }
         parts.append(gen.createdAt.formatted(date: .abbreviated, time: .shortened))
         let vis = OutputVisibility(rawValue: gen.visibility) ?? .private
         if vis != .private {
             parts.append(vis.displayName)
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func generationSectionTitle(_ gen: GenerationOutput) -> String? {
+        guard let sectionID = gen.outlineSectionID else { return nil }
+        return project.outlines
+            .flatMap(\.sections)
+            .first(where: { $0.id == sectionID })?
+            .title
+            .nilIfEmpty
     }
 
     // MARK: - Compile tab CTA + generation helpers
@@ -1547,7 +1612,7 @@ struct ProjectDetailView: View {
                     .font(CathedralTheme.Typography.caption())
                     .foregroundStyle(CathedralTheme.Colors.secondaryText)
                 CathedralPrimaryButton("Open Outline", systemImage: "list.number") {
-                    storyEditorModeRaw = StoryEditorMode.outline.rawValue
+                    storyEditorModeRaw = StoryEditorMode.build.rawValue
                 }
             } else {
                 if let resumableRun = projectRunStatus, resumableRun.isResumable {
@@ -1558,7 +1623,8 @@ struct ProjectDetailView: View {
                             Image(systemName: "arrow.uturn.backward.circle.fill")
                                 .font(.system(size: 16, weight: .semibold))
                                 .frame(width: 28, height: 28)
-                                .background(CathedralTheme.Colors.accent.opacity(0.16))
+                                .foregroundStyle(CathedralTheme.Colors.background)
+                                .background(CathedralTheme.Colors.primaryText)
                                 .clipShape(Circle())
 
                             VStack(alignment: .leading, spacing: 3) {
@@ -1579,10 +1645,10 @@ struct ProjectDetailView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(CathedralTheme.Spacing.md)
-                        .background(CathedralTheme.Colors.accent.opacity(0.10))
+                        .background(CathedralTheme.Colors.surface)
                         .overlay(
                             RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                                .stroke(CathedralTheme.Colors.accent.opacity(0.25), lineWidth: 1)
+                                .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
                         )
                         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
                     }
@@ -1600,7 +1666,8 @@ struct ProjectDetailView: View {
                             Image(systemName: "play.fill")
                                 .font(.system(size: 16, weight: .semibold))
                                 .frame(width: 28, height: 28)
-                                .background(CathedralTheme.Colors.accent.opacity(0.16))
+                                .foregroundStyle(CathedralTheme.Colors.background)
+                                .background(CathedralTheme.Colors.primaryText)
                                 .clipShape(Circle())
 
                             VStack(alignment: .leading, spacing: 3) {
@@ -1621,10 +1688,10 @@ struct ProjectDetailView: View {
                         .foregroundStyle(CathedralTheme.Colors.primaryText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(CathedralTheme.Spacing.md)
-                        .background(CathedralTheme.Colors.accent.opacity(0.10))
+                        .background(CathedralTheme.Colors.surface)
                         .overlay(
                             RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                                .stroke(CathedralTheme.Colors.accent.opacity(0.25), lineWidth: 1)
+                                .stroke(CathedralTheme.Colors.borderSubtle, lineWidth: 1)
                         )
                         .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
                     }
@@ -1640,42 +1707,50 @@ struct ProjectDetailView: View {
                     .padding(.top, CathedralTheme.Spacing.xs)
 
                 ForEach(outlineSections.sorted(by: { $0.position < $1.position })) { section in
-                    VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(sectionLabel(section))
-                                .font(CathedralTheme.Typography.body(15, weight: .semibold))
-                                .foregroundStyle(CathedralTheme.Colors.primaryText)
-                                .lineLimit(2)
-                            Text(sectionSettingsLabel(section))
-                                .font(CathedralTheme.Typography.caption())
-                                .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                        HStack(spacing: CathedralTheme.Spacing.sm) {
-                            Button {
-                                launchOutlineGeneration(sectionID: section.id, scope: "single")
-                            } label: {
-                                Label("Write", systemImage: "play.fill")
-                                    .font(CathedralTheme.Typography.caption(12, weight: .semibold))
-                                    .frame(maxWidth: .infinity)
+                    CathedralObjectSurface {
+                        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.sm) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(sectionLabel(section))
+                                    .font(CathedralTheme.Typography.headline(16, weight: .semibold))
+                                    .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                    .lineLimit(2)
+                                Text(sectionSettingsLabel(section))
+                                    .font(CathedralTheme.Typography.caption())
+                                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
                             }
-                            .buttonStyle(.borderedProminent)
-                            .accessibilityLabel("Write \(sectionLabel(section))")
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                            Button {
-                                storyEditorModeRaw = StoryEditorMode.outline.rawValue
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                                    .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                            HStack(spacing: CathedralTheme.Spacing.sm) {
+                                Button {
+                                    launchOutlineGeneration(sectionID: section.id, scope: "single")
+                                } label: {
+                                    Label("Write", systemImage: "play.fill")
+                                        .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 40)
+                                        .foregroundStyle(CathedralTheme.Colors.background)
+                                        .background(CathedralTheme.Colors.primaryText)
+                                        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Write \(sectionLabel(section))")
+
+                                Button {
+                                    storyEditorModeRaw = StoryEditorMode.build.rawValue
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                        .font(CathedralTheme.Typography.caption(12, weight: .semibold))
+                                        .frame(height: 40)
+                                        .padding(.horizontal, CathedralTheme.Spacing.md)
+                                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                                        .background(CathedralTheme.Colors.surfaceRaised)
+                                        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Edit \(sectionLabel(section)) in Outline")
                             }
-                            .buttonStyle(.bordered)
-                            .accessibilityLabel("Edit \(sectionLabel(section)) in Outline")
                         }
                     }
-                    .padding(CathedralTheme.Spacing.sm)
-                    .background(CathedralTheme.Colors.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.sm))
                 }
             }
         }
@@ -1805,48 +1880,38 @@ struct ProjectDetailView: View {
     }
 
     private func successBanner(for output: GenerationOutput) -> some View {
-        HStack(alignment: .top, spacing: CathedralTheme.Spacing.sm) {
-            Image(systemName: output.wasTruncated
-                ? "exclamationmark.triangle"
-                : (output.syncStatus == SyncStatus.failed.rawValue ? "exclamationmark.triangle" : "checkmark.circle"))
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
-                    ? CathedralTheme.Colors.destructive
-                    : CathedralTheme.Colors.accent)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(output.wasTruncated
-                    ? "Generation saved as incomplete — \(output.title)"
-                    : "Generation complete — \(output.title)")
-                    .font(CathedralTheme.Typography.caption())
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(2)
-                if output.wasTruncated {
-                    Text("This output hit the model length limit and may be incomplete.")
+        CathedralObjectSurface {
+            HStack(alignment: .top, spacing: CathedralTheme.Spacing.md) {
+                Image(systemName: output.wasTruncated
+                    ? "exclamationmark.triangle"
+                    : (output.syncStatus == SyncStatus.failed.rawValue ? "exclamationmark.triangle" : "checkmark"))
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
+                        ? CathedralTheme.Colors.destructive
+                        : CathedralTheme.Colors.accent)
+                    .frame(width: 24, height: 24)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(output.wasTruncated ? "Saved incomplete" : "Generation complete")
+                        .font(CathedralTheme.Typography.headline(15, weight: .semibold))
+                        .foregroundStyle(CathedralTheme.Colors.primaryText)
+                    Text(output.title)
                         .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                if output.syncStatus == SyncStatus.failed.rawValue {
-                    Text("Output Sync: Failed\(output.syncErrorMessage.flatMap { $0.nilIfEmpty }.map { " — \($0)" } ?? "")")
-                        .font(CathedralTheme.Typography.caption())
-                        .foregroundStyle(CathedralTheme.Colors.destructive)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .foregroundStyle(CathedralTheme.Colors.secondaryText)
+                        .lineLimit(2)
+                    if output.wasTruncated {
+                        Text("This output hit the model length limit and may be incomplete.")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                    }
+                    if output.syncStatus == SyncStatus.failed.rawValue {
+                        Text("Output Sync: Failed\(output.syncErrorMessage.flatMap { $0.nilIfEmpty }.map { " — \($0)" } ?? "")")
+                            .font(CathedralTheme.Typography.caption())
+                            .foregroundStyle(CathedralTheme.Colors.destructive)
+                    }
                 }
             }
         }
-        .padding(CathedralTheme.Spacing.sm)
-        .background(CathedralTheme.Colors.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                .stroke(
-                    (output.wasTruncated || output.syncStatus == SyncStatus.failed.rawValue
-                        ? CathedralTheme.Colors.destructive
-                        : CathedralTheme.Colors.accent).opacity(0.4),
-                    lineWidth: 1
-                )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
     }
 
     private func diagnosticsBlock(_ diagnostics: String) -> some View {

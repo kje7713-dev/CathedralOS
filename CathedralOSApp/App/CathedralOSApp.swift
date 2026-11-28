@@ -49,28 +49,43 @@ private struct AppRootView: View {
 
     @State private var hasRunLaunchTasks = false
     @State private var syncSplashTimedOut = false
+    @State private var selectedTab = 0
+    @State private var projectCreationIntent: ProjectCreationIntent?
 
     var body: some View {
         ZStack {
-            TabView {
-                HomeView()
+            TabView(selection: $selectedTab) {
+                HomeView(
+                    onWriteQuickStory: {
+                        projectCreationIntent = .quickStory
+                        selectedTab = 1
+                    },
+                    onBuildNovel: {
+                        projectCreationIntent = .novel
+                        selectedTab = 1
+                    }
+                )
                     .tabItem {
                         Label("Home", systemImage: "house")
                     }
-                ProjectsListView()
+                    .tag(0)
+                ProjectsListView(creationIntent: $projectCreationIntent)
                     .tabItem {
-                        Label("Projects", systemImage: "books.vertical")
+                        Label("My Stories", systemImage: "books.vertical")
                     }
+                    .tag(1)
                 if PublicSharingServiceConfiguration.isEnabled {
                     SharedOutputsView()
                         .tabItem {
                             Label("Shared", systemImage: "globe")
                         }
+                        .tag(2)
                 }
                 AccountView(recoveryContext: recoveryContext)
                     .tabItem {
                         Label("Account", systemImage: "person.circle")
                     }
+                    .tag(PublicSharingServiceConfiguration.isEnabled ? 3 : 2)
             }
             .tint(CathedralTheme.Colors.accent)
 

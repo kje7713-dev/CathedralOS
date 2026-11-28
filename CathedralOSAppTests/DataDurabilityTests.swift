@@ -164,13 +164,16 @@ private final class SpyOutputSyncService: GenerationOutputSyncServiceProtocol {
         self.eventLog = eventLog
     }
 
+    @MainActor
     func pushOutput(_ output: GenerationOutput) async throws {
         eventLog?.events.append("output.push")
     }
+    @MainActor
     func pullOutputs(into context: ModelContext) async throws {
         pullCalled = true
         eventLog?.events.append("output.pull")
     }
+    @MainActor
     func syncAll(in context: ModelContext) async throws {
         syncAllCalled = true
         eventLog?.events.append("output.sync")

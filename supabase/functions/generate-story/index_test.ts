@@ -5171,6 +5171,16 @@ Deno.test("buildPrompt: contains ## Literary Execution block with the 14 craft b
   );
 });
 
+Deno.test("buildPrompt: preserves character defects and avoids mandatory therapeutic resolution", () => {
+  const { craft } = buildPrompt(MINIMAL_PROMPT_ARGS);
+  assertStringIncludes(craft, "Never silently rewrite an immoral character into a considerate");
+  assertStringIncludes(craft, "Dialogue may be manipulative, dishonest, cruel, irrational");
+  assertStringIncludes(craft, "Do not default to the vocabulary or conversational patterns of psychotherapy");
+  assertStringIncludes(craft, "Consequences do not require characters to acknowledge, process, explain, or learn");
+  assertStringIncludes(craft, "Intimacy is explicitly authorized as character craft, not a guarantee of health");
+  assertStringIncludes(craft, "Vulnerability, hesitation, trust, humor, tenderness, cruelty");
+});
+
 Deno.test("buildPrompt: Section Contract Authority contains Container co-authority rule (Kevin 10:12 EDT wording)", () => {
   const { craft } = buildPrompt({
     ...MINIMAL_PROMPT_ARGS,

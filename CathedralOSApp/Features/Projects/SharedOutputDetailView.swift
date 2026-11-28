@@ -106,7 +106,11 @@ struct SharedOutputDetailView: View {
         }
         .sheet(isPresented: $showEPUBReader) {
             if let readerURL, let detail {
-                KindleExportReaderView(fileURL: readerURL, bookTitle: detail.shareTitle)
+                KindleExportReaderView(
+                    fileURL: readerURL,
+                    bookTitle: detail.shareTitle,
+                    publicationKey: "shared:\(detail.sharedOutputID)"
+                )
             }
         }
         .alert("Could Not Open Book", isPresented: Binding(

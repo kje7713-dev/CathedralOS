@@ -28,6 +28,23 @@ final class GenerationOutputTests: XCTestCase {
         XCTAssertEqual(ActiveRunBanner.completionDismissDelayNanoseconds, 8_000_000_000)
     }
 
+    @MainActor
+    func testCompletedRunDismissalPersistsAcrossCoordinatorRecreation() {
+        let suiteName = "GenerationOutputTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let coordinator = DataDurabilityCoordinator(defaults: defaults)
+        XCTAssertFalse(coordinator.isCompletedRunDismissed("run-1"))
+
+        coordinator.dismissCompletedRun("run-1")
+
+        XCTAssertTrue(coordinator.isCompletedRunDismissed("run-1"))
+        let relaunched = DataDurabilityCoordinator(defaults: defaults)
+        XCTAssertTrue(relaunched.isCompletedRunDismissed("run-1"))
+        XCTAssertFalse(relaunched.isCompletedRunDismissed("run-2"))
+    }
+
     // MARK: Model creation
 
     func testDefaultFieldsOnInit() {

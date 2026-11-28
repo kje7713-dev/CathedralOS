@@ -53,6 +53,7 @@ private struct EPUBReaderPresentation: Identifiable {
     let id = UUID()
     let fileURL: URL
     let bookTitle: String
+    let publicationKey: String
 }
 
 // MARK: - JobState
@@ -293,7 +294,8 @@ struct KindleExportView: View {
             .sheet(item: $readerPresentation) { presentation in
                 KindleExportReaderView(
                     fileURL: presentation.fileURL,
-                    bookTitle: presentation.bookTitle
+                    bookTitle: presentation.bookTitle,
+                    publicationKey: presentation.publicationKey
                 )
             }
             .sheet(isPresented: $showShare) {
@@ -814,7 +816,8 @@ struct KindleExportView: View {
             )
             readerPresentation = EPUBReaderPresentation(
                 fileURL: url,
-                bookTitle: title ?? bookTitle
+                bookTitle: title ?? bookTitle,
+                publicationKey: "export:\(metadataId)"
             )
         } catch let error as KindleExportError {
             jobState = .failure(error)

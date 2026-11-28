@@ -244,6 +244,24 @@ Deno.test("provider-facing prompts preserve the complete canonical recipe exactl
   assertEquals(semanticVerificationInput([], request.arcTemplate, recipe).recipe, recipe);
 });
 
+Deno.test("creative counterbias is shared across enrichment, causal planning, and outline prompts", () => {
+  const enrichment = buildEnrichmentPrompt(sparseRequest as any).system;
+  const allocation = buildAllocationPrompt(sparseRequest as any).system;
+  const outline = buildPrompt(sparseRequest as any, new Map()).system;
+  const counterbias = "Do not treat fiction as moral education, psychological rehabilitation, social improvement";
+
+  for (const prompt of [enrichment, allocation, outline]) {
+    assertStringIncludes(prompt, counterbias);
+    assertStringIncludes(prompt, "Preserve every authored gender, orientation, identity, relationship, and pronoun");
+    assertStringIncludes(prompt, "more dangerous, selfish, destructive");
+    assertStringIncludes(prompt, "Preserve any explicitly authored redemption");
+  }
+  assertStringIncludes(enrichment, "Do not use a moral-corrective character");
+  assertStringIncludes(allocation, "destructive relationships more consequential");
+  assertStringIncludes(outline, "therapeutic conversations, accountability processing");
+  assertEquals(enrichment.includes("Do not preselect ANY moral trajectory"), false);
+});
+
 Deno.test("recipe authority governs enrichment, allocation, outline, and expansion prompts", () => {
   const request: any = {
     ...sparseRequest,
@@ -4458,9 +4476,9 @@ Deno.test("enrichment prompt favors audacity, adult intensity, and memorable exp
   assertStringIncludes(prompt, "wild, eccentric, larger-than-life supporting characters");
   assertStringIncludes(prompt, "spectacular mistakes, escalating disasters, reckless decisions");
   assertStringIncludes(prompt, "addictions, appetites, obsessions, moral corruption");
-  assertStringIncludes(prompt, "Do not assume a morally compromised protagonist must become responsible, descend further into vice");
-  assertStringIncludes(prompt, "Honor any moral or character trajectory explicitly authored");
-  assertStringIncludes(prompt, "Never impose a generic moral lesson, institutional reform");
+  assertStringIncludes(prompt, "When multiple options fit the recipe and the author leaves the trajectory open");
+  assertStringIncludes(prompt, "Preserve any explicitly authored redemption or positive outcome");
+  assertStringIncludes(prompt, "do not manufacture punishment, remorse, justice, or rehabilitation");
   assertStringIncludes(prompt, "Do not unnecessarily sanitize or dilute authored adult intensity");
   assertStringIncludes(prompt, "subject to applicable content constraints");
   assertStringIncludes(prompt, "## Invent distinctive experiences");

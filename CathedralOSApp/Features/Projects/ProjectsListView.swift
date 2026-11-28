@@ -1,8 +1,14 @@
 import SwiftUI
 import SwiftData
 
+enum ProjectCreationIntent: Equatable {
+    case quickStory
+    case novel
+}
+
 struct ProjectsListView: View {
     @Environment(\.modelContext) private var modelContext
+    @Binding private var creationIntent: ProjectCreationIntent?
     @Query(sort: \StoryProject.name) private var projects: [StoryProject]
 
     @State private var navigationPath = NavigationPath()
@@ -22,6 +28,10 @@ struct ProjectsListView: View {
     @State private var deleteErrorMessage: String?
     private let projectDeletionService: any ProjectDeletionServiceProtocol = ProjectDeletionService.shared
 
+    init(creationIntent: Binding<ProjectCreationIntent?> = .constant(nil)) {
+        self._creationIntent = creationIntent
+    }
+
     private enum ProjectCreationRoute: Identifiable {
         case choices
         case name
@@ -39,28 +49,19 @@ struct ProjectsListView: View {
     // MARK: - Top-of-list summary
 
     private var welcomeSummary: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .center, spacing: CathedralTheme.Spacing.xl) {
             Image("StoryDonkeyWordmark")
                 .resizable()
                 .scaledToFit()
-                .frame(maxWidth: .infinity)
-            Text("Projects provide organization for your ideas. Click the plus sign in the top right to start a new project.")
-                .font(CathedralTheme.Typography.body(15))
+                .frame(maxWidth: 340)
+            Text("YOUR STORIES.")
+                .font(CathedralTheme.Typography.display(34, weight: .black))
+                .tracking(-0.5)
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, CathedralTheme.Spacing.sm)
+        .padding(.vertical, CathedralTheme.Spacing.xl)
         .padding(.horizontal, CathedralTheme.Spacing.base)
-        .background(CathedralTheme.Colors.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: CathedralTheme.Radius.md)
-                .stroke(CathedralTheme.Colors.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.md))
-        .padding(.bottom, CathedralTheme.Spacing.sm)
     }
 
     // MARK: - Dedupe
@@ -72,29 +73,33 @@ struct ProjectsListView: View {
         return projects.filter { seen.insert($0.id).inserted }
     }
 
+    private var orderedProjects: [StoryProject] {
+        dedupedProjects.sorted {
+            let leftActivity = activityDate(for: $0)
+            let rightActivity = activityDate(for: $1)
+            if leftActivity != rightActivity { return leftActivity > rightActivity }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            List {
-                Section {
+            ScrollView {
+                VStack(alignment: .leading, spacing: CathedralTheme.Spacing.lg) {
                     welcomeSummary
-                }
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
+                    newStoryButton
 
-                if dedupedProjects.isEmpty {
-                    emptyState
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Color.clear)
-                } else {
-                    projectList
+                    if orderedProjects.isEmpty {
+                        emptyState
+                    } else {
+                        projectList
+                    }
                 }
+                .padding(.horizontal, CathedralTheme.Spacing.base)
+                .padding(.top, CathedralTheme.Spacing.xl)
+                .padding(.bottom, CathedralTheme.Spacing.xxl)
             }
-            .listStyle(.insetGrouped)
-            .contentMargins(.top, 0, for: .scrollContent)
-            .listSectionSpacing(0)
-            .scrollContentBackground(.hidden)
             .background(CathedralTheme.Colors.background.ignoresSafeArea())
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: CathedralTheme.Spacing.sm) {
@@ -135,6 +140,11 @@ struct ProjectsListView: View {
             }
         }
         .tint(CathedralTheme.Colors.accent)
+        .onChange(of: creationIntent) { _, intent in
+            guard let intent else { return }
+            launchCreation(for: intent)
+            creationIntent = nil
+        }
         .sheet(isPresented: $showImportProject, onDismiss: {
             if let project = pendingNavigationProject {
                 navigationPath.append(project)
@@ -214,29 +224,19 @@ struct ProjectsListView: View {
         }
     }
 
+    private var newStoryButton: some View {
+        CathedralPrimaryButton("New Story", systemImage: "plus") {
+            projectCreationRoute = .choices
+        }
+    }
+
     // MARK: Empty State
 
     private var emptyState: some View {
-        VStack(spacing: CathedralTheme.Spacing.xl) {
-            Spacer()
-            Image(systemName: "books.vertical")
-                .font(.system(size: CathedralTheme.Icons.emptyStateGlyph, weight: .ultraLight))
-                .foregroundStyle(CathedralTheme.Colors.tertiaryText)
-
-            VStack(spacing: CathedralTheme.Spacing.xs) {
-                Text("No Projects")
-                    .font(CathedralTheme.Typography.headline(18))
-                    .foregroundStyle(CathedralTheme.Colors.primaryText)
-                Text("Create a project to begin assembling your story.")
-                    .font(CathedralTheme.Typography.body())
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .multilineTextAlignment(.center)
-            }
-
-            CathedralPrimaryButton("New Project", systemImage: "plus") {
-                projectCreationRoute = .choices
-            }
-            .padding(.horizontal, CathedralTheme.Spacing.xxl)
+        VStack(alignment: .leading, spacing: CathedralTheme.Spacing.md) {
+            Text("NO STORIES YET.")
+                .font(CathedralTheme.Typography.display(24, weight: .black))
+                .foregroundStyle(CathedralTheme.Colors.primaryText)
 
             if hasLocalBackups {
                 Button {
@@ -257,73 +257,59 @@ struct ProjectsListView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(CathedralTheme.Colors.accent)
-                .padding(.horizontal, CathedralTheme.Spacing.xxl)
             }
-            Spacer()
         }
-        .padding(CathedralTheme.Spacing.xl)
+        .padding(.vertical, CathedralTheme.Spacing.xl)
     }
 
     // MARK: Project List
 
     private var projectList: some View {
-        ForEach(dedupedProjects) { project in
-            NavigationLink(value: project) {
-                projectRow(project)
-            }
-            .listRowBackground(CathedralTheme.Colors.surface)
-            .listRowSeparatorTint(CathedralTheme.Colors.separator)
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                Button(role: .destructive) {
-                    projectToDelete = project
-                } label: {
-                    Label("Delete", systemImage: "trash")
+        VStack(spacing: 0) {
+            ForEach(Array(orderedProjects.enumerated()), id: \.element.id) { index, project in
+                NavigationLink(value: project) {
+                    projectRow(project)
                 }
-                Button {
-                    renameText = project.name
-                    projectToRename = project
-                } label: {
-                    Label("Rename", systemImage: "pencil")
+                .buttonStyle(.plain)
+                .padding(.horizontal, CathedralTheme.Spacing.base)
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        projectToDelete = project
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    Button {
+                        renameText = project.name
+                        projectToRename = project
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                    .tint(CathedralTheme.Colors.accent)
                 }
-                .tint(CathedralTheme.Colors.accent)
+
+                if index < orderedProjects.count - 1 {
+                    Divider()
+                        .padding(.leading, CathedralTheme.Spacing.base)
+                }
             }
         }
+        .background(CathedralTheme.Colors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: CathedralTheme.Radius.lg))
     }
 
     @ViewBuilder
     private func projectRow(_ project: StoryProject) -> some View {
         VStack(alignment: .leading, spacing: CathedralTheme.Spacing.xs) {
             Text(project.name)
-                .font(CathedralTheme.Typography.headline(16))
+                .font(CathedralTheme.Typography.headline(18, weight: .bold))
                 .foregroundStyle(CathedralTheme.Colors.primaryText)
-
-            if !project.summary.isEmpty {
-                Text(project.summary)
-                    .font(CathedralTheme.Typography.body(14))
-                    .foregroundStyle(CathedralTheme.Colors.secondaryText)
-                    .lineLimit(2)
-            }
-
-            let pills = metadataPills(for: project)
-            if !pills.isEmpty {
-                HStack(spacing: CathedralTheme.Spacing.xs) {
-                    ForEach(pills, id: \.self) { label in
-                        CathedralMetadataPill(label: label)
-                    }
-                }
-                .padding(.top, 2)
-            }
         }
-        .padding(.vertical, CathedralTheme.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, CathedralTheme.Spacing.md)
     }
 
-    private func metadataPills(for project: StoryProject) -> [String] {
-        var pills: [String] = []
-        let charCount = project.characters.count
-        if charCount > 0 { pills.append("\(charCount) \(charCount == 1 ? "character" : "characters")") }
-        let packCount = project.promptPacks.count
-        if packCount > 0 { pills.append("\(packCount) \(packCount == 1 ? "pack" : "packs")") }
-        return pills
+    private func activityDate(for project: StoryProject) -> Date {
+        project.generations.map(\.updatedAt).max() ?? .distantPast
     }
 
     // MARK: Creation
@@ -498,6 +484,15 @@ struct ProjectsListView: View {
         pendingNavigationProject = nil
         projectCreationRoute = .quickStory(project)
         Task { await DataDurabilityCoordinator.shared.saveProject(project, context: modelContext) }
+    }
+
+    private func launchCreation(for intent: ProjectCreationIntent) {
+        switch intent {
+        case .quickStory:
+            startQuickStory()
+        case .novel:
+            projectCreationRoute = .name
+        }
     }
 
     private func refreshBackupAvailability() {

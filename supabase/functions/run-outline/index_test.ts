@@ -10,7 +10,6 @@ import {
   snapshotPricing,
 } from "../generate-story/_generation_models.ts";
 import {
-  generationReadinessFailures,
   handleProviderBillingUnavailableTerminal,
   handleRetryableGenerationFailure,
   isPauseworthyGenerationResponse,
@@ -253,56 +252,6 @@ Deno.test("Run All request uses frozen recipe provenance instead of a mutable sn
   assertEquals(request.assignedRecipeRequirementIDs, ["R1"]);
 });
 
-Deno.test("generation readiness rejects incomplete or undersized outlines", () => {
-  const failures = generationReadinessFailures(
-    {
-      source_recipe_json: {},
-      source_recipe_hash: "hash",
-      target_word_count_min: 70000,
-      projected_word_count: 29000,
-    },
-    [{
-      id: "s1",
-      title: "One",
-      summary: "Same",
-      container: "scene",
-      pov: "firstPerson",
-      terminal_beat: "End",
-      target_words: 1000,
-      story_arc_beat_id: "beat",
-      recipe_requirement_ids: [],
-    }],
-  );
-  assertEquals(failures.includes("projected_length_below_minimum"), true);
-  assertEquals(failures.includes("section_budgets_below_minimum"), true);
-  assertEquals(failures.includes("outline_missing_story_arc_linkage"), true);
-
-  const linkedFailures = generationReadinessFailures(
-    {
-      source_recipe_json: {},
-      source_recipe_hash: "hash",
-      target_word_count_min: 1,
-      projected_word_count: 100,
-      story_arc_id: "arc-1",
-    },
-    [{
-      id: "s1",
-      title: "One",
-      summary: "Same",
-      container: "scene",
-      pov: "firstPerson",
-      terminal_beat: "End",
-      target_words: 100,
-      story_arc_beat_id: "beat",
-      recipe_requirement_ids: [],
-    }],
-  );
-  assertEquals(
-    linkedFailures.includes("outline_missing_story_arc_linkage"),
-    false,
-  );
-});
-
 Deno.test("uses cloudGenerationOutputID as the output handoff", () => {
   assertEquals(
     generationOutputId({ cloudGenerationOutputID: "output-1" }),
@@ -386,6 +335,10 @@ Deno.test("run-outline uses leased bounded continuations", async () => {
   assertEquals(source.includes("estimate_only"), true);
   assertEquals(source.includes("handleEstimate("), true);
   assertEquals(source.includes("loadRunOutline("), true);
+  // Acceptance is the planning gate. Kickoff must not re-run a separate
+  // readiness/recipe-coverage gate against the accepted outline.
+  assertEquals(source.includes("generationReadinessFailures"), false);
+  assertEquals(source.includes("outline_not_generation_ready"), false);
   assertEquals(source.includes("outline_lookup_failed:"), true);
   assertEquals(source.includes("scheduleTransientOutlineLookupRetry"), true);
   assertEquals(source.includes("MAX_TRANSIENT_OUTLINE_LOOKUP_ATTEMPTS"), true);
