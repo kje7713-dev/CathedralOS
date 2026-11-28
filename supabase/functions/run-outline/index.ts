@@ -282,23 +282,11 @@ export function generationReadinessFailures(
   if (new Set(contracts).size !== contracts.length) {
     failures.push("duplicate_section_contract");
   }
-  if (outline.source_recipe_json && sections.length > 0) {
-    const obligations = deriveRecipeObligations(
-      outline.source_recipe_json as Record<string, unknown>,
-    );
-    const assigned = new Set(
-      sections.flatMap((section) =>
-        Array.isArray(section.recipe_requirement_ids)
-          ? section.recipe_requirement_ids.map(String)
-          : []
-      ),
-    );
-    for (const obligation of obligations.filter((item) => item.required)) {
-      if (!assigned.has(obligation.id)) {
-        failures.push(`missing_recipe_obligation:${obligation.id}`);
-      }
-    }
-  }
+  // Recipe-obligation coverage is enforced while planning/accepting the
+  // outline. Once sections are accepted, generation must execute that
+  // accepted outline rather than re-planning it or blocking on stale/missing
+  // requirement metadata. The section contract above remains the generation
+  // gate because it describes what the worker actually needs to run.
   return failures;
 }
 

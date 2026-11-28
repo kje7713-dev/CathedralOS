@@ -303,6 +303,38 @@ Deno.test("generation readiness rejects incomplete or undersized outlines", () =
   );
 });
 
+Deno.test("generation readiness does not re-block an accepted outline for recipe coverage metadata", () => {
+  const failures = generationReadinessFailures(
+    {
+      source_recipe_json: {
+        project: { summary: "An authored setting requirement" },
+        setting: { included: true, summary: "The setting must matter" },
+      },
+      source_recipe_hash: "hash",
+      target_word_count_min: 100,
+      projected_word_count: 100,
+      story_arc_id: "arc-1",
+    },
+    [{
+      id: "s1",
+      title: "One",
+      summary: "The accepted section plan.",
+      container: "scene",
+      pov: "firstPerson",
+      terminal_beat: "The requirement is dramatized.",
+      target_words: 100,
+      story_arc_beat_id: "beat",
+      // Deliberately empty: accepted sections are authoritative for generation.
+      recipe_requirement_ids: [],
+    }],
+  );
+  assertEquals(
+    failures.some((failure) => failure.startsWith("missing_recipe_obligation:")),
+    false,
+  );
+  assertEquals(failures, []);
+});
+
 Deno.test("uses cloudGenerationOutputID as the output handoff", () => {
   assertEquals(
     generationOutputId({ cloudGenerationOutputID: "output-1" }),
