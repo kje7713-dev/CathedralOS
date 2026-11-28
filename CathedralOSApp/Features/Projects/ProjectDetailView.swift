@@ -71,6 +71,7 @@ private enum BuildStep: String {
 
 private enum StoryStep: String {
     case idea
+    case audience
     case world
     case people
 }
@@ -513,10 +514,14 @@ struct ProjectDetailView: View {
             themeQuestionsSection
         }
 
+        storyStepButton("STORY AUDIENCE", icon: "person.crop.circle", step: .audience)
+        if expandedStoryStep == .audience {
+            audienceSection
+        }
+
         storyStepButton("STORY WORLD", icon: "globe.americas", step: .world)
         if expandedStoryStep == .world {
             settingSection
-            audienceSection
             motifsSection
             aftertastesSection
         }
