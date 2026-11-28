@@ -88,6 +88,7 @@ private final class MockGenerationOutputSyncService: GenerationOutputSyncService
     /// Cloud ID to assign when `pushOutput` is called successfully.
     var cloudIDToReturn: String = UUID().uuidString
 
+    @MainActor
     func pullOutputs(into context: ModelContext) async throws {
         if let error = errorToThrow { throw error }
         for record in recordsToInject {
@@ -108,6 +109,7 @@ private final class MockGenerationOutputSyncService: GenerationOutputSyncService
         }
     }
 
+    @MainActor
     func pushOutput(_ output: GenerationOutput) async throws {
         if let error = errorToThrow {
             output.syncStatus = SyncStatus.failed.rawValue
@@ -126,6 +128,7 @@ private final class MockGenerationOutputSyncService: GenerationOutputSyncService
         return recordsToInject.count
     }
 
+    @MainActor
     func syncAll(in context: ModelContext) async throws {
         if let error = errorToThrow { throw error }
     }

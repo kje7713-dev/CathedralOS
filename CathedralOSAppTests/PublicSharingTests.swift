@@ -118,10 +118,12 @@ private final class MockSyncServiceForPublishing: GenerationOutputSyncServicePro
     var cloudIDToReturn: String = "cloud-\(UUID().uuidString)"
     private(set) var pushedOutputs: [GenerationOutput] = []
 
+    @MainActor
     func pullOutputs(into context: ModelContext) async throws {
         if let error = errorToThrow { throw error }
     }
 
+    @MainActor
     func pushOutput(_ output: GenerationOutput) async throws {
         if let error = errorToThrow {
             output.syncStatus = SyncStatus.failed.rawValue
@@ -139,6 +141,7 @@ private final class MockSyncServiceForPublishing: GenerationOutputSyncServicePro
         return pushedOutputs.count
     }
 
+    @MainActor
     func syncAll(in context: ModelContext) async throws {
         if let error = errorToThrow { throw error }
     }
