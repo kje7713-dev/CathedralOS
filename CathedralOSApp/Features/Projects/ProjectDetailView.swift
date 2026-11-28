@@ -144,6 +144,7 @@ struct ProjectDetailView: View {
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
     @AppStorage("cathedralos.storyAdvancedMode") private var advancedMode = false
+    @AppStorage("cathedralos.lastOpenedProjectLineageID") private var lastOpenedProjectLineageID = ""
 
     private var storyEditorMode: StoryEditorMode {
         StoryEditorMode(rawValue: storyEditorModeRaw) ?? .story
@@ -333,6 +334,9 @@ struct ProjectDetailView: View {
         }
         .tint(CathedralTheme.Colors.accent)
         .task {
+            // Home resumes the story the user most recently opened, rather
+            // than guessing from whichever project has the newest output.
+            lastOpenedProjectLineageID = project.stableLineageID.uuidString
             durabilityCoordinator.resumeAcceptAllIfNeeded(
                 context: modelContext,
                 onProjectRefreshed: refreshProjectReferenceHandler

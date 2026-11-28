@@ -12,8 +12,17 @@ struct HomeView: View {
     let onBuildNovel: () -> Void
 
     @Query(sort: \StoryProject.name) private var projects: [StoryProject]
+    @AppStorage("cathedralos.lastOpenedProjectLineageID") private var lastOpenedProjectLineageID = ""
 
-    private var mostRecentlyActiveProject: StoryProject? {
+    private var projectToReturnTo: StoryProject? {
+        if let lastOpenedProject = projects.first(where: {
+            $0.stableLineageID.uuidString == lastOpenedProjectLineageID
+        }) {
+            return lastOpenedProject
+        }
+
+        // First launch fallback for existing installs that predate the resume
+        // marker. Once a story is opened, the marker becomes authoritative.
         projects.max { activityDate(for: $0) < activityDate(for: $1) }
     }
 
@@ -32,7 +41,7 @@ struct HomeView: View {
                     manifestoHeader
                     creationActions
 
-                    if let project = mostRecentlyActiveProject {
+                    if let project = projectToReturnTo {
                         continueWritingCard(for: project)
                     }
                 }
