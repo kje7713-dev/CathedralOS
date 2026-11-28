@@ -230,13 +230,14 @@ Deno.test("recipe-driven character identity and moral direction survive every ex
       const architecture = buildAllocationPrompt(req);
       const outline = buildPrompt(req, new Map());
       for (const stage of [enrichment, architecture, outline]) {
-        assertStringIncludes(stage.system, "Do not preselect ANY moral trajectory");
+        assertStringIncludes(stage.system, "Do not treat fiction as moral education, psychological rehabilitation");
+        assertStringIncludes(stage.system, "more dangerous, selfish, destructive");
         assertStringIncludes(stage.system, "the recipe's populated character traits");
         assertStringIncludes(stage.user, direction);
         assertStringIncludes(stage.user, "Pursue dangerous pleasure");
       }
       assertStringIncludes(architecture.system, "Across early, middle, and late beat rationales");
-      assertStringIncludes(architecture.system, "a virtue lesson or a plunge into vice");
+      assertStringIncludes(architecture.system, "do not default to rehabilitation, therapeutic processing, accountability lessons");
       assertStringIncludes(architecture.system, "An object, document, delivery, permit, institution");
       assertStringIncludes(architecture.system, "check whether the planned centralQuestion");
       assertStringIncludes(outline.system, "including its later sections");
