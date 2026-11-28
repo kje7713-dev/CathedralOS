@@ -69,6 +69,12 @@ private enum BuildStep: String {
     case outline
 }
 
+private enum StoryStep: String {
+    case idea
+    case world
+    case people
+}
+
 /// Shared completion behavior for both ProjectDetailView resume paths. Keeping
 /// the canonical-project rebind in one seam prevents the polling-resume and
 /// already-running-resume callbacks from drifting apart.
@@ -140,6 +146,7 @@ struct ProjectDetailView: View {
     @State private var pendingDeleteAllInputs: [GenerationOutputDeletionInput] = []
     @State private var isDeletingAllOutputs = false
     @State private var expandedBuildStep: BuildStep?
+    @State private var expandedStoryStep: StoryStep?
     @State private var recipeSelectionRevision = 0
 
     @AppStorage("cathedralos.storyEditorMode") private var storyEditorModeRaw = StoryEditorMode.story.rawValue
@@ -269,7 +276,7 @@ struct ProjectDetailView: View {
                 } else {
                     switch storyEditorMode {
                     case .story:
-                        storyInputSections
+                        storySections
                     case .build:
                         buildSections
                     case .cast:
@@ -498,16 +505,46 @@ struct ProjectDetailView: View {
     }
 
     @ViewBuilder
-    private var storyInputSections: some View {
-        summarySection
-        settingSection
-        audienceSection
-        charactersSection
-        relationshipsSection
-        sparksSection
-        aftertastesSection
-        themeQuestionsSection
-        motifsSection
+    private var storySections: some View {
+        storyStepButton("STORY IDEA", icon: "lightbulb", step: .idea)
+        if expandedStoryStep == .idea {
+            summarySection
+            sparksSection
+            themeQuestionsSection
+        }
+
+        storyStepButton("STORY WORLD", icon: "globe.americas", step: .world)
+        if expandedStoryStep == .world {
+            settingSection
+            audienceSection
+            motifsSection
+            aftertastesSection
+        }
+
+        storyStepButton("STORY PEOPLE", icon: "person.2", step: .people)
+        if expandedStoryStep == .people {
+            charactersSection
+            relationshipsSection
+        }
+    }
+
+    private func storyStepButton(_ title: String, icon: String, step: StoryStep) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                expandedStoryStep = expandedStoryStep == step ? nil : step
+            }
+        } label: {
+            buildStepBlock(icon: icon, title: title, isExpanded: expandedStoryStep == step)
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(
+            top: CathedralTheme.Spacing.xs,
+            leading: CathedralTheme.Spacing.base,
+            bottom: CathedralTheme.Spacing.xs,
+            trailing: CathedralTheme.Spacing.base
+        ))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 
     @ViewBuilder
