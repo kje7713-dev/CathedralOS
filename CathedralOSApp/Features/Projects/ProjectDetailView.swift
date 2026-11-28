@@ -538,7 +538,7 @@ struct ProjectDetailView: View {
         }
         .buttonStyle(.plain)
         .listRowInsets(EdgeInsets(
-            top: CathedralTheme.Spacing.xs,
+            top: CathedralTheme.Spacing.md,
             leading: CathedralTheme.Spacing.base,
             bottom: CathedralTheme.Spacing.xs,
             trailing: CathedralTheme.Spacing.base
@@ -983,9 +983,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "Who's in your story?",
-                    description: "Cast your characters first — every generation runs through them.",
-                    actionLabel: "Add first character",
-                    action: { showAddCharacter = true }
+                    description: "Cast your characters first — every generation runs through them."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
@@ -1046,9 +1044,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "What's the inciting moment?",
-                    description: "Sparks seed scenes. Add one to give the compiler somewhere to start.",
-                    actionLabel: "Add first spark",
-                    action: { showAddSpark = true }
+                    description: "Sparks seed scenes. Add one to give the compiler somewhere to start."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
@@ -1087,9 +1083,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "How should it feel at the end?",
-                    description: "Aftertastes shape what the reader carries away.",
-                    actionLabel: "Add first aftertaste",
-                    action: { showAddAftertaste = true }
+                    description: "Aftertastes shape what the reader carries away."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
@@ -1181,9 +1175,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "Who connects to whom?",
-                    description: "Relationships drive dialogue and subtext in generated scenes.",
-                    actionLabel: "Add first relationship",
-                    action: { showAddRelationship = true }
+                    description: "Relationships drive dialogue and subtext in generated scenes."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
@@ -1220,9 +1212,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "What is the story arguing?",
-                    description: "Theme questions give the compiler something to interrogate.",
-                    actionLabel: "Add first theme question",
-                    action: { showAddThemeQuestion = true }
+                    description: "Theme questions give the compiler something to interrogate."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
@@ -1259,9 +1249,7 @@ struct ProjectDetailView: View {
             if sorted.isEmpty {
                 CathedralEmptyState(
                     label: "What images recur?",
-                    description: "Motifs give your story texture — anchors the reader recognizes.",
-                    actionLabel: "Add first motif",
-                    action: { showAddMotif = true }
+                    description: "Motifs give your story texture — anchors the reader recognizes."
                 )
                     .listRowBackground(CathedralTheme.Colors.background)
                     .listRowSeparator(.hidden)
